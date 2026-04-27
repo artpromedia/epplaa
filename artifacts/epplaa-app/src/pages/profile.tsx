@@ -1,4 +1,5 @@
 import { Settings, CreditCard, MapPin, ChevronRight } from "lucide-react";
+import { Link } from "wouter";
 import { useTheme } from "@/lib/theme-context";
 import { useCountry } from "@/lib/country-context";
 import { COUNTRIES, CountryCode } from "@/lib/countries";
@@ -87,27 +88,27 @@ export default function Profile() {
           <div>
             <h3 className={`text-sm font-bold mb-3 uppercase tracking-wider ${isDark ? 'text-white/40' : 'text-stone-400'}`}>Account</h3>
             <div className={`rounded-xl border overflow-hidden ${isDark ? 'bg-white/5 border-white/10' : 'bg-white border-stone-400/35'}`}>
-              <button className={`w-full flex items-center justify-between p-4 border-b ${isDark ? 'border-white/10 hover:bg-white/5' : 'border-stone-200 hover:bg-stone-50'}`}>
+              <Link href="/account/payment-methods" className={`w-full flex items-center justify-between p-4 border-b ${isDark ? 'border-white/10 hover:bg-white/5' : 'border-stone-200 hover:bg-stone-50'}`} data-testid="link-payment-methods">
                 <div className="flex items-center gap-3">
                   <CreditCard className={`w-5 h-5 ${isDark ? 'text-white/70' : 'text-stone-500'}`} />
                   <span className="font-medium">Payment Methods</span>
                 </div>
                 <ChevronRight className={`w-4 h-4 ${isDark ? 'text-white/30' : 'text-stone-400'}`} />
-              </button>
-              <button className={`w-full flex items-center justify-between p-4 border-b ${isDark ? 'border-white/10 hover:bg-white/5' : 'border-stone-200 hover:bg-stone-50'}`}>
+              </Link>
+              <Link href="/account/addresses" className={`w-full flex items-center justify-between p-4 border-b ${isDark ? 'border-white/10 hover:bg-white/5' : 'border-stone-200 hover:bg-stone-50'}`} data-testid="link-addresses">
                 <div className="flex items-center gap-3">
                   <MapPin className={`w-5 h-5 ${isDark ? 'text-white/70' : 'text-stone-500'}`} />
                   <span className="font-medium">Addresses</span>
                 </div>
                 <ChevronRight className={`w-4 h-4 ${isDark ? 'text-white/30' : 'text-stone-400'}`} />
-              </button>
-              <button className={`w-full flex items-center justify-between p-4 ${isDark ? 'hover:bg-white/5' : 'hover:bg-stone-50'}`}>
+              </Link>
+              <Link href="/account/settings" className={`w-full flex items-center justify-between p-4 ${isDark ? 'hover:bg-white/5' : 'hover:bg-stone-50'}`} data-testid="link-settings">
                 <div className="flex items-center gap-3">
                   <Settings className={`w-5 h-5 ${isDark ? 'text-white/70' : 'text-stone-500'}`} />
                   <span className="font-medium">Settings</span>
                 </div>
                 <ChevronRight className={`w-4 h-4 ${isDark ? 'text-white/30' : 'text-stone-400'}`} />
-              </button>
+              </Link>
             </div>
           </div>
           

@@ -12,6 +12,9 @@ import LiveShopping from "@/pages/live-shopping";
 import ProductDetail from "@/pages/product-detail";
 import Inbox from "@/pages/inbox";
 import Profile from "@/pages/profile";
+import PaymentMethods from "@/pages/account/payment-methods";
+import Addresses from "@/pages/account/addresses";
+import Settings from "@/pages/account/settings";
 import { ThemeToggle } from "@/components/theme-toggle";
 
 const queryClient = new QueryClient();
@@ -44,6 +47,9 @@ function Router() {
         <Route path="/product/:productId" component={ProductDetail} />
         <Route path="/inbox" component={Inbox} />
         <Route path="/profile" component={Profile} />
+        <Route path="/account/payment-methods" component={PaymentMethods} />
+        <Route path="/account/addresses" component={Addresses} />
+        <Route path="/account/settings" component={Settings} />
         <Route path="/go-live" component={GoLive} />
         <Route component={NotFound} />
       </Switch>
