@@ -271,6 +271,24 @@ export default function SellerStudio() {
             />
             <ActionRow
               isDark={isDark}
+              icon={<Receipt className="w-5 h-5" />}
+              label="Order queue"
+              hint="Pack, hand off, verify pickup"
+              onClick={() => navigate("/seller/orders")}
+              testId="action-orders"
+              border
+            />
+            <ActionRow
+              isDark={isDark}
+              icon={<Radio className="w-5 h-5" />}
+              label="Stream history"
+              hint="Past broadcasts and viewer stats"
+              onClick={() => navigate("/seller/streams")}
+              testId="action-streams"
+              border
+            />
+            <ActionRow
+              isDark={isDark}
               icon={<Wallet className="w-5 h-5" />}
               label="Earnings & payouts"
               hint="View balance and request payouts"

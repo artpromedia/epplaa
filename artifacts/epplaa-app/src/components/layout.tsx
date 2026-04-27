@@ -33,15 +33,27 @@ export function Layout({ children }: { children: React.ReactNode }) {
   const isCheckoutFlow =
     location === "/cart" || location.startsWith("/checkout");
   const isRateFlow = /^\/orders\/[^/]+\/rate$/.test(location);
+  const isReturnRequestFlow = location.startsWith("/returns/new/");
+  const isSafetyReportFlow = location.startsWith("/safety/report");
   const hideTabNav =
-    isLiveRoute || isReplayDetail || isCheckoutFlow || isRateFlow;
+    isLiveRoute ||
+    isReplayDetail ||
+    isCheckoutFlow ||
+    isRateFlow ||
+    isReturnRequestFlow ||
+    isSafetyReportFlow;
 
   // Hide floating cart on routes where it would be redundant or get in the way.
   const hideFloatingCart =
     inSellerMode ||
     isCheckoutFlow ||
     isRateFlow ||
+    isReturnRequestFlow ||
+    isSafetyReportFlow ||
     location.startsWith("/product/") || // product detail has its own CTA
+    location.startsWith("/wallet") ||
+    location.startsWith("/safety") ||
+    location.startsWith("/referrals") ||
     isLiveRoute ||
     isReplayDetail;
 

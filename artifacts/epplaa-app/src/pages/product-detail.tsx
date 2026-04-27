@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import { ChevronLeft, Share2, Heart, Star, MapPin, Truck, Package, ShieldCheck, UserPlus, UserCheck } from "lucide-react";
-import { useParams, useLocation } from "wouter";
+import { ChevronLeft, Share2, Heart, Star, MapPin, Truck, Package, ShieldCheck, UserPlus, UserCheck, Plane, Ship, ChevronDown, Globe, Flag } from "lucide-react";
+import { Link, useParams, useLocation } from "wouter";
 import { useTheme } from "@/lib/theme-context";
 import { SEED_PRODUCTS } from "@/lib/seed";
 import { useCountry } from "@/lib/country-context";
@@ -9,6 +9,7 @@ import { useWishlist } from "@/lib/wishlist-context";
 import { useFollows } from "@/lib/follows-context";
 import { useReviews } from "@/lib/reviews-context";
 import { useRecentlyViewed } from "@/lib/recently-viewed";
+import { computeLandedCost, isImport, ShipMode } from "@/lib/landed-cost";
 import { formatPrice } from "@/lib/format";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { useToast } from "@/hooks/use-toast";
@@ -149,6 +150,14 @@ export default function ProductDetail() {
           </div>
         </div>
 
+        <LandedCostPreview
+          isDark={isDark}
+          productPriceMinor={product.priceMinor}
+          originCountry={product.originCountry}
+          destinationCode={country.code}
+          currencyCode={country.currency.code}
+        />
+
         {/* Variants */}
         {product.variants.map((variant) => (
           <div key={variant.name} className={`px-4 py-4 mt-2 border-y ${isDark ? 'border-white/10 bg-white/5' : 'border-stone-400/35 bg-stone-300/35'}`}>
@@ -217,6 +226,21 @@ export default function ProductDetail() {
             {following ? <UserCheck className="w-3 h-3" /> : <UserPlus className="w-3 h-3" />}
             {following ? "Following" : "Follow"}
           </button>
+        </div>
+
+        <div className="px-4 mt-3">
+          <Link
+            href={`/safety/report?kind=product&id=${encodeURIComponent(product.id)}&label=${encodeURIComponent(product.title)}&seller=${encodeURIComponent(product.sellerName)}&back=${encodeURIComponent(`/product/${product.id}`)}`}
+            data-testid="link-report-product"
+            className={`flex items-center justify-center gap-1.5 text-xs font-bold py-2 rounded-lg border ${
+              isDark
+                ? "border-white/10 text-white/60 hover:bg-white/5"
+                : "border-stone-300 text-stone-500 hover:bg-stone-100"
+            }`}
+          >
+            <Flag className="w-3 h-3" />
+            Report this listing
+          </Link>
         </div>
 
         {/* Reviews */}
@@ -313,5 +337,186 @@ export default function ProductDetail() {
       </div>
 
     </div>
+  );
+}
+
+function LandedCostPreview({
+  isDark,
+  productPriceMinor,
+  originCountry,
+  destinationCode,
+  currencyCode,
+}: {
+  isDark: boolean;
+  productPriceMinor: number;
+  originCountry: string;
+  destinationCode: import("@/lib/countries").CountryCode;
+  currencyCode: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [mode, setMode] = useState<ShipMode>("air");
+  const breakdown = useMemo(
+    () =>
+      computeLandedCost({
+        productPriceMinor,
+        originCountry,
+        destinationCode,
+        shipMode: mode,
+      }),
+    [productPriceMinor, originCountry, destinationCode, mode],
+  );
+  const subtle = isDark ? "text-white/50" : "text-stone-600";
+  const fees =
+    breakdown.totalMinor - breakdown.fobMinor;
+
+  if (!isImport(originCountry)) {
+    return (
+      <div className={`px-4 mt-3`}>
+        <div
+          className={`flex items-center gap-2 text-xs px-3 py-2 rounded-lg border ${
+            isDark
+              ? "bg-emerald-400/10 border-emerald-400/30 text-emerald-300"
+              : "bg-emerald-50 border-emerald-200 text-emerald-800"
+          }`}
+          data-testid="badge-local-origin"
+        >
+          <Flag className="w-3.5 h-3.5" />
+          <span>Made in {originCountry} · no import duties</span>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="px-4 mt-3">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        data-testid="toggle-landed-cost"
+        className={`w-full flex items-center justify-between px-3 py-3 rounded-xl border ${
+          isDark
+            ? "bg-[#FF8855]/10 border-[#FF8855]/30 text-[#FF8855]"
+            : "bg-[#E6502E]/10 border-[#E6502E]/30 text-[#E6502E]"
+        }`}
+      >
+        <div className="flex items-center gap-2">
+          <Globe className="w-4 h-4" />
+          <span className="text-sm font-bold">
+            Imported from {originCountry}
+          </span>
+        </div>
+        <div className="flex items-center gap-1 text-xs font-bold">
+          Landed +{formatPrice(fees, currencyCode)}
+          <ChevronDown
+            className={`w-4 h-4 transition-transform ${open ? "rotate-180" : ""}`}
+          />
+        </div>
+      </button>
+      {open && (
+        <div
+          className={`mt-2 rounded-xl border p-3 space-y-2 text-xs ${
+            isDark
+              ? "bg-white/5 border-white/10 text-white/80"
+              : "bg-white border-stone-300 text-stone-800"
+          }`}
+          data-testid="landed-cost-detail"
+        >
+          <div
+            className={`flex p-1 rounded-full ${
+              isDark ? "bg-white/5" : "bg-stone-200"
+            }`}
+          >
+            <ModePill
+              active={mode === "air"}
+              onClick={() => setMode("air")}
+              isDark={isDark}
+              icon={<Plane className="w-3.5 h-3.5" />}
+              label="Air"
+              testId="ship-mode-air"
+            />
+            <ModePill
+              active={mode === "sea"}
+              onClick={() => setMode("sea")}
+              isDark={isDark}
+              icon={<Ship className="w-3.5 h-3.5" />}
+              label="Sea"
+              testId="ship-mode-sea"
+            />
+          </div>
+          <CostRow label="Item (FOB)" value={breakdown.fobMinor} ccy={currencyCode} subtle={subtle} />
+          <CostRow label="Freight" value={breakdown.freightMinor} ccy={currencyCode} subtle={subtle} />
+          <CostRow label="Insurance" value={breakdown.insuranceMinor} ccy={currencyCode} subtle={subtle} />
+          <CostRow label="Import duty" value={breakdown.dutyMinor} ccy={currencyCode} subtle={subtle} />
+          <CostRow label="VAT" value={breakdown.vatMinor} ccy={currencyCode} subtle={subtle} />
+          <CostRow label="Clearance" value={breakdown.clearanceMinor} ccy={currencyCode} subtle={subtle} />
+          <div
+            className={`pt-2 border-t flex items-center justify-between ${
+              isDark ? "border-white/10" : "border-stone-300"
+            }`}
+          >
+            <span className="font-bold">Estimated landed total</span>
+            <span className="font-black text-base">
+              {formatPrice(breakdown.totalMinor, currencyCode)}
+            </span>
+          </div>
+          <p className={`pt-1 text-[11px] ${subtle}`}>
+            ETA: {breakdown.etaLabel}. Duties paid by Epplaa at clearance, included
+            above.
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CostRow({
+  label,
+  value,
+  ccy,
+  subtle,
+}: {
+  label: string;
+  value: number;
+  ccy: string;
+  subtle: string;
+}) {
+  return (
+    <div className="flex items-center justify-between">
+      <span className={subtle}>{label}</span>
+      <span className="font-medium">{formatPrice(value, ccy)}</span>
+    </div>
+  );
+}
+
+function ModePill({
+  active,
+  onClick,
+  isDark,
+  icon,
+  label,
+  testId,
+}: {
+  active: boolean;
+  onClick: () => void;
+  isDark: boolean;
+  icon: React.ReactNode;
+  label: string;
+  testId: string;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      data-testid={testId}
+      className={`flex-1 flex items-center justify-center gap-1 py-1.5 rounded-full text-xs font-bold ${
+        active
+          ? isDark
+            ? "bg-[#FF8855] text-white"
+            : "bg-[#1B2A4A] text-white"
+          : isDark
+            ? "text-white/60"
+            : "text-stone-600"
+      }`}
+    >
+      {icon} {label}
+    </button>
   );
 }

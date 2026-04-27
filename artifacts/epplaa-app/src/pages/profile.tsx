@@ -9,6 +9,9 @@ import {
   LayoutGrid,
   Heart,
   Wallet,
+  RotateCcw,
+  ShieldCheck,
+  Gift,
 } from "lucide-react";
 import { Link } from "wouter";
 import { useTheme } from "@/lib/theme-context";
@@ -359,6 +362,98 @@ export default function Profile() {
                     }`}
                   />
                   <span className="font-medium">Wishlist</span>
+                </div>
+                <ChevronRight
+                  className={`w-4 h-4 ${
+                    isDark ? "text-white/30" : "text-stone-400"
+                  }`}
+                />
+              </Link>
+              <Link
+                href="/wallet"
+                className={`w-full flex items-center justify-between p-4 border-b ${
+                  isDark
+                    ? "border-white/10 hover:bg-white/5"
+                    : "border-stone-200 hover:bg-stone-50"
+                }`}
+                data-testid="link-wallet"
+              >
+                <div className="flex items-center gap-3">
+                  <Wallet
+                    className={`w-5 h-5 ${
+                      isDark ? "text-white/70" : "text-stone-500"
+                    }`}
+                  />
+                  <span className="font-medium">Wallet</span>
+                </div>
+                <ChevronRight
+                  className={`w-4 h-4 ${
+                    isDark ? "text-white/30" : "text-stone-400"
+                  }`}
+                />
+              </Link>
+              <Link
+                href="/returns"
+                className={`w-full flex items-center justify-between p-4 border-b ${
+                  isDark
+                    ? "border-white/10 hover:bg-white/5"
+                    : "border-stone-200 hover:bg-stone-50"
+                }`}
+                data-testid="link-returns"
+              >
+                <div className="flex items-center gap-3">
+                  <RotateCcw
+                    className={`w-5 h-5 ${
+                      isDark ? "text-white/70" : "text-stone-500"
+                    }`}
+                  />
+                  <span className="font-medium">Returns & refunds</span>
+                </div>
+                <ChevronRight
+                  className={`w-4 h-4 ${
+                    isDark ? "text-white/30" : "text-stone-400"
+                  }`}
+                />
+              </Link>
+              <Link
+                href="/referrals"
+                className={`w-full flex items-center justify-between p-4 border-b ${
+                  isDark
+                    ? "border-white/10 hover:bg-white/5"
+                    : "border-stone-200 hover:bg-stone-50"
+                }`}
+                data-testid="link-referrals"
+              >
+                <div className="flex items-center gap-3">
+                  <Gift
+                    className={`w-5 h-5 ${
+                      isDark ? "text-white/70" : "text-stone-500"
+                    }`}
+                  />
+                  <span className="font-medium">Refer & earn</span>
+                </div>
+                <ChevronRight
+                  className={`w-4 h-4 ${
+                    isDark ? "text-white/30" : "text-stone-400"
+                  }`}
+                />
+              </Link>
+              <Link
+                href="/safety"
+                className={`w-full flex items-center justify-between p-4 border-b ${
+                  isDark
+                    ? "border-white/10 hover:bg-white/5"
+                    : "border-stone-200 hover:bg-stone-50"
+                }`}
+                data-testid="link-safety"
+              >
+                <div className="flex items-center gap-3">
+                  <ShieldCheck
+                    className={`w-5 h-5 ${
+                      isDark ? "text-white/70" : "text-stone-500"
+                    }`}
+                  />
+                  <span className="font-medium">Trust & safety</span>
                 </div>
                 <ChevronRight
                   className={`w-4 h-4 ${

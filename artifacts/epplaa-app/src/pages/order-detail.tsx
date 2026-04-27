@@ -9,11 +9,15 @@ import {
   CheckCircle2,
   X,
   Star,
+  RotateCcw,
 } from "lucide-react";
 import { useTheme } from "@/lib/theme-context";
 import { useCountry } from "@/lib/country-context";
 import { useOrders } from "@/lib/orders-context";
 import { useReviews } from "@/lib/reviews-context";
+import { useReturns } from "@/lib/returns-context";
+import { SEED_PRODUCTS } from "@/lib/seed";
+import { isImport, buildCustomsTimeline } from "@/lib/landed-cost";
 import { formatOrderPrice } from "@/lib/format";
 import { PageHeader } from "@/components/page-header";
 import { useToast } from "@/hooks/use-toast";
@@ -26,6 +30,7 @@ export default function OrderDetail() {
   const { country } = useCountry();
   const { getById, cancel } = useOrders();
   const { reviews } = useReviews();
+  const { byOrder: returnByOrder } = useReturns();
   const { toast } = useToast();
   const order = getById(orderId);
 
@@ -77,6 +82,77 @@ export default function OrderDetail() {
             Placed {relativeDate(order.createdAtIso)}
           </p>
         </div>
+
+        {(() => {
+          const importItem = order.items.find((it) => {
+            const p = SEED_PRODUCTS.find((sp) => sp.id === it.productId);
+            return p && isImport(p.originCountry);
+          });
+          if (!importItem || order.status === "delivered" || order.status === "cancelled")
+            return null;
+          const product = SEED_PRODUCTS.find((sp) => sp.id === importItem.productId);
+          const steps = buildCustomsTimeline(order.id);
+          return (
+            <div
+              className={`rounded-2xl p-4 border ${
+                isDark
+                  ? "bg-[#5BA3F5]/10 border-[#5BA3F5]/30"
+                  : "bg-[#1B2A4A]/10 border-[#1B2A4A]/25"
+              }`}
+              data-testid="customs-timeline-card"
+            >
+              <div className="flex items-center justify-between mb-2">
+                <p
+                  className={`text-[11px] font-bold uppercase tracking-wider ${
+                    isDark ? "text-[#5BA3F5]" : "text-[#1B2A4A]"
+                  }`}
+                >
+                  Cross-border tracking
+                </p>
+                <span className={`text-[10px] font-bold ${subtle}`}>
+                  {product?.originCountry}
+                </span>
+              </div>
+              <div className="space-y-2">
+                {steps.map((s) => (
+                  <div
+                    key={s.key}
+                    className="flex items-start gap-2 text-xs"
+                    data-testid={`customs-step-${s.key}`}
+                  >
+                    <span
+                      className={`mt-1 w-2.5 h-2.5 rounded-full shrink-0 ${
+                        s.state === "done"
+                          ? isDark
+                            ? "bg-emerald-400"
+                            : "bg-emerald-600"
+                          : s.state === "active"
+                            ? isDark
+                              ? "bg-[#FF8855] animate-pulse"
+                              : "bg-[#E6502E] animate-pulse"
+                            : isDark
+                              ? "bg-white/20"
+                              : "bg-stone-300"
+                      }`}
+                    />
+                    <div className="flex-1">
+                      <p
+                        className={`font-bold ${
+                          s.state === "pending"
+                            ? subtle
+                            : ""
+                        }`}
+                      >
+                        {s.label}
+                      </p>
+                      <p className={subtle}>{s.detail}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          );
+        })()}
 
         {order.pickupOTP && order.status !== "delivered" && order.status !== "cancelled" && (
           <div
@@ -310,6 +386,28 @@ export default function OrderDetail() {
             </Link>
           );
         })()}
+
+        {order.status === "delivered" &&
+          (() => {
+            const existing = returnByOrder(order.id);
+            const href = existing
+              ? `/returns/${existing.id}`
+              : `/returns/new/${order.id}`;
+            return (
+              <Link
+                href={href}
+                data-testid="link-request-return"
+                className={`w-full h-12 rounded-xl border font-bold flex items-center justify-center gap-2 ${
+                  isDark
+                    ? "border-white/15 text-white/80 hover:bg-white/5"
+                    : "border-stone-300 text-stone-800 hover:bg-stone-50"
+                }`}
+              >
+                <RotateCcw className="w-4 h-4" />
+                {existing ? "View return request" : "Request return or refund"}
+              </Link>
+            );
+          })()}
 
         {canCancel && (
           <button

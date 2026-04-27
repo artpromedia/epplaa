@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Heart, MessageCircle, Share2, Gift, X, Send } from "lucide-react";
+import { TippingSheet } from "@/components/tipping-sheet";
 import { Link, useParams, useLocation } from "wouter";
 import { useTheme } from "@/lib/theme-context";
 import { SEED_STREAMS, SEED_PRODUCTS, SEED_COMMENTS } from "@/lib/seed";
@@ -66,6 +67,7 @@ export default function LiveShopping() {
   const [commentCount, setCommentCount] = useState<number>(452);
   const [hearts, setHearts] = useState<FloatingHeart[]>([]);
   const [draft, setDraft] = useState("");
+  const [tipOpen, setTipOpen] = useState(false);
   const heartIdRef = useRef(0);
 
   // Seed the chat with the existing static comments so the screen never looks
@@ -582,12 +584,7 @@ export default function LiveShopping() {
             </div>
             <div className="flex flex-col items-center gap-1">
               <button
-                onClick={() =>
-                  toast({
-                    title: "Gifts coming soon",
-                    description: "Tip your favorite hosts in v2.",
-                  })
-                }
+                onClick={() => setTipOpen(true)}
                 data-testid="button-live-gift"
                 aria-label="Send gift"
                 className={`h-12 w-12 rounded-full backdrop-blur-md border flex items-center justify-center hover:scale-110 active:scale-95 transition-transform ${
@@ -649,6 +646,13 @@ export default function LiveShopping() {
           </div>
         </form>
       </div>
+
+      <TippingSheet
+        open={tipOpen}
+        onClose={() => setTipOpen(false)}
+        hostName={stream.hostName}
+        streamId={stream.id}
+      />
 
       {/* Inline keyframes — kept here so the live page stays self-contained. */}
       <style>{`

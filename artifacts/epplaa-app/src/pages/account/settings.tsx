@@ -37,6 +37,20 @@ const EPPLAA_KEYS = [
   "epplaa-cart",
   "epplaa-orders",
   "epplaa-checkout-draft",
+  "epplaa-wishlist",
+  "epplaa-follows",
+  "epplaa-reviews",
+  "epplaa-recently-viewed",
+  "epplaa-recent-searches",
+  "epplaa-payouts",
+  "epplaa-seller-orders",
+  "epplaa-seller-streams",
+  "epplaa-returns",
+  "epplaa-wallet-txns",
+  "epplaa-safety-reports",
+  "epplaa-safety-blocked",
+  "epplaa-onboarding",
+  "epplaa-referral-code",
 ];
 
 export default function Settings() {

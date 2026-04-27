@@ -1,66 +1,40 @@
-# Workspace
+# Overview
 
-## Overview
+This project is a pnpm workspace monorepo using TypeScript, designed to build Epplaa, a mobile-first e-commerce platform. Epplaa aims to be a pan-African marketplace supporting both buyers and sellers across 16 countries, with features like live shopping, cross-border imports, and a robust seller studio. The platform prioritizes a localized user experience, dynamic pricing, and a secure transaction environment.
 
-pnpm workspace monorepo using TypeScript. Each package manages its own dependencies.
+# User Preferences
 
-## Stack
+I prefer iterative development with clear, high-level feature specifications. Focus on architectural decisions and core functionalities rather than minute implementation details in documentation. When adding new countries, changes should primarily be limited to data configuration rather than component modifications.
 
-- **Monorepo tool**: pnpm workspaces
-- **Node.js version**: 24
-- **Package manager**: pnpm
-- **TypeScript version**: 5.9
-- **API framework**: Express 5
-- **Database**: PostgreSQL + Drizzle ORM
-- **Validation**: Zod (`zod/v4`), `drizzle-zod`
-- **API codegen**: Orval (from OpenAPI spec)
-- **Build**: esbuild (CJS bundle)
+# System Architecture
 
-## Key Commands
+The system is built as a pnpm monorepo with Node.js 24 and TypeScript 5.9. The backend uses Express 5 with PostgreSQL and Drizzle ORM for data management, while the frontend is a React, Vite, Tailwind v4, shadcn/ui, and wouter application. API code generation is handled by Orval from an OpenAPI spec.
 
-- `pnpm run typecheck` — full typecheck across all packages
-- `pnpm run build` — typecheck + build all packages
-- `pnpm --filter @workspace/api-spec run codegen` — regenerate API hooks and Zod schemas from OpenAPI spec
-- `pnpm --filter @workspace/db run push` — push DB schema changes (dev only)
-- `pnpm --filter @workspace/api-server run dev` — run API server locally
+**UI/UX Decisions:**
+- **Visual Direction:** "Lagos Sunset" theme with distinct light (cream, deep navy, coral) and dark (near-black, sky-blue, warm coral) modes.
+- **Theming:** Defaults to `prefers-color-scheme`, with manual override persisted in `localStorage`.
+- **Mobile-First Design:** Centers a 390px frame on desktop.
+- **Country Switcher:** Uses a compact native `<select>` for selecting from 16 live markets, displaying flag, name, and currency.
+- **Dynamic Content:** Bottom navigation swaps between buyer and seller modes, and a floating cart badge appears conditionally.
 
-See the `pnpm-workspace` skill for workspace structure, TypeScript setup, and package details.
+**Technical Implementations & Feature Specifications:**
+- **Multi-country Support:** Typed registry for 16 African countries, each with localized currency, payment methods, fulfillment options, business registries, and bank account specifications. All prices are formatted using `formatPrice` to ensure correct currency display.
+- **Seller Studio:** Comprehensive seller features including application, tiers (Starter, Pro, Elite based on social followers), listings management, live stream tools, and earnings tracking with commission calculations.
+- **Cart & Checkout:** Persistent cart, multi-step checkout wizard with fulfillment options (home delivery, pickup points), payment methods, promo code application, and order review. Pickup orders generate a 4-digit OTP.
+- **Discovery & Social:** Product search with categories, wishlists, seller following, drop alerts for followed sellers, and product reviews.
+- **Live Shopping:** Real-time engagement features including bot chatter, viewer count, likes, user chat, and product pinning. Supports live replays with integrated product lists.
+- **Wallet System:** In-app wallet with top-up, spending, withdrawal, and refund capabilities, seeded with welcome credit.
+- **Returns & Disputes:** Streamlined return request process with timeline tracking and dispute resolution.
+- **Cross-Border Imports:** Calculation of landed costs (FOB, freight, insurance, duty, VAT, clearance) for imported goods, with a clear customs timeline.
+- **Trust & Safety:** User reporting system for listings and sellers, with blocking functionality.
+- **Onboarding:** First-run experience with animated progress, country selection, interest profiling, and notification opt-in.
+- **Referral Program:** Generates unique referral codes and tracks associated earnings.
 
-## Artifacts
+# External Dependencies
 
-- `artifacts/api-server` — Express 5 API server (currently only `/api/healthz`).
-- `artifacts/mockup-sandbox` — Vite preview server used for canvas mockup iframes. Hosts the original Lagos Night Market / Editorial Boutique / Naija Pop variant explorations under `src/components/mockups/`.
-- `artifacts/epplaa-app` — **Epplaa**, the v1+v2 buyer + seller mobile web app. React + Vite + Tailwind v4 + shadcn/ui + wouter, frontend-only (all state in `src/lib/seed.ts` + `localStorage`). Mobile-first; centers a 390px frame on desktop. **Buyer routes**: `/`, `/discover`, `/search`, `/wishlist`, `/live/:streamId`, `/product/:productId`, `/cart`, `/checkout`, `/checkout/{location,address,payment,review,success/:orderId}`, `/orders`, `/orders/:orderId`, `/orders/:orderId/rate`, `/inbox`, `/profile`, `/account/{payment-methods,addresses,settings}`. **Seller routes**: `/seller/{apply,tiers,studio,listings,go-live,earnings}`. Bottom nav swaps by `mode`: buyer (Home/Discover/+/Inbox/Profile) vs seller (Studio/Listings/+/Inbox/Profile); hidden on `/live/*`, `/orders/:id/rate`, and during seller broadcasting. A floating cart badge (top-right) appears in buyer mode whenever the cart has items, except on the cart, checkout, product-detail, rate-order, and live routes.
-
-### Epplaa app conventions
-
-- **Visual direction**: **Lagos Sunset** — light mode uses cream surfaces (`hsl(40 76% 91%)` bg) with deep navy `#1B2A4A` primary and sunset coral `#E6502E` secondary; dark mode uses near-black `hsl(222 42% 10%)` with sky-blue `#5BA3F5` primary and warm coral `#FF8855` secondary. (Replaces the older cyan/magenta neon palette.) Source mockups live under `artifacts/mockup-sandbox/src/components/mockups/lagos-night-market/`. Theme tokens defined in `artifacts/epplaa-app/src/index.css`.
-- **Theming** (`src/lib/theme-context.tsx`): defaults to `prefers-color-scheme`; manual choice persisted to `localStorage` key `epplaa-theme` with values `"dark" | "light" | "system"`. Applied via `.dark` class on `document.documentElement`.
-- **Multi-country shell** (`src/lib/countries.ts`, `src/lib/country-context.tsx`): typed registry of countries with currency, payment methods, and fulfillment options. **All 16 markets are LIVE** (pan-African investor-pitch posture): West/Central (NG, GH, CI, SN, CM, CD), East (KE, UG, TZ, RW, ET), Southern (ZA, BW, ZM), and North (EG, MA). Each entry carries country-specific currency, payment rails (Paystack, M-Pesa, Wave, Orange Money, Telebirr, Fawry, etc.), pickup partners, ID docs, business registry, bank-account spec, and central-bank payout authority. The `Country.status` type still allows `"live" | "coming-soon"` for future market-pause flexibility, but no entry currently uses `coming-soon` and the Profile dropdown only renders `status === "live"` rows. Selected country persisted to `localStorage`. **All prices must be formatted via `formatPrice(amountMinor, country)` in `src/lib/format.ts` — never hardcode currency symbols.** For **persisted orders**, use `formatOrderPrice(amountMinor, order.countryCode, fallbackCountry)` instead so historical totals keep their original currency even if the user switches country later.
-- **Country switcher UX**: Profile → Region & Currency uses a single compact native `<select data-testid="select-country">` (flag + name + currency code) instead of a long button list, so all 16 markets are selectable in one tap without scrolling.
-- **Adding a new country**: add an entry to `COUNTRIES` in `src/lib/countries.ts` and flip its `status` to `"live"`. The `CountryCode` union is the single source of truth — TypeScript will guide you to fill in every required field. No component changes required, but to enable pickup you'll also need to seed `src/lib/fulfillment-locations.ts` with at least one Box Locker + one Pickup Partner row per primary city (mapX/mapY are 0–100 % positions on the stylized SVG city map).
-- **Seller mode** (`src/lib/seller-context.tsx`, `src/lib/seller-tiers.ts`): SellerProvider tracks `status` (`none|pending|approved|rejected`), `tier` (`starter|pro|elite`), `mode` (`buyer|seller`), `application`, `stats`, `listings`, plus a transient `isBroadcasting` flag. Mode toggle on Profile flips bottom nav. Submit on `/seller/apply` auto-approves for the demo (production would queue for review). Tier upgrades happen on `/seller/studio` via the upgrade card when GMV + days + listings criteria from `seller-tiers.ts > evaluateUpgrade` are met. All seller state persisted under `epplaa-seller-*` keys; cleared by Settings → Clear local data.
-- **Country-specific seller fields** (`src/lib/countries.ts`): each country defines its own `businessRegistry` (NG=CAC, GH=RGD, KE=BRS, ZA=CIPC, CI=RCCM-CEPICI), `identityDocs[]` (NG=BVN/NIN, GH=Ghana Card/Voter ID, KE=National ID/Huduma, ZA=SA ID/Passport, CI=CNI/Passeport), `bankAccount` spec (label / placeholder / digit range), and `payoutAuthority` (e.g. CBN, BoG, CBK, SARB, BCEAO). The `/seller/apply` wizard reads these fields directly — no NG-specific strings exist in components. To add a new country, extend `COUNTRIES` only.
-- **Social-followers tier gate** (`src/lib/seller-tiers.ts > tierFromSocialFollowers`, `SOCIAL_TIER_THRESHOLDS`): the apply wizard's Social step asks for handle + follower count on Instagram, TikTok, X, Facebook, YouTube. The combined `totalFollowers` sets the starting tier (Pro at ≥5,000, Elite at ≥50,000) instead of forcing every new seller through Starter. Counts are recorded on the application; production would verify them within 24h before payouts unlock.
-- **Cart, Checkout & Fulfillment (Sprint 5)**:
-  - `src/lib/cart-context.tsx` — `useCart()` exposes `items`, `resolved`, `count`, `subtotalMinor`, `add`, `remove`, `setQty`, `clear`. Persisted under `epplaa-cart`. Lines are de-duplicated by `productId`.
-  - `src/lib/orders-context.tsx` — `useOrders()`, `Order` shape with `countryCode`/`currencyCode` snapshot, `EP-<base36>` ids via `makeOrderId()`, 4-digit `pickupOTP` via `generateOTP()` for non-home deliveries. Persisted under `epplaa-orders`.
-  - `src/lib/checkout-context.tsx` — draft state for the wizard (fulfillment option, pickup location id, delivery address, payment method, channel overrides). Persisted under `epplaa-checkout-draft` and cleared on order placement.
-  - `src/lib/fulfillment-locations.ts` — ~40 seed pickup points across NG/GH/KE/ZA/CI with `mapX`/`mapY` for the stylized SVG city map.
-  - `src/lib/notification-prefs.ts` — shared `NotificationPrefs` (push / WhatsApp + number / SMS + number / order-updates / promos / live-drops); used by both Settings and the Checkout payment step.
-  - **Checkout wizard**: `/checkout` → method picker. Options whose id contains `home`, `door`, or `livraison` route to `/checkout/address` (tap-to-pin map + OkHi confidence score); all other options route to `/checkout/location` (list + map view of pickup points). Then `/checkout/payment` → `/checkout/review` → `/checkout/success/:orderId`. The Review step has strict guards that redirect back to the missing step (empty cart → `/cart`, no fulfillment option → `/checkout`, etc.) so an order with malformed state cannot be placed. Each "Where" page also redirects to the correct sibling route if the picked option doesn't match its method type.
-  - Pickup orders show a 4-digit OTP card on the success screen, order detail, and inbox; home-delivery orders skip the OTP entirely.
-- **Discovery, Social & Commerce extras (Sprint 6)**:
-  - **Search** (`/search`, `src/lib/search-utils.ts`): full-text product search with category chips (All/Fashion/Beauty/Tech/etc) and a "Trending Now" grid as default state. Discovery's top search bar links here.
-  - **Wishlist** (`/wishlist`, `src/lib/wishlist-context.tsx`): heart icon on product cards + product detail toggles `epplaa-wishlist`. Profile menu surfaces a Wishlist link.
-  - **Follow sellers** (`src/lib/follows-context.tsx`): Follow/Following button on product detail next to seller name persists `epplaa-follows`.
-  - **Drop alerts** (`src/lib/drop-alerts.ts`): Inbox grows a Drops tab that synthesizes "live now" + "new listing" alerts for followed sellers. Each alert renders as `{ kind, sellerName, hostAvatar?, title, detail, href, createdAtIso }`.
-  - **Reviews + Rate Order** (`src/lib/reviews-context.tsx`, `/orders/:orderId/rate`): per-order-item star rating + comment + optional photo. Persisted under `epplaa-reviews`. Product detail shows aggregate rating + recent reviews via `useReviews().getForProduct/averageForProduct`. Order detail shows a "Rate Order" CTA only when status is `delivered`. Rate page hides the bottom nav and floating cart for focus.
-  - **Seller Earnings** (`/seller/earnings`, `src/lib/earnings.ts`): commission-aware dashboard (10% commission, 3-day hold). Surfaces lifetime GMV, this month, commission, available balance, payout request flow with country-specific bank label (`country.bankAccount.bankNameExamples` is comma-separated — split + trim first entry). Payout threshold derived as `5000 * country.currency.minorPerMajor`. Persists payout requests under `epplaa-payouts`. Studio page links here.
-  - **Recently Viewed** (`src/lib/recently-viewed.ts`): product detail tracks last 12 viewed products under `epplaa-recently-viewed`.
-  - **Provider order in App.tsx** (top-down): `Theme > Country > Seller > Orders > Reviews > Follows > Wishlist > Cart > Checkout > Tooltip`. Reviews/Follows/Wishlist sit between Orders and Cart so cart/checkout consumers can read them but don't depend on them.
-- **Live engagement, Replays & Promo codes (Sprint 7)**:
-  - **Live page engagement loop** (`src/pages/live-shopping.tsx`, `src/lib/live-engagement.ts`): The live page is no longer a static mockup. It maintains its own message list (cap 30) and runs three independent intervals: bot chatter (random viewer + message every 2.2–4.2s), viewer-count random walk every 3.5s (`nextViewerDelta()` is +biased so streams trend up), and ambient bot likes every 2.4s. The user's input is a controlled `<input data-testid="input-live-chat">` with a Send button; messages render with a coral "You" pill on the right side of the chat column. Tapping the heart spawns a floating heart via DOM-keyed transient elements with a self-contained `@keyframes epplaa-heart` animation defined in a `<style>` tag inside the page (kept local so live remains a single file). Each spawned heart is GC'd after 1.5s. Follow button is wired to `useFollows().toggle()` with a toast confirmation. Buy now adds the pinned product to cart and navigates to `/cart`. Share uses `navigator.share` when available with `canShare()` guard, falls back to `navigator.clipboard.writeText` + toast. Gift button fires a "coming soon" toast (placeholder for v3 tipping).
-  - **Live Replays / VOD** (`/replays` listing, `/replay/:replayId` detail, `src/lib/replays.ts`, `src/pages/replays.tsx`, `src/pages/replay-detail.tsx`): `SEED_REPLAYS` is an array of ended streams with poster, host, title, durationLabel, durationSeconds, viewCount, recordedAtIso, productIds[], and optional `liveStreamId` (so a replay can deep-link back to the host's currently-live stream). `/replays` is a 2-col grid of replays; `/replay/:replayId` is a full-screen viewer (poster as still frame, big play overlay, host header, "Watch {host} live now" CTA when applicable, and a "Featured in this stream" list of products that link to product detail). Discovery has a horizontal "Live replays" rail (5 cards) sitting between the category chips and the live feed grid, with a "See all" link to `/replays`. `relativeTime(iso)` renders "Xm/h/d/w ago".
-  - **Replay route nav rules**: `/replay/:id` hides the bottom tab nav and floating cart (full-screen viewer); the listing `/replays` keeps both. `Layout` checks `location.startsWith("/replay/")` for the detail rule and is independent from the live route check.
-  - **Promo codes at checkout** (`src/lib/promo-codes.ts`, `/checkout/review`): Codes table with three kinds — `percent` (with optional `maxDiscountMajor` cap), `fixed_minor` (cap in major units, multiplied by `country.currency.minorPerMajor`), and `free_shipping` (zeros out shipping). Seed codes: `WELCOME10` (10% off, max 5K), `EPPLAA20` (20% off, max 10K, min spend 5K), `FIRSTORDER` (free shipping), `LAGOS500` (500 off, min spend 2K). The Review page has a collapsible "Have a promo code?" section (auto-expanded if a code is already applied). Applied code is stored in `CheckoutDraft.promoCode` (uppercased) so it persists across back-navigation. `applyPromo()` recomputes whenever subtotal/shipping/country changes; if a previously-applied code becomes invalid (e.g. country switch drops the subtotal below the minimum), the promo is silently cleared and an error message is surfaced. Order shape extended with optional `totalsMinor.discount`, `totalsMinor.shippingDiscount`, and `promo: { code, label }` so historical orders preserve the discount they were placed with.
+- **Database:** PostgreSQL
+- **ORM:** Drizzle ORM
+- **API Framework:** Express 5
+- **Validation:** Zod (`zod/v4`), `drizzle-zod`
+- **API Codegen:** Orval (from OpenAPI spec)
+- **Payment Gateways:** Paystack, M-Pesa, Wave, Orange Money, Telebirr, Fawry (integrated based on country configurations)

@@ -1,4 +1,5 @@
 import { Switch, Route, Router as WouterRouter } from "wouter";
+import { ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -12,6 +13,10 @@ import { CheckoutProvider } from "@/lib/checkout-context";
 import { ReviewsProvider } from "@/lib/reviews-context";
 import { FollowsProvider } from "@/lib/follows-context";
 import { WishlistProvider } from "@/lib/wishlist-context";
+import { WalletProvider, useWallet } from "@/lib/wallet-context";
+import { ReturnsProvider } from "@/lib/returns-context";
+import { SafetyProvider } from "@/lib/safety-context";
+import { OnboardingProvider, useOnboarding } from "@/lib/onboarding-context";
 import { Layout } from "@/components/layout";
 
 import Discovery from "@/pages/discovery";
@@ -28,6 +33,8 @@ import SellerStudio from "@/pages/seller/studio";
 import SellerListings from "@/pages/seller/listings";
 import SellerGoLive from "@/pages/seller/go-live";
 import SellerEarnings from "@/pages/seller/earnings";
+import SellerOrders from "@/pages/seller/orders";
+import SellerStreamsPage from "@/pages/seller/streams";
 
 import Cart from "@/pages/cart";
 import CheckoutMethod from "@/pages/checkout/method";
@@ -43,6 +50,14 @@ import Wishlist from "@/pages/wishlist";
 import RateOrder from "@/pages/reviews/rate-order";
 import Replays from "@/pages/replays";
 import ReplayDetail from "@/pages/replay-detail";
+import ReturnsList from "@/pages/returns";
+import RequestReturn from "@/pages/returns/request";
+import ReturnDetail from "@/pages/returns/detail";
+import WalletPage from "@/pages/wallet";
+import SafetyHub from "@/pages/safety";
+import ReportPage from "@/pages/safety/report";
+import OnboardingWelcome from "@/pages/onboarding/welcome";
+import ReferralsHub from "@/pages/referrals";
 
 const queryClient = new QueryClient();
 
@@ -64,6 +79,13 @@ function Router() {
         <Route path="/orders" component={Orders} />
         <Route path="/orders/:orderId" component={OrderDetail} />
         <Route path="/orders/:orderId/rate" component={RateOrder} />
+        <Route path="/returns" component={ReturnsList} />
+        <Route path="/returns/new/:orderId" component={RequestReturn} />
+        <Route path="/returns/:returnId" component={ReturnDetail} />
+        <Route path="/wallet" component={WalletPage} />
+        <Route path="/safety" component={SafetyHub} />
+        <Route path="/safety/report" component={ReportPage} />
+        <Route path="/referrals" component={ReferralsHub} />
         <Route path="/replays" component={Replays} />
         <Route path="/replay/:replayId" component={ReplayDetail} />
         <Route path="/inbox" component={Inbox} />
@@ -77,6 +99,8 @@ function Router() {
         <Route path="/seller/tiers" component={SellerTiers} />
         <Route path="/seller/studio" component={SellerStudio} />
         <Route path="/seller/listings" component={SellerListings} />
+        <Route path="/seller/orders" component={SellerOrders} />
+        <Route path="/seller/streams" component={SellerStreamsPage} />
         <Route path="/seller/go-live" component={SellerGoLive} />
         <Route path="/seller/earnings" component={SellerEarnings} />
         <Route path="/go-live" component={SellerGoLive} />
@@ -84,6 +108,29 @@ function Router() {
       </Switch>
     </Layout>
   );
+}
+
+// Bridges wallet refunds into the returns context so a refunded return auto
+// credits the wallet exactly once (using the return id as refId so the wallet
+// can dedupe).
+function ReturnsBridge({ children }: { children: ReactNode }) {
+  const { refundFromReturn } = useWallet();
+  return (
+    <ReturnsProvider
+      onRefund={(rec) =>
+        refundFromReturn(rec.id, rec.refundAmountMinor, `Refund ${rec.id}`)
+      }
+    >
+      {children}
+    </ReturnsProvider>
+  );
+}
+
+// Gates the buyer experience behind the welcome flow until completion.
+function OnboardingGate({ children }: { children: ReactNode }) {
+  const { completed } = useOnboarding();
+  if (!completed) return <OnboardingWelcome />;
+  return <>{children}</>;
 }
 
 function App() {
@@ -98,12 +145,27 @@ function App() {
                   <WishlistProvider>
                     <CartProvider>
                       <CheckoutProvider>
-                        <TooltipProvider>
-                          <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, "")}>
-                            <Router />
-                          </WouterRouter>
-                          <Toaster />
-                        </TooltipProvider>
+                        <WalletProvider>
+                          <ReturnsBridge>
+                            <SafetyProvider>
+                              <OnboardingProvider>
+                                <TooltipProvider>
+                                  <WouterRouter
+                                    base={import.meta.env.BASE_URL.replace(
+                                      /\/$/,
+                                      "",
+                                    )}
+                                  >
+                                    <OnboardingGate>
+                                      <Router />
+                                    </OnboardingGate>
+                                  </WouterRouter>
+                                  <Toaster />
+                                </TooltipProvider>
+                              </OnboardingProvider>
+                            </SafetyProvider>
+                          </ReturnsBridge>
+                        </WalletProvider>
                       </CheckoutProvider>
                     </CartProvider>
                   </WishlistProvider>
