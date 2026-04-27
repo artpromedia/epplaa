@@ -263,89 +263,70 @@ export default function Profile() {
               className={`rounded-xl border overflow-hidden ${cardBorder}`}
             >
               <div className="p-3">
-                <label className="block text-sm font-bold mb-2">
+                <label
+                  htmlFor="country-select"
+                  className="block text-sm font-bold mb-2"
+                >
                   Shopping Location
                 </label>
-                <div className="space-y-2">
-                  {(Object.keys(COUNTRIES) as CountryCode[]).map((code) => {
-                    const c = COUNTRIES[code];
-                    const isSelected = country.code === code;
-                    const isDisabled = c.status === "coming-soon";
-
-                    return (
-                      <button
-                        key={code}
-                        onClick={() => !isDisabled && setCountry(code)}
-                        disabled={isDisabled}
-                        className={`w-full flex items-center justify-between p-3 rounded-lg border text-left transition-colors ${
-                          isSelected
-                            ? isDark
-                              ? "bg-[#5BA3F5]/10 border-[#5BA3F5]/30"
-                              : "bg-[#1B2A4A]/10 border-[#1B2A4A]/30"
-                            : isDisabled
-                              ? isDark
-                                ? "bg-black/20 border-white/5 opacity-50"
-                                : "bg-stone-100 border-stone-200 opacity-50"
-                              : isDark
-                                ? "bg-black/40 border-white/10 hover:bg-white/5"
-                                : "bg-white border-stone-300 hover:bg-stone-50"
-                        }`}
-                      >
-                        <div className="flex items-center gap-3">
-                          <span className="text-2xl leading-none">
-                            {c.flag}
-                          </span>
-                          <div>
-                            <p
-                              className={`font-bold ${
-                                isSelected
-                                  ? isDark
-                                    ? "text-[#5BA3F5]"
-                                    : "text-[#1B2A4A]"
-                                  : ""
-                              }`}
-                            >
-                              {c.name}
-                            </p>
-                            <p
-                              className={`text-xs ${
-                                isDark ? "text-white/50" : "text-stone-500"
-                              }`}
-                            >
-                              {c.currency.code} ({c.currency.symbol})
-                            </p>
-                          </div>
-                        </div>
-                        <div className="flex items-center">
-                          {isDisabled && (
-                            <span
-                              className={`text-[10px] font-bold px-2 py-1 rounded mr-2 ${
+                <div
+                  className={`flex items-center gap-3 px-3 py-3 rounded-lg border ${
+                    isDark
+                      ? "bg-black/40 border-white/10"
+                      : "bg-white border-stone-300"
+                  }`}
+                >
+                  <span className="text-2xl leading-none shrink-0">
+                    {country.flag}
+                  </span>
+                  <div className="relative flex-1 min-w-0">
+                    <select
+                      id="country-select"
+                      value={country.code}
+                      onChange={(e) =>
+                        setCountry(e.target.value as CountryCode)
+                      }
+                      data-testid="select-country"
+                      className={`w-full appearance-none bg-transparent font-bold text-base pr-8 outline-none cursor-pointer ${
+                        isDark ? "text-white" : "text-stone-900"
+                      }`}
+                    >
+                      {(Object.keys(COUNTRIES) as CountryCode[])
+                        .filter((code) => COUNTRIES[code].status === "live")
+                        .map((code) => {
+                          const c = COUNTRIES[code];
+                          return (
+                            <option
+                              key={code}
+                              value={code}
+                              className={
                                 isDark
-                                  ? "bg-white/10 text-white/50"
-                                  : "bg-stone-200 text-stone-500"
-                              }`}
+                                  ? "bg-[#0F1525] text-white"
+                                  : "bg-white text-stone-900"
+                              }
                             >
-                              Soon
-                            </span>
-                          )}
-                          {isSelected && (
-                            <div
-                              className={`w-4 h-4 rounded-full flex items-center justify-center ${
-                                isDark ? "bg-[#5BA3F5]" : "bg-[#1B2A4A]"
-                              }`}
-                            >
-                              <div
-                                className={`w-1.5 h-1.5 rounded-full ${
-                                  isDark ? "bg-black" : "bg-white"
-                                }`}
-                              ></div>
-                            </div>
-                          )}
-                        </div>
-                      </button>
-                    );
-                  })}
+                              {c.flag} {c.name} — {c.currency.code} (
+                              {c.currency.symbol})
+                            </option>
+                          );
+                        })}
+                    </select>
+                    <ChevronRight
+                      className={`absolute right-1 top-1/2 -translate-y-1/2 w-4 h-4 rotate-90 pointer-events-none ${
+                        isDark ? "text-white/40" : "text-stone-400"
+                      }`}
+                    />
+                  </div>
                 </div>
+                <p
+                  className={`text-xs mt-2 ${
+                    isDark ? "text-white/50" : "text-stone-500"
+                  }`}
+                >
+                  Shopping live across {Object.keys(COUNTRIES).length} African
+                  markets — payments, fulfillment, and currency switch
+                  automatically.
+                </p>
               </div>
             </div>
           </div>

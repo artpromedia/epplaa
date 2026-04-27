@@ -396,7 +396,7 @@ export const COUNTRIES: Record<CountryCode, Country> = {
     flag: "🇸🇳",
     currency: { code: "XOF", symbol: "CFA ", decimals: 0, minorPerMajor: 1 },
     primaryCity: "Dakar",
-    status: "coming-soon",
+    status: "live",
     payoutAuthority: "BCEAO (Banque Centrale)",
     identityDocs: [
       { code: "CNI_SN", label: "CNI", helper: "Carte Nationale d'Identité (13 chiffres)", expectedLength: 13, kind: "digits" },
@@ -429,7 +429,7 @@ export const COUNTRIES: Record<CountryCode, Country> = {
     flag: "🇨🇲",
     currency: { code: "XAF", symbol: "FCFA ", decimals: 0, minorPerMajor: 1 },
     primaryCity: "Douala",
-    status: "coming-soon",
+    status: "live",
     payoutAuthority: "BEAC (Banque des États de l'Afrique Centrale)",
     identityDocs: [
       { code: "CNI_CM", label: "CNI", helper: "Carte Nationale d'Identité (9 chiffres)", expectedLength: 9, kind: "digits" },
@@ -462,7 +462,7 @@ export const COUNTRIES: Record<CountryCode, Country> = {
     flag: "🇨🇩",
     currency: { code: "CDF", symbol: "FC ", decimals: 0, minorPerMajor: 1 },
     primaryCity: "Kinshasa",
-    status: "coming-soon",
+    status: "live",
     payoutAuthority: "Banque Centrale du Congo",
     identityDocs: [
       { code: "CENI_CD", label: "Carte d'électeur", helper: "Numéro de la carte d'électeur CENI", expectedLength: 18, kind: "alphanumeric" },
@@ -498,7 +498,7 @@ export const COUNTRIES: Record<CountryCode, Country> = {
     flag: "🇺🇬",
     currency: { code: "UGX", symbol: "USh ", decimals: 0, minorPerMajor: 1 },
     primaryCity: "Kampala",
-    status: "coming-soon",
+    status: "live",
     payoutAuthority: "Bank of Uganda",
     identityDocs: [
       { code: "NIN_UG", label: "NIN", helper: "National Identification Number (14 characters)", expectedLength: 14, kind: "alphanumeric" },
@@ -531,7 +531,7 @@ export const COUNTRIES: Record<CountryCode, Country> = {
     flag: "🇹🇿",
     currency: { code: "TZS", symbol: "TSh ", decimals: 0, minorPerMajor: 1 },
     primaryCity: "Dar es Salaam",
-    status: "coming-soon",
+    status: "live",
     payoutAuthority: "Bank of Tanzania",
     identityDocs: [
       { code: "NIDA_TZ", label: "NIDA ID", helper: "National Identification Authority number (20 digits)", expectedLength: 20, kind: "digits" },
@@ -564,7 +564,7 @@ export const COUNTRIES: Record<CountryCode, Country> = {
     flag: "🇷🇼",
     currency: { code: "RWF", symbol: "RF ", decimals: 0, minorPerMajor: 1 },
     primaryCity: "Kigali",
-    status: "coming-soon",
+    status: "live",
     payoutAuthority: "National Bank of Rwanda (BNR)",
     identityDocs: [
       { code: "NID_RW", label: "National ID", helper: "Rwandan National ID (16 digits)", expectedLength: 16, kind: "digits" },
@@ -597,7 +597,7 @@ export const COUNTRIES: Record<CountryCode, Country> = {
     flag: "🇪🇹",
     currency: { code: "ETB", symbol: "Br ", decimals: 2, minorPerMajor: 100 },
     primaryCity: "Addis Ababa",
-    status: "coming-soon",
+    status: "live",
     payoutAuthority: "National Bank of Ethiopia",
     identityDocs: [
       { code: "FAYDA_ET", label: "Fayda", helper: "Ethiopian National Digital ID (12 digits)", expectedLength: 12, kind: "digits" },
@@ -634,7 +634,7 @@ export const COUNTRIES: Record<CountryCode, Country> = {
     flag: "🇧🇼",
     currency: { code: "BWP", symbol: "P ", decimals: 2, minorPerMajor: 100 },
     primaryCity: "Gaborone",
-    status: "coming-soon",
+    status: "live",
     payoutAuthority: "Bank of Botswana",
     identityDocs: [
       { code: "OMANG", label: "Omang", helper: "Botswana National ID (9 digits)", expectedLength: 9, kind: "digits" },
@@ -668,7 +668,7 @@ export const COUNTRIES: Record<CountryCode, Country> = {
     flag: "🇿🇲",
     currency: { code: "ZMW", symbol: "K ", decimals: 2, minorPerMajor: 100 },
     primaryCity: "Lusaka",
-    status: "coming-soon",
+    status: "live",
     payoutAuthority: "Bank of Zambia",
     identityDocs: [
       { code: "NRC_ZM", label: "NRC", helper: "National Registration Card (e.g. 123456/78/9)", expectedLength: 11, kind: "alphanumeric" },
@@ -704,7 +704,7 @@ export const COUNTRIES: Record<CountryCode, Country> = {
     flag: "🇪🇬",
     currency: { code: "EGP", symbol: "E£ ", decimals: 2, minorPerMajor: 100 },
     primaryCity: "Cairo",
-    status: "coming-soon",
+    status: "live",
     payoutAuthority: "Central Bank of Egypt",
     identityDocs: [
       { code: "NID_EG", label: "National ID", helper: "Egyptian National ID (14 digits)", expectedLength: 14, kind: "digits" },
@@ -738,7 +738,7 @@ export const COUNTRIES: Record<CountryCode, Country> = {
     flag: "🇲🇦",
     currency: { code: "MAD", symbol: "DH ", decimals: 2, minorPerMajor: 100 },
     primaryCity: "Casablanca",
-    status: "coming-soon",
+    status: "live",
     payoutAuthority: "Bank Al-Maghrib",
     identityDocs: [
       { code: "CNIE_MA", label: "CNIE", helper: "Carte Nationale d'Identité Électronique (8 caractères)", expectedLength: 8, kind: "alphanumeric" },
