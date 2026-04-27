@@ -4,10 +4,10 @@ export const modules: ModuleMap = {
   "./components/mockups/editorial-boutique/Discovery.tsx": () => import("../components/mockups/editorial-boutique/Discovery.tsx"),
   "./components/mockups/editorial-boutique/LiveShopping.tsx": () => import("../components/mockups/editorial-boutique/LiveShopping.tsx"),
   "./components/mockups/editorial-boutique/ProductDetail.tsx": () => import("../components/mockups/editorial-boutique/ProductDetail.tsx"),
-  "./components/mockups/naija-pop/Discovery.tsx": () => import("../components/mockups/naija-pop/Discovery.tsx"),
-  "./components/mockups/naija-pop/LiveShopping.tsx": () => import("../components/mockups/naija-pop/LiveShopping.tsx"),
-  "./components/mockups/naija-pop/ProductDetail.tsx": () => import("../components/mockups/naija-pop/ProductDetail.tsx"),
   "./components/mockups/lagos-night-market/Discovery.tsx": () => import("../components/mockups/lagos-night-market/Discovery.tsx"),
   "./components/mockups/lagos-night-market/LiveShopping.tsx": () => import("../components/mockups/lagos-night-market/LiveShopping.tsx"),
-  "./components/mockups/lagos-night-market/ProductDetail.tsx": () => import("../components/mockups/lagos-night-market/ProductDetail.tsx")
+  "./components/mockups/lagos-night-market/ProductDetail.tsx": () => import("../components/mockups/lagos-night-market/ProductDetail.tsx"),
+  "./components/mockups/naija-pop/Discovery.tsx": () => import("../components/mockups/naija-pop/Discovery.tsx"),
+  "./components/mockups/naija-pop/LiveShopping.tsx": () => import("../components/mockups/naija-pop/LiveShopping.tsx"),
+  "./components/mockups/naija-pop/ProductDetail.tsx": () => import("../components/mockups/naija-pop/ProductDetail.tsx")
 };
