@@ -24,6 +24,10 @@ export interface User {
   displayName: string;
   avatarUrl: string;
   countryCode: string;
+  phone?: string;
+  phoneCountry?: string;
+  /** @nullable */
+  phoneVerifiedAt?: string | null;
   addresses: UserAddressesItem[];
   paymentMethods: UserPaymentMethodsItem[];
 }
@@ -441,10 +445,87 @@ export interface NotificationPrefs {
   liveDrops: boolean;
   orderUpdates: boolean;
   marketing: boolean;
+  promos: boolean;
+  referrals: boolean;
+  walletCredits: boolean;
   whatsapp: boolean;
   sms: boolean;
+  push: boolean;
+  email: boolean;
   whatsappNumber?: string;
   smsNumber?: string;
+  quietHoursEnabled: boolean;
+  /** @nullable */
+  quietHoursStartMinutes?: number | null;
+  /** @nullable */
+  quietHoursEndMinutes?: number | null;
+  timezone: string;
+}
+
+export type OtpStartBodyChannel =
+  (typeof OtpStartBodyChannel)[keyof typeof OtpStartBodyChannel];
+
+export const OtpStartBodyChannel = {
+  sms: "sms",
+  whatsapp: "whatsapp",
+} as const;
+
+export interface OtpStartBody {
+  phone: string;
+  channel: OtpStartBodyChannel;
+}
+
+export interface OtpStartResponse {
+  ok: boolean;
+  devCode?: string;
+  expiresInSec?: number;
+}
+
+export interface OtpVerifyBody {
+  phone: string;
+  code: string;
+}
+
+export interface OtpVerifyResponse {
+  ok: boolean;
+  ticket?: string;
+  noClerk?: boolean;
+  userId?: string;
+}
+
+export interface PhoneLinkBody {
+  phone: string;
+  code: string;
+}
+
+export type PushTokenBodyKind =
+  (typeof PushTokenBodyKind)[keyof typeof PushTokenBodyKind];
+
+export const PushTokenBodyKind = {
+  fcm: "fcm",
+  webpush: "webpush",
+} as const;
+
+export interface PushTokenBody {
+  kind: PushTokenBodyKind;
+  token: string;
+  endpoint?: string;
+  p256dh?: string;
+  auth?: string;
+  userAgent?: string;
+}
+
+export interface VapidPublicKey {
+  publicKey: string;
+}
+
+export interface GoLiveResponse {
+  ok: boolean;
+  fanout: boolean;
+}
+
+export interface Ok {
+  ok: boolean;
 }
 
 export interface ReferralActivity {
@@ -577,6 +658,10 @@ export type NotFoundResponse = ApiError;
  * Bad request
  */
 export type BadRequestResponse = ApiError;
+
+export type DeletePushTokenParams = {
+  token: string;
+};
 
 export type ListProductsParams = {
   countryCode?: string;

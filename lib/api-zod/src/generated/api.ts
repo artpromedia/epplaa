@@ -23,6 +23,9 @@ export const GetMeResponse = zod.object({
   displayName: zod.string(),
   avatarUrl: zod.string(),
   countryCode: zod.string(),
+  phone: zod.string().optional(),
+  phoneCountry: zod.string().optional(),
+  phoneVerifiedAt: zod.string().nullish(),
   addresses: zod.array(zod.record(zod.string(), zod.unknown())),
   paymentMethods: zod.array(zod.record(zod.string(), zod.unknown())),
 });
@@ -41,8 +44,68 @@ export const UpdateMeResponse = zod.object({
   displayName: zod.string(),
   avatarUrl: zod.string(),
   countryCode: zod.string(),
+  phone: zod.string().optional(),
+  phoneCountry: zod.string().optional(),
+  phoneVerifiedAt: zod.string().nullish(),
   addresses: zod.array(zod.record(zod.string(), zod.unknown())),
   paymentMethods: zod.array(zod.record(zod.string(), zod.unknown())),
+});
+
+export const LinkMyPhoneBody = zod.object({
+  phone: zod.string(),
+  code: zod.string(),
+});
+
+export const LinkMyPhoneResponse = zod.object({
+  ok: zod.boolean(),
+});
+
+export const StartOtpBody = zod.object({
+  phone: zod.string(),
+  channel: zod.enum(["sms", "whatsapp"]),
+});
+
+export const StartOtpResponse = zod.object({
+  ok: zod.boolean(),
+  devCode: zod.string().optional(),
+  expiresInSec: zod.number().optional(),
+});
+
+export const VerifyOtpBody = zod.object({
+  phone: zod.string(),
+  code: zod.string(),
+});
+
+export const VerifyOtpResponse = zod.object({
+  ok: zod.boolean(),
+  ticket: zod.string().optional(),
+  noClerk: zod.boolean().optional(),
+  userId: zod.string().optional(),
+});
+
+export const GetVapidPublicKeyResponse = zod.object({
+  publicKey: zod.string(),
+});
+
+export const RegisterPushTokenBody = zod.object({
+  kind: zod.enum(["fcm", "webpush"]),
+  token: zod.string(),
+  endpoint: zod.string().optional(),
+  p256dh: zod.string().optional(),
+  auth: zod.string().optional(),
+  userAgent: zod.string().optional(),
+});
+
+export const RegisterPushTokenResponse = zod.object({
+  ok: zod.boolean(),
+});
+
+export const DeletePushTokenQueryParams = zod.object({
+  token: zod.coerce.string(),
+});
+
+export const DeletePushTokenResponse = zod.object({
+  ok: zod.boolean(),
 });
 
 export const ListCountriesResponseItem = zod.object({
@@ -140,6 +203,15 @@ export const GetStreamResponse = zod.object({
   title: zod.string(),
   currentProductId: zod.string().nullish(),
   isLive: zod.boolean(),
+});
+
+export const GoLiveParams = zod.object({
+  streamId: zod.coerce.string(),
+});
+
+export const GoLiveResponse = zod.object({
+  ok: zod.boolean(),
+  fanout: zod.boolean(),
 });
 
 export const ListReplaysResponseItem = zod.object({
@@ -782,30 +854,57 @@ export const GetNotificationPrefsResponse = zod.object({
   liveDrops: zod.boolean(),
   orderUpdates: zod.boolean(),
   marketing: zod.boolean(),
+  promos: zod.boolean(),
+  referrals: zod.boolean(),
+  walletCredits: zod.boolean(),
   whatsapp: zod.boolean(),
   sms: zod.boolean(),
+  push: zod.boolean(),
+  email: zod.boolean(),
   whatsappNumber: zod.string().optional(),
   smsNumber: zod.string().optional(),
+  quietHoursEnabled: zod.boolean(),
+  quietHoursStartMinutes: zod.number().nullish(),
+  quietHoursEndMinutes: zod.number().nullish(),
+  timezone: zod.string(),
 });
 
 export const PutNotificationPrefsBody = zod.object({
   liveDrops: zod.boolean(),
   orderUpdates: zod.boolean(),
   marketing: zod.boolean(),
+  promos: zod.boolean(),
+  referrals: zod.boolean(),
+  walletCredits: zod.boolean(),
   whatsapp: zod.boolean(),
   sms: zod.boolean(),
+  push: zod.boolean(),
+  email: zod.boolean(),
   whatsappNumber: zod.string().optional(),
   smsNumber: zod.string().optional(),
+  quietHoursEnabled: zod.boolean(),
+  quietHoursStartMinutes: zod.number().nullish(),
+  quietHoursEndMinutes: zod.number().nullish(),
+  timezone: zod.string(),
 });
 
 export const PutNotificationPrefsResponse = zod.object({
   liveDrops: zod.boolean(),
   orderUpdates: zod.boolean(),
   marketing: zod.boolean(),
+  promos: zod.boolean(),
+  referrals: zod.boolean(),
+  walletCredits: zod.boolean(),
   whatsapp: zod.boolean(),
   sms: zod.boolean(),
+  push: zod.boolean(),
+  email: zod.boolean(),
   whatsappNumber: zod.string().optional(),
   smsNumber: zod.string().optional(),
+  quietHoursEnabled: zod.boolean(),
+  quietHoursStartMinutes: zod.number().nullish(),
+  quietHoursEndMinutes: zod.number().nullish(),
+  timezone: zod.string(),
 });
 
 export const GetMyReferralsResponse = zod.object({

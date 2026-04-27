@@ -6,6 +6,7 @@ import { newOrderId, newOtp } from "../lib/ids";
 import { createPaymentIntent } from "../lib/payments";
 import { computeVatMinor, getVatRateBp } from "../lib/vat";
 import { logger } from "../lib/logger";
+import { enqueueNotification } from "../lib/notifications";
 
 const router: IRouter = Router();
 
@@ -349,6 +350,33 @@ router.post("/orders", async (req, res) => {
     .where(eq(schema.ordersTable.id, id))
     .limit(1);
   const order = rowToOrder(fresh[0]);
+  // Order placed event. For COD this is the final settled state — fire
+  // both placed + paid so the buyer's WhatsApp / push reflects reality.
+  await enqueueNotification({
+    userId,
+    eventType: "order_placed",
+    payload: {
+      title: "Order placed",
+      body: `Order ${id} confirmed. Total ${currencyCode} ${(total / 100).toFixed(2)}.`,
+      url: `/orders/${id}`,
+      orderId: id,
+    },
+  }).catch((err) => logger.error({ err: (err as Error).message }, "notify_order_placed_failed"));
+  if (isCod) {
+    const eventType = isPickup ? "order_ready_for_pickup" : "order_dispatched";
+    await enqueueNotification({
+      userId,
+      eventType,
+      payload: {
+        title: isPickup ? "Ready for pickup" : "On the way",
+        body: isPickup
+          ? `Pickup code: ${fresh[0].pickupOtp ?? ""}. Show this at the Box.`
+          : `Order ${id} is on the way to you.`,
+        url: `/orders/${id}`,
+        orderId: id,
+      },
+    }).catch(() => undefined);
+  }
   res.status(201).json({
     ...order,
     paymentIntent: {

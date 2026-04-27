@@ -65,6 +65,7 @@ import OnboardingWelcome from "@/pages/onboarding/welcome";
 import ReferralsHub from "@/pages/referrals";
 import SignInPage from "@/pages/auth/sign-in";
 import SignUpPage from "@/pages/auth/sign-up";
+import PhoneSignInPage from "@/pages/auth/phone-sign-in";
 
 const queryClient = new QueryClient();
 
@@ -171,6 +172,7 @@ function AppRoutes() {
       <Route path="/sign-in/:rest*" component={SignInPage} />
       <Route path="/sign-up" component={SignUpPage} />
       <Route path="/sign-up/:rest*" component={SignUpPage} />
+      <Route path="/phone-sign-in" component={PhoneSignInPage} />
       <Route>
         <ProtectedShell />
       </Route>

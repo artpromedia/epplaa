@@ -6,6 +6,12 @@ export const usersTable = pgTable("users", {
   displayName: text("display_name").notNull().default(""),
   avatarUrl: text("avatar_url").notNull().default(""),
   countryCode: text("country_code").notNull().default("NG"),
+  // Phone identity. `phone` is the E.164 international form (+234…). We
+  // store the country separately so the UI can format/dial correctly even
+  // before verification finishes.
+  phone: text("phone"),
+  phoneCountry: text("phone_country"),
+  phoneVerifiedAt: timestamp("phone_verified_at", { withTimezone: true }),
   addresses: jsonb("addresses")
     .$type<Record<string, unknown>[]>()
     .notNull()

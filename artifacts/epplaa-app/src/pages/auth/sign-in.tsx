@@ -1,5 +1,5 @@
 import { SignIn } from "@clerk/clerk-react";
-import { useLocation } from "wouter";
+import { Link, useLocation } from "wouter";
 
 export default function SignInPage() {
   const [location] = useLocation();
@@ -16,6 +16,13 @@ export default function SignInPage() {
         forceRedirectUrl={location.startsWith("/sign-in") ? "/" : location}
         fallbackRedirectUrl="/"
       />
+      <Link
+        href="/phone-sign-in"
+        className="mt-4 text-sm font-medium text-[var(--color-primary)] underline"
+        data-testid="link-phone-sign-in"
+      >
+        Sign in with phone instead
+      </Link>
     </div>
   );
 }

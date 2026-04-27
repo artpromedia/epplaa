@@ -9,20 +9,38 @@ export interface NotificationPrefs {
   liveDrops: boolean;
   orderUpdates: boolean;
   marketing: boolean;
+  promos: boolean;
+  referrals: boolean;
+  walletCredits: boolean;
   whatsapp: boolean;
   sms: boolean;
-  whatsappNumber?: string;
-  smsNumber?: string;
+  push: boolean;
+  email: boolean;
+  whatsappNumber: string;
+  smsNumber: string;
+  quietHoursEnabled: boolean;
+  quietHoursStartMinutes: number | null;
+  quietHoursEndMinutes: number | null;
+  timezone: string;
 }
 
 export const DEFAULT_NOTIFICATIONS: NotificationPrefs = {
   liveDrops: true,
   orderUpdates: true,
   marketing: false,
+  promos: true,
+  referrals: true,
+  walletCredits: true,
   whatsapp: true,
   sms: false,
+  push: true,
+  email: true,
   whatsappNumber: "",
   smsNumber: "",
+  quietHoursEnabled: false,
+  quietHoursStartMinutes: null,
+  quietHoursEndMinutes: null,
+  timezone: "",
 };
 
 /**

@@ -23,6 +23,8 @@ import discoveryRouter from "./discovery";
 import sellerRouter from "./seller";
 import paymentsRouter from "./payments";
 import adminRouter from "./admin";
+import authRouter from "./auth";
+import pushTokensRouter from "./pushTokens";
 
 const router: IRouter = Router();
 
@@ -50,5 +52,7 @@ router.use(discoveryRouter);
 router.use(sellerRouter);
 router.use(paymentsRouter);
 router.use(adminRouter);
+router.use(authRouter);
+router.use(pushTokensRouter);
 
 export default router;

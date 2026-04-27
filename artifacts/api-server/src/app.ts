@@ -9,6 +9,7 @@ import { CLERK_PROXY_PATH, clerkProxyMiddleware } from "./middlewares/clerkProxy
 import { seedDatabaseIfEmpty } from "./lib/seed";
 import { runDailyReconciliation, recoverStuckRefundLocks } from "./lib/reconciliation";
 import { processDuePayouts } from "./lib/payments";
+import { drainOutbox } from "./lib/notifications";
 
 const app: Express = express();
 
@@ -94,6 +95,19 @@ function startScheduledJobs(): void {
       );
     }, REFUND_RECOVERY_INTERVAL_MS);
   }, 90_000);
+  // Notifications outbox drain: every 30s. Each row claim is atomic so
+  // overlapping ticks under load never double-send.
+  const OUTBOX_INTERVAL_MS = 30_000;
+  setTimeout(() => {
+    void drainOutbox().catch((err) =>
+      logger.error({ err: (err as Error).message }, "outbox_drain_failed"),
+    );
+    setInterval(() => {
+      void drainOutbox().catch((err) =>
+        logger.error({ err: (err as Error).message }, "outbox_drain_failed"),
+      );
+    }, OUTBOX_INTERVAL_MS);
+  }, 15_000);
 }
 
 if (process.env.NODE_ENV !== "test") {

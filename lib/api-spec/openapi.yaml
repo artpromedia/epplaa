@@ -61,6 +61,61 @@ paths:
         "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/User" } } } }
         "401": { $ref: "#/components/responses/Unauthorized" }
 
+  /me/phone:
+    patch:
+      operationId: linkMyPhone
+      tags: [identity]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/PhoneLinkBody" } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Ok" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /auth/otp/start:
+    post:
+      operationId: startOtp
+      tags: [auth]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/OtpStartBody" } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/OtpStartResponse" } } } }
+  /auth/otp/verify:
+    post:
+      operationId: verifyOtp
+      tags: [auth]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/OtpVerifyBody" } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/OtpVerifyResponse" } } } }
+
+  /web-push/vapid-public-key:
+    get:
+      operationId: getVapidPublicKey
+      tags: [push]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/VapidPublicKey" } } } }
+  /push-tokens:
+    post:
+      operationId: registerPushToken
+      tags: [push]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/PushTokenBody" } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Ok" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    delete:
+      operationId: deletePushToken
+      tags: [push]
+      parameters:
+        - { in: query, name: token, required: true, schema: { type: string } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Ok" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
   /countries:
     get:
       operationId: listCountries
@@ -116,6 +171,16 @@ paths:
         - { in: path, name: streamId, required: true, schema: { type: string } }
       responses:
         "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Stream" } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /streams/{streamId}/go-live:
+    post:
+      operationId: goLive
+      tags: [streams]
+      parameters:
+        - { in: path, name: streamId, required: true, schema: { type: string } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/GoLiveResponse" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
 
   /replays:
@@ -1068,6 +1133,9 @@ components:
         displayName: { type: string }
         avatarUrl: { type: string }
         countryCode: { type: string }
+        phone: { type: string }
+        phoneCountry: { type: string }
+        phoneVerifiedAt: { type: ["string", "null"] }
         addresses:
           type: array
           items: { type: object, additionalProperties: true }
@@ -1513,15 +1581,98 @@ components:
 
     NotificationPrefs:
       type: object
-      required: [liveDrops, orderUpdates, marketing, whatsapp, sms]
+      required:
+        [
+          liveDrops,
+          orderUpdates,
+          marketing,
+          promos,
+          referrals,
+          walletCredits,
+          whatsapp,
+          sms,
+          push,
+          email,
+          quietHoursEnabled,
+          timezone,
+        ]
       properties:
         liveDrops: { type: boolean }
         orderUpdates: { type: boolean }
         marketing: { type: boolean }
+        promos: { type: boolean }
+        referrals: { type: boolean }
+        walletCredits: { type: boolean }
         whatsapp: { type: boolean }
         sms: { type: boolean }
+        push: { type: boolean }
+        email: { type: boolean }
         whatsappNumber: { type: string }
         smsNumber: { type: string }
+        quietHoursEnabled: { type: boolean }
+        quietHoursStartMinutes: { type: ["integer", "null"] }
+        quietHoursEndMinutes: { type: ["integer", "null"] }
+        timezone: { type: string }
+
+    OtpStartBody:
+      type: object
+      required: [phone, channel]
+      properties:
+        phone: { type: string }
+        channel: { type: string, enum: [sms, whatsapp] }
+    OtpStartResponse:
+      type: object
+      required: [ok]
+      properties:
+        ok: { type: boolean }
+        devCode: { type: string }
+        expiresInSec: { type: integer }
+    OtpVerifyBody:
+      type: object
+      required: [phone, code]
+      properties:
+        phone: { type: string }
+        code: { type: string }
+    OtpVerifyResponse:
+      type: object
+      required: [ok]
+      properties:
+        ok: { type: boolean }
+        ticket: { type: string }
+        noClerk: { type: boolean }
+        userId: { type: string }
+    PhoneLinkBody:
+      type: object
+      required: [phone, code]
+      properties:
+        phone: { type: string }
+        code: { type: string }
+    PushTokenBody:
+      type: object
+      required: [kind, token]
+      properties:
+        kind: { type: string, enum: [fcm, webpush] }
+        token: { type: string }
+        endpoint: { type: string }
+        p256dh: { type: string }
+        auth: { type: string }
+        userAgent: { type: string }
+    VapidPublicKey:
+      type: object
+      required: [publicKey]
+      properties:
+        publicKey: { type: string }
+    GoLiveResponse:
+      type: object
+      required: [ok, fanout]
+      properties:
+        ok: { type: boolean }
+        fanout: { type: boolean }
+    Ok:
+      type: object
+      required: [ok]
+      properties:
+        ok: { type: boolean }
 
     ReferralActivity:
       type: object

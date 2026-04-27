@@ -12,6 +12,7 @@ export * from "./wallet";
 export * from "./safety";
 export * from "./onboarding";
 export * from "./notificationPrefs";
+export * from "./notifications";
 export * from "./referrals";
 export * from "./follows";
 export * from "./wishlist";

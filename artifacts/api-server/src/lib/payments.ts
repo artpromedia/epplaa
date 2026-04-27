@@ -1,4 +1,5 @@
 import { eq, sql, and, inArray, ne } from "drizzle-orm";
+import { enqueueNotification } from "./notifications";
 import {
   DevMockGateway,
   FlutterwaveGateway,
@@ -356,7 +357,7 @@ export async function markIntentSucceeded(
 
   if (intent.purpose === "wallet_topup") {
     // Hard idempotency via the partial unique index on wallet_txns.intent_id.
-    await db
+    const inserted = await db
       .insert(schema.walletTxnsTable)
       .values({
         id: `wt_${Date.now().toString(36)}_${intent.id.slice(-4)}`,
@@ -367,7 +368,19 @@ export async function markIntentSucceeded(
         status: "succeeded",
         intentId: intent.id,
       })
-      .onConflictDoNothing();
+      .onConflictDoNothing()
+      .returning();
+    if (inserted.length > 0) {
+      await enqueueNotification({
+        userId: intent.userId,
+        eventType: "wallet_credit",
+        payload: {
+          title: "Wallet topped up",
+          body: `${intent.currencyCode} ${(intent.amountMinor / 100).toFixed(2)} added to your wallet.`,
+          url: `/wallet`,
+        },
+      }).catch(() => undefined);
+    }
   } else if (intent.purpose === "order" && intent.orderId) {
     await finalizeOrderAfterPayment(intent.orderId, intent.id, intent.gateway, intent.reference, paidAt);
   }
@@ -417,6 +430,32 @@ async function finalizeOrderAfterPayment(
       paidAt,
     })
     .where(and(eq(schema.ordersTable.id, orderId), sql`${schema.ordersTable.paidAt} IS NULL`));
+
+  // Buyer notifications for paid + dispatched/ready-for-pickup. We do this
+  // once here (not in the webhook + verify caller path) so the message
+  // fires exactly once thanks to the `paidAt IS NULL` guard above.
+  await enqueueNotification({
+    userId: order.userId,
+    eventType: "order_paid",
+    payload: {
+      title: "Payment received",
+      body: `Payment for order ${orderId} confirmed.`,
+      url: `/orders/${orderId}`,
+      orderId,
+    },
+  }).catch(() => undefined);
+  await enqueueNotification({
+    userId: order.userId,
+    eventType: isPickup ? "order_ready_for_pickup" : "order_dispatched",
+    payload: {
+      title: isPickup ? "Ready for pickup" : "On the way",
+      body: isPickup
+        ? `Pickup code: ${order.pickupOtp ?? ""}. Show this at the Box.`
+        : `Order ${orderId} is on the way to you.`,
+      url: `/orders/${orderId}`,
+      orderId,
+    },
+  }).catch(() => undefined);
 
   // ---- Compute split per seller ----
   const items = (order.items as Array<{ productId: string; qty: number; priceMinor: number }>) ?? [];

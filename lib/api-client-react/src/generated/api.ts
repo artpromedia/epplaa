@@ -33,27 +33,36 @@ import type {
   CreateReturnBody,
   CreateReviewBody,
   CreateSellerListingBody,
+  DeletePushTokenParams,
   EarningsSummary,
   FulfillmentLocation,
   GatewayHealthSnapshot,
   GetPaymentsMode200,
   GetSellerEarningsParams,
+  GoLiveResponse,
   HealthStatus,
   ListFulfillmentLocationsParams,
   ListProductsParams,
   ListReviewsParams,
   NotFoundResponse,
   NotificationPrefs,
+  Ok,
   Onboarding,
   Order,
   OrderQuote,
+  OtpStartBody,
+  OtpStartResponse,
+  OtpVerifyBody,
+  OtpVerifyResponse,
   PaymentIntent,
   Payout,
+  PhoneLinkBody,
   PlaceOrderBody,
   PlaceOrderResponse,
   Product,
   PromoApplyBody,
   PromoApplyResult,
+  PushTokenBody,
   ReconciliationRun,
   ReferralHub,
   RefundOrderBody,
@@ -78,6 +87,7 @@ import type {
   UpdateWalletSettingsBody,
   UpgradeSellerTierBody,
   User,
+  VapidPublicKey,
   Wallet,
   WalletRefundBody,
   WalletSpendBody,
@@ -312,6 +322,484 @@ export const useUpdateMe = <
   TContext
 > => {
   return useMutation(getUpdateMeMutationOptions(options));
+};
+
+export const getLinkMyPhoneUrl = () => {
+  return `/api/me/phone`;
+};
+
+export const linkMyPhone = async (
+  phoneLinkBody: PhoneLinkBody,
+  options?: RequestInit,
+): Promise<Ok> => {
+  return customFetch<Ok>(getLinkMyPhoneUrl(), {
+    ...options,
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(phoneLinkBody),
+  });
+};
+
+export const getLinkMyPhoneMutationOptions = <
+  TError = ErrorType<UnauthorizedResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof linkMyPhone>>,
+    TError,
+    { data: BodyType<PhoneLinkBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof linkMyPhone>>,
+  TError,
+  { data: BodyType<PhoneLinkBody> },
+  TContext
+> => {
+  const mutationKey = ["linkMyPhone"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof linkMyPhone>>,
+    { data: BodyType<PhoneLinkBody> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return linkMyPhone(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type LinkMyPhoneMutationResult = NonNullable<
+  Awaited<ReturnType<typeof linkMyPhone>>
+>;
+export type LinkMyPhoneMutationBody = BodyType<PhoneLinkBody>;
+export type LinkMyPhoneMutationError = ErrorType<UnauthorizedResponse>;
+
+export const useLinkMyPhone = <
+  TError = ErrorType<UnauthorizedResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof linkMyPhone>>,
+    TError,
+    { data: BodyType<PhoneLinkBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof linkMyPhone>>,
+  TError,
+  { data: BodyType<PhoneLinkBody> },
+  TContext
+> => {
+  return useMutation(getLinkMyPhoneMutationOptions(options));
+};
+
+export const getStartOtpUrl = () => {
+  return `/api/auth/otp/start`;
+};
+
+export const startOtp = async (
+  otpStartBody: OtpStartBody,
+  options?: RequestInit,
+): Promise<OtpStartResponse> => {
+  return customFetch<OtpStartResponse>(getStartOtpUrl(), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(otpStartBody),
+  });
+};
+
+export const getStartOtpMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof startOtp>>,
+    TError,
+    { data: BodyType<OtpStartBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof startOtp>>,
+  TError,
+  { data: BodyType<OtpStartBody> },
+  TContext
+> => {
+  const mutationKey = ["startOtp"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof startOtp>>,
+    { data: BodyType<OtpStartBody> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return startOtp(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type StartOtpMutationResult = NonNullable<
+  Awaited<ReturnType<typeof startOtp>>
+>;
+export type StartOtpMutationBody = BodyType<OtpStartBody>;
+export type StartOtpMutationError = ErrorType<unknown>;
+
+export const useStartOtp = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof startOtp>>,
+    TError,
+    { data: BodyType<OtpStartBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof startOtp>>,
+  TError,
+  { data: BodyType<OtpStartBody> },
+  TContext
+> => {
+  return useMutation(getStartOtpMutationOptions(options));
+};
+
+export const getVerifyOtpUrl = () => {
+  return `/api/auth/otp/verify`;
+};
+
+export const verifyOtp = async (
+  otpVerifyBody: OtpVerifyBody,
+  options?: RequestInit,
+): Promise<OtpVerifyResponse> => {
+  return customFetch<OtpVerifyResponse>(getVerifyOtpUrl(), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(otpVerifyBody),
+  });
+};
+
+export const getVerifyOtpMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof verifyOtp>>,
+    TError,
+    { data: BodyType<OtpVerifyBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof verifyOtp>>,
+  TError,
+  { data: BodyType<OtpVerifyBody> },
+  TContext
+> => {
+  const mutationKey = ["verifyOtp"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof verifyOtp>>,
+    { data: BodyType<OtpVerifyBody> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return verifyOtp(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type VerifyOtpMutationResult = NonNullable<
+  Awaited<ReturnType<typeof verifyOtp>>
+>;
+export type VerifyOtpMutationBody = BodyType<OtpVerifyBody>;
+export type VerifyOtpMutationError = ErrorType<unknown>;
+
+export const useVerifyOtp = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof verifyOtp>>,
+    TError,
+    { data: BodyType<OtpVerifyBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof verifyOtp>>,
+  TError,
+  { data: BodyType<OtpVerifyBody> },
+  TContext
+> => {
+  return useMutation(getVerifyOtpMutationOptions(options));
+};
+
+export const getGetVapidPublicKeyUrl = () => {
+  return `/api/web-push/vapid-public-key`;
+};
+
+export const getVapidPublicKey = async (
+  options?: RequestInit,
+): Promise<VapidPublicKey> => {
+  return customFetch<VapidPublicKey>(getGetVapidPublicKeyUrl(), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetVapidPublicKeyQueryKey = () => {
+  return [`/api/web-push/vapid-public-key`] as const;
+};
+
+export const getGetVapidPublicKeyQueryOptions = <
+  TData = Awaited<ReturnType<typeof getVapidPublicKey>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getVapidPublicKey>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetVapidPublicKeyQueryKey();
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getVapidPublicKey>>
+  > = ({ signal }) => getVapidPublicKey({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getVapidPublicKey>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetVapidPublicKeyQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getVapidPublicKey>>
+>;
+export type GetVapidPublicKeyQueryError = ErrorType<unknown>;
+
+export function useGetVapidPublicKey<
+  TData = Awaited<ReturnType<typeof getVapidPublicKey>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getVapidPublicKey>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetVapidPublicKeyQueryOptions(options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+export const getRegisterPushTokenUrl = () => {
+  return `/api/push-tokens`;
+};
+
+export const registerPushToken = async (
+  pushTokenBody: PushTokenBody,
+  options?: RequestInit,
+): Promise<Ok> => {
+  return customFetch<Ok>(getRegisterPushTokenUrl(), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(pushTokenBody),
+  });
+};
+
+export const getRegisterPushTokenMutationOptions = <
+  TError = ErrorType<UnauthorizedResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof registerPushToken>>,
+    TError,
+    { data: BodyType<PushTokenBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof registerPushToken>>,
+  TError,
+  { data: BodyType<PushTokenBody> },
+  TContext
+> => {
+  const mutationKey = ["registerPushToken"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof registerPushToken>>,
+    { data: BodyType<PushTokenBody> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return registerPushToken(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type RegisterPushTokenMutationResult = NonNullable<
+  Awaited<ReturnType<typeof registerPushToken>>
+>;
+export type RegisterPushTokenMutationBody = BodyType<PushTokenBody>;
+export type RegisterPushTokenMutationError = ErrorType<UnauthorizedResponse>;
+
+export const useRegisterPushToken = <
+  TError = ErrorType<UnauthorizedResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof registerPushToken>>,
+    TError,
+    { data: BodyType<PushTokenBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof registerPushToken>>,
+  TError,
+  { data: BodyType<PushTokenBody> },
+  TContext
+> => {
+  return useMutation(getRegisterPushTokenMutationOptions(options));
+};
+
+export const getDeletePushTokenUrl = (params: DeletePushTokenParams) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : value.toString());
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/api/push-tokens?${stringifiedParams}`
+    : `/api/push-tokens`;
+};
+
+export const deletePushToken = async (
+  params: DeletePushTokenParams,
+  options?: RequestInit,
+): Promise<Ok> => {
+  return customFetch<Ok>(getDeletePushTokenUrl(params), {
+    ...options,
+    method: "DELETE",
+  });
+};
+
+export const getDeletePushTokenMutationOptions = <
+  TError = ErrorType<UnauthorizedResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof deletePushToken>>,
+    TError,
+    { params: DeletePushTokenParams },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof deletePushToken>>,
+  TError,
+  { params: DeletePushTokenParams },
+  TContext
+> => {
+  const mutationKey = ["deletePushToken"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof deletePushToken>>,
+    { params: DeletePushTokenParams }
+  > = (props) => {
+    const { params } = props ?? {};
+
+    return deletePushToken(params, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type DeletePushTokenMutationResult = NonNullable<
+  Awaited<ReturnType<typeof deletePushToken>>
+>;
+
+export type DeletePushTokenMutationError = ErrorType<UnauthorizedResponse>;
+
+export const useDeletePushToken = <
+  TError = ErrorType<UnauthorizedResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof deletePushToken>>,
+    TError,
+    { params: DeletePushTokenParams },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof deletePushToken>>,
+  TError,
+  { params: DeletePushTokenParams },
+  TContext
+> => {
+  return useMutation(getDeletePushTokenMutationOptions(options));
 };
 
 export const getListCountriesUrl = () => {
@@ -692,6 +1180,86 @@ export function useGetStream<
 
   return { ...query, queryKey: queryOptions.queryKey };
 }
+
+export const getGoLiveUrl = (streamId: string) => {
+  return `/api/streams/${streamId}/go-live`;
+};
+
+export const goLive = async (
+  streamId: string,
+  options?: RequestInit,
+): Promise<GoLiveResponse> => {
+  return customFetch<GoLiveResponse>(getGoLiveUrl(streamId), {
+    ...options,
+    method: "POST",
+  });
+};
+
+export const getGoLiveMutationOptions = <
+  TError = ErrorType<UnauthorizedResponse | NotFoundResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof goLive>>,
+    TError,
+    { streamId: string },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof goLive>>,
+  TError,
+  { streamId: string },
+  TContext
+> => {
+  const mutationKey = ["goLive"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof goLive>>,
+    { streamId: string }
+  > = (props) => {
+    const { streamId } = props ?? {};
+
+    return goLive(streamId, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type GoLiveMutationResult = NonNullable<
+  Awaited<ReturnType<typeof goLive>>
+>;
+
+export type GoLiveMutationError = ErrorType<
+  UnauthorizedResponse | NotFoundResponse
+>;
+
+export const useGoLive = <
+  TError = ErrorType<UnauthorizedResponse | NotFoundResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof goLive>>,
+    TError,
+    { streamId: string },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof goLive>>,
+  TError,
+  { streamId: string },
+  TContext
+> => {
+  return useMutation(getGoLiveMutationOptions(options));
+};
 
 export const getListReplaysUrl = () => {
   return `/api/replays`;

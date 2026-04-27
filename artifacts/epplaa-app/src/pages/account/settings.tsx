@@ -9,7 +9,13 @@ import {
   Monitor,
   MessageCircle,
   Smartphone,
+  BellRing,
+  Moon,
+  Tag,
+  Users,
+  Wallet,
 } from "lucide-react";
+import { enableWebPush, disableWebPush } from "@/lib/push";
 import { useTheme } from "@/lib/theme-context";
 import { useCountry } from "@/lib/country-context";
 import { useNotificationPrefs } from "@/lib/notification-prefs";
@@ -157,7 +163,157 @@ export default function Settings() {
                   data-testid="switch-sms"
                 />
               }
+              border
             />
+            <SettingRow
+              icon={<BellRing className="w-5 h-5" />}
+              isDark={isDark}
+              title="Push notifications"
+              description="Browser push for live drops and orders."
+              control={
+                <Switch
+                  checked={prefs.push}
+                  onCheckedChange={async (v) => {
+                    setPrefs((p) => ({ ...p, push: v }));
+                    if (v) {
+                      const ok = await enableWebPush();
+                      if (!ok) {
+                        toast({
+                          title: "Push not available",
+                          description: "Permission denied or unsupported browser.",
+                        });
+                        setPrefs((p) => ({ ...p, push: false }));
+                      }
+                    } else {
+                      await disableWebPush();
+                    }
+                  }}
+                  data-testid="switch-push"
+                />
+              }
+            />
+          </div>
+        </section>
+
+        <section>
+          <h3 className={sectionLabel}>Notification topics</h3>
+          <div className={`rounded-xl border overflow-hidden ${cardClass}`}>
+            <SettingRow
+              icon={<Tag className="w-5 h-5" />}
+              isDark={isDark}
+              title="Promos"
+              description="Time-limited deals and category drops."
+              control={
+                <Switch
+                  checked={prefs.promos}
+                  onCheckedChange={(v) =>
+                    setPrefs((p) => ({ ...p, promos: v }))
+                  }
+                  data-testid="switch-promos"
+                />
+              }
+              border
+            />
+            <SettingRow
+              icon={<Users className="w-5 h-5" />}
+              isDark={isDark}
+              title="Referrals"
+              description="When friends sign up or earn you a reward."
+              control={
+                <Switch
+                  checked={prefs.referrals}
+                  onCheckedChange={(v) =>
+                    setPrefs((p) => ({ ...p, referrals: v }))
+                  }
+                  data-testid="switch-referrals"
+                />
+              }
+              border
+            />
+            <SettingRow
+              icon={<Wallet className="w-5 h-5" />}
+              isDark={isDark}
+              title="Wallet credits"
+              description="Top-ups, refunds, payouts."
+              control={
+                <Switch
+                  checked={prefs.walletCredits}
+                  onCheckedChange={(v) =>
+                    setPrefs((p) => ({ ...p, walletCredits: v }))
+                  }
+                  data-testid="switch-wallet-credits"
+                />
+              }
+            />
+          </div>
+        </section>
+
+        <section>
+          <h3 className={sectionLabel}>Quiet hours</h3>
+          <div className={`rounded-xl border overflow-hidden ${cardClass}`}>
+            <SettingRow
+              icon={<Moon className="w-5 h-5" />}
+              isDark={isDark}
+              title="Mute non-urgent at night"
+              description="We still send order, payment, and pickup alerts."
+              control={
+                <Switch
+                  checked={prefs.quietHoursEnabled}
+                  onCheckedChange={(v) =>
+                    setPrefs((p) => ({
+                      ...p,
+                      quietHoursEnabled: v,
+                      quietHoursStartMinutes: p.quietHoursStartMinutes ?? 22 * 60,
+                      quietHoursEndMinutes: p.quietHoursEndMinutes ?? 7 * 60,
+                    }))
+                  }
+                  data-testid="switch-quiet-hours"
+                />
+              }
+              border={prefs.quietHoursEnabled}
+            />
+            {prefs.quietHoursEnabled && (
+              <div className="grid grid-cols-2 gap-2 p-4">
+                <label className="flex flex-col gap-1 text-sm">
+                  <span className={subtleText}>From</span>
+                  <input
+                    type="time"
+                    value={minutesToHHMM(prefs.quietHoursStartMinutes ?? 22 * 60)}
+                    onChange={(e) =>
+                      setPrefs((p) => ({
+                        ...p,
+                        quietHoursStartMinutes: hhmmToMinutes(e.target.value),
+                      }))
+                    }
+                    className={`rounded-lg px-3 py-2 ${
+                      isDark
+                        ? "bg-white/10 border border-white/10 text-white"
+                        : "bg-white border border-stone-300 text-stone-900"
+                    }`}
+                    data-testid="input-quiet-start"
+                  />
+                </label>
+                <label className="flex flex-col gap-1 text-sm">
+                  <span className={subtleText}>Until</span>
+                  <input
+                    type="time"
+                    value={minutesToHHMM(prefs.quietHoursEndMinutes ?? 7 * 60)}
+                    onChange={(e) =>
+                      setPrefs((p) => ({
+                        ...p,
+                        quietHoursEndMinutes: hhmmToMinutes(e.target.value),
+                      }))
+                    }
+                    className={`rounded-lg px-3 py-2 ${
+                      isDark
+                        ? "bg-white/10 border border-white/10 text-white"
+                        : "bg-white border border-stone-300 text-stone-900"
+                    }`}
+                    data-testid="input-quiet-end"
+                  />
+                </label>
+              </div>
+            )}
           </div>
         </section>
 
@@ -303,6 +459,17 @@ export default function Settings() {
       )}
     </div>
   );
+}
+
+function minutesToHHMM(m: number): string {
+  const h = Math.floor(m / 60) % 24;
+  const mm = m % 60;
+  return `${String(h).padStart(2, "0")}:${String(mm).padStart(2, "0")}`;
+}
+
+function hhmmToMinutes(s: string): number {
+  const [h, m] = s.split(":").map((n) => parseInt(n, 10) || 0);
+  return ((h % 24) * 60 + (m % 60)) | 0;
 }
 
 function SettingRow({

@@ -15,6 +15,7 @@ import {
   PAYMENTS_MODE,
 } from "../lib/payments";
 import { newRefundId } from "../lib/ids";
+import { enqueueNotification } from "../lib/notifications";
 
 const router: IRouter = Router();
 
@@ -232,6 +233,16 @@ router.post("/orders/:orderId/refund", async (req, res) => {
         { orderId: order.id, refundId, ...clawback },
         "refund_completed_with_clawback",
       );
+      await enqueueNotification({
+        userId: order.userId,
+        eventType: "order_refunded",
+        payload: {
+          title: "Refund processed",
+          body: `Refund for order ${order.id} has been issued.`,
+          url: `/orders/${order.id}`,
+          orderId: order.id,
+        },
+      }).catch(() => undefined);
       res.json({
         ok: true,
         status: "processed",

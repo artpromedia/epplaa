@@ -2,7 +2,7 @@ import { ReactNode } from "react";
 import { useAuth } from "@clerk/clerk-react";
 import { useLocation, Redirect } from "wouter";
 
-const PUBLIC_PREFIXES = ["/sign-in", "/sign-up"];
+const PUBLIC_PREFIXES = ["/sign-in", "/sign-up", "/phone-sign-in"];
 
 export function AuthGate({ children }: { children: ReactNode }) {
   const { isLoaded, isSignedIn } = useAuth();

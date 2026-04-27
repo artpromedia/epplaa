@@ -9,10 +9,19 @@ const DEFAULT = {
   liveDrops: true,
   orderUpdates: true,
   marketing: false,
+  promos: true,
+  referrals: true,
+  walletCredits: true,
   whatsapp: true,
   sms: false,
+  push: true,
+  email: true,
   whatsappNumber: "",
   smsNumber: "",
+  quietHoursEnabled: false,
+  quietHoursStartMinutes: null as number | null,
+  quietHoursEndMinutes: null as number | null,
+  timezone: "",
 };
 
 function rowToView(r: typeof schema.notificationPrefsTable.$inferSelect | undefined) {
@@ -21,10 +30,19 @@ function rowToView(r: typeof schema.notificationPrefsTable.$inferSelect | undefi
     liveDrops: r.liveDrops,
     orderUpdates: r.orderUpdates,
     marketing: r.marketing,
+    promos: r.promos,
+    referrals: r.referrals,
+    walletCredits: r.walletCredits,
     whatsapp: r.whatsapp,
     sms: r.sms,
+    push: r.push,
+    email: r.email,
     whatsappNumber: r.whatsappNumber,
     smsNumber: r.smsNumber,
+    quietHoursEnabled: r.quietHoursEnabled,
+    quietHoursStartMinutes: r.quietHoursStartMinutes,
+    quietHoursEndMinutes: r.quietHoursEndMinutes,
+    timezone: r.timezone,
   };
 }
 
