@@ -98,20 +98,35 @@ router.post("/streams/:streamId/go-live", async (req, res) => {
 
 /**
  * Convenience endpoint used by the seller "Go live" UI which doesn't yet
- * have a stream row. We fan out a "seller is live" notification to every
- * follower of the caller's storeHandle. No isLive flag is flipped here —
- * use POST /streams/:id/go-live for that.
+ * have a stream row. The store handle is derived server-side from the
+ * caller's seller profile so a signed-in user cannot fan out notifications
+ * for a handle they do not own. No isLive flag is flipped here — use
+ * POST /streams/:id/go-live for that.
  *
- * Body: { storeHandle: string, title: string, streamId?: string }
+ * Body: { title: string, streamId?: string }
  */
 router.post("/seller/go-live", async (req, res) => {
   const userId = requireUserId(req, res);
   if (!userId) return;
-  const body = req.body as { storeHandle?: string; title?: string; streamId?: string };
-  const storeHandle = String(body.storeHandle ?? "").trim();
+  const body = req.body as { title?: string; streamId?: string };
   const title = String(body.title ?? "").trim();
-  if (!storeHandle || !title) {
+  if (!title) {
     res.status(400).json({ error: "missing_fields" });
+    return;
+  }
+  // Derive the seller's owned storeHandle from their profile. Any handle
+  // sent in the body is ignored (defense against impersonation).
+  const [seller] = await db
+    .select({ application: schema.sellersTable.application })
+    .from(schema.sellersTable)
+    .where(eq(schema.sellersTable.userId, userId))
+    .limit(1);
+  const storeHandle =
+    seller && seller.application && typeof seller.application === "object"
+      ? String((seller.application as Record<string, unknown>).storeHandle ?? "").trim()
+      : "";
+  if (!storeHandle) {
+    res.status(403).json({ error: "no_seller_handle" });
     return;
   }
   const followers = await db
@@ -129,7 +144,10 @@ router.post("/seller/go-live", async (req, res) => {
       },
     }).catch((err) => logger.error({ err: (err as Error).message }, "notify_seller_live_failed"));
   }
-  res.json({ ok: true, fanout: followers.length });
+  // Match the GoLiveResponse contract: fanout is a boolean (whether any
+  // followers were notified). Count is logged server-side instead.
+  logger.info({ storeHandle, followers: followers.length }, "seller_live_fanout");
+  res.json({ ok: true, fanout: followers.length > 0 });
 });
 
 export default router;

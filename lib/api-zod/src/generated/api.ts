@@ -215,7 +215,6 @@ export const GoLiveResponse = zod.object({
 });
 
 export const SellerGoLiveBroadcastBody = zod.object({
-  storeHandle: zod.string(),
   title: zod.string(),
   streamId: zod.string().optional(),
 });

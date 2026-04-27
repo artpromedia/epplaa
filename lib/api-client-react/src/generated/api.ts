@@ -35,6 +35,7 @@ import type {
   CreateSellerListingBody,
   DeletePushTokenParams,
   EarningsSummary,
+  ForbiddenResponse,
   FulfillmentLocation,
   GatewayHealthSnapshot,
   GetPaymentsMode200,
@@ -1279,7 +1280,9 @@ export const sellerGoLiveBroadcast = async (
 };
 
 export const getSellerGoLiveBroadcastMutationOptions = <
-  TError = ErrorType<BadRequestResponse | UnauthorizedResponse>,
+  TError = ErrorType<
+    BadRequestResponse | UnauthorizedResponse | ForbiddenResponse
+  >,
   TContext = unknown,
 >(options?: {
   mutation?: UseMutationOptions<
@@ -1322,11 +1325,13 @@ export type SellerGoLiveBroadcastMutationResult = NonNullable<
 export type SellerGoLiveBroadcastMutationBody =
   BodyType<SellerGoLiveBroadcastBody>;
 export type SellerGoLiveBroadcastMutationError = ErrorType<
-  BadRequestResponse | UnauthorizedResponse
+  BadRequestResponse | UnauthorizedResponse | ForbiddenResponse
 >;
 
 export const useSellerGoLiveBroadcast = <
-  TError = ErrorType<BadRequestResponse | UnauthorizedResponse>,
+  TError = ErrorType<
+    BadRequestResponse | UnauthorizedResponse | ForbiddenResponse
+  >,
   TContext = unknown,
 >(options?: {
   mutation?: UseMutationOptions<

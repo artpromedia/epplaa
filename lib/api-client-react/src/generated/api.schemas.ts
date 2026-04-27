@@ -659,6 +659,11 @@ export type NotFoundResponse = ApiError;
  */
 export type BadRequestResponse = ApiError;
 
+/**
+ * Forbidden
+ */
+export type ForbiddenResponse = ApiError;
+
 export type DeletePushTokenParams = {
   token: string;
 };
@@ -670,7 +675,6 @@ export type ListProductsParams = {
 };
 
 export type SellerGoLiveBroadcastBody = {
-  storeHandle: string;
   title: string;
   streamId?: string;
 };

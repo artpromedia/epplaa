@@ -87,10 +87,9 @@ export default function SellerGoLive() {
       description: `Streaming "${trimmed}" to ${viewers} viewers.`,
     });
     // Fire follower fan-out via backend. Best-effort — UI is already live.
-    const handle = application?.storeHandle;
-    if (handle) {
+    if (application?.storeHandle) {
       try {
-        await sellerGoLiveBroadcast({ storeHandle: handle, title: trimmed });
+        await sellerGoLiveBroadcast({ title: trimmed });
       } catch {
         // Swallow: notifications are non-critical for the live experience.
       }

@@ -192,14 +192,14 @@ paths:
           application/json:
             schema:
               type: object
-              required: [storeHandle, title]
+              required: [title]
               properties:
-                storeHandle: { type: string }
                 title: { type: string }
                 streamId: { type: string }
       responses:
         "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/GoLiveResponse" } } } }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
         "400": { $ref: "#/components/responses/BadRequest" }
 
   /replays:
@@ -1127,6 +1127,11 @@ components:
           schema: { $ref: "#/components/schemas/ApiError" }
     BadRequest:
       description: Bad request
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ApiError" }
+    Forbidden:
+      description: Forbidden
       content:
         application/json:
           schema: { $ref: "#/components/schemas/ApiError" }
