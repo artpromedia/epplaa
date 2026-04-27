@@ -13,6 +13,9 @@ export interface CheckoutDraft {
     whatsappNumber?: string;
     smsNumber?: string;
   };
+  // Promo code (uppercased) applied at the Review step. Persisted across
+  // back-navigation so the user does not have to re-enter it.
+  promoCode?: string;
 }
 
 interface CheckoutContextValue {

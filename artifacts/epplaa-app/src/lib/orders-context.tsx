@@ -64,7 +64,15 @@ export interface Order {
   totalsMinor: {
     subtotal: number;
     shipping: number;
+    // Optional promo discount split into the two buckets it can affect.
+    discount?: number;
+    shippingDiscount?: number;
     total: number;
+  };
+  // Promo code that was redeemed (uppercased) plus its display label.
+  promo?: {
+    code: string;
+    label: string;
   };
   pickupOTP?: string;
   etaLabel: string;

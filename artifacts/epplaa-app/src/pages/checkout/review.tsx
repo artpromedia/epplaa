@@ -1,6 +1,6 @@
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useLocation } from "wouter";
-import { Package, MapPin, Truck } from "lucide-react";
+import { Package, MapPin, Truck, Tag, X, Check } from "lucide-react";
 import { useTheme } from "@/lib/theme-context";
 import { useCountry } from "@/lib/country-context";
 import { useCart } from "@/lib/cart-context";
@@ -13,6 +13,7 @@ import {
 } from "@/lib/orders-context";
 import { getLocationById } from "@/lib/fulfillment-locations";
 import { formatPrice } from "@/lib/format";
+import { applyPromo } from "@/lib/promo-codes";
 import { PageHeader } from "@/components/page-header";
 import { BottomActions, CheckoutSteps } from "./method";
 
@@ -21,7 +22,7 @@ export default function CheckoutReview() {
   const isDark = resolvedTheme === "dark";
   const { country } = useCountry();
   const { resolved, subtotalMinor, clear } = useCart();
-  const { draft, reset: resetCheckout } = useCheckout();
+  const { draft, set: setDraft, reset: resetCheckout } = useCheckout();
   const { add: addOrder } = useOrders();
   const [, setLocation] = useLocation();
 
@@ -66,7 +67,42 @@ export default function CheckoutReview() {
   }, [resolved.length, fOpt, isHomeDeliveryOpt, addr, loc, pm, setLocation]);
 
   const shipping = fOpt?.feeMinor ?? 0;
-  const total = subtotalMinor + shipping;
+
+  // Promo handling — keep input local so typing doesn't churn the rest of the
+  // page, but persist the *applied* code to the checkout draft.
+  const [promoInput, setPromoInput] = useState<string>(draft.promoCode ?? "");
+  const [promoExpanded, setPromoExpanded] = useState<boolean>(
+    !!draft.promoCode,
+  );
+  const [promoError, setPromoError] = useState<string | null>(null);
+
+  // Recompute discount whenever the applied code, subtotal, shipping, or
+  // currency changes (e.g. user switches country mid-checkout).
+  const promoResult = useMemo(() => {
+    if (!draft.promoCode) {
+      return {
+        ok: false as const,
+        discountMinor: 0,
+        shippingDiscountMinor: 0,
+      };
+    }
+    return applyPromo(draft.promoCode, subtotalMinor, shipping, country);
+  }, [draft.promoCode, subtotalMinor, shipping, country]);
+
+  // If the previously-applied code becomes invalid (e.g. country change drops
+  // subtotal below the minimum), surface a soft message and silently clear it.
+  useEffect(() => {
+    if (draft.promoCode && !promoResult.ok) {
+      setPromoError(promoResult.error ?? "Code no longer applies");
+      setDraft({ promoCode: undefined });
+    }
+  }, [draft.promoCode, promoResult.ok, promoResult.error, setDraft]);
+
+  const discount = promoResult.ok ? promoResult.discountMinor : 0;
+  const shippingDiscount = promoResult.ok
+    ? promoResult.shippingDiscountMinor
+    : 0;
+  const total = Math.max(0, subtotalMinor + shipping - discount - shippingDiscount);
 
   const subtle = isDark ? "text-white/55" : "text-stone-500";
   const cardBorder = isDark
@@ -74,6 +110,23 @@ export default function CheckoutReview() {
     : "bg-white border-stone-400/35";
 
   const isHomeDelivery = isHomeDeliveryOpt;
+
+  function tryApplyPromo() {
+    setPromoError(null);
+    const result = applyPromo(promoInput, subtotalMinor, shipping, country);
+    if (!result.ok) {
+      setPromoError(result.error ?? "Code not recognised");
+      return;
+    }
+    setDraft({ promoCode: result.promo!.code });
+    setPromoInput(result.promo!.code);
+  }
+
+  function clearPromo() {
+    setDraft({ promoCode: undefined });
+    setPromoInput("");
+    setPromoError(null);
+  }
 
   function placeOrder() {
     if (resolved.length === 0) return;
@@ -121,8 +174,18 @@ export default function CheckoutReview() {
       totalsMinor: {
         subtotal: subtotalMinor,
         shipping,
+        ...(discount > 0 ? { discount } : {}),
+        ...(shippingDiscount > 0 ? { shippingDiscount } : {}),
         total,
       },
+      ...(promoResult.ok && promoResult.promo
+        ? {
+            promo: {
+              code: promoResult.promo.code,
+              label: promoResult.promo.label,
+            },
+          }
+        : {}),
       etaLabel: fOpt.etaLabel,
       ...(isHomeDelivery ? {} : { pickupOTP: generateOTP() }),
     };
@@ -233,6 +296,106 @@ export default function CheckoutReview() {
           </div>
         </Section>
 
+        <Section title="Promo code" subtle={subtle}>
+          <div className={`rounded-xl border p-3 space-y-2 ${cardBorder}`}>
+            {!promoExpanded && !promoResult.ok && (
+              <button
+                type="button"
+                onClick={() => setPromoExpanded(true)}
+                data-testid="button-toggle-promo"
+                className={`flex items-center gap-2 text-sm font-bold ${
+                  isDark ? "text-[#FF8855]" : "text-[#E6502E]"
+                }`}
+              >
+                <Tag className="w-4 h-4" />
+                Have a promo code?
+              </button>
+            )}
+
+            {(promoExpanded || promoResult.ok) && !promoResult.ok && (
+              <>
+                <div className="flex gap-2">
+                  <input
+                    value={promoInput}
+                    onChange={(e) => {
+                      setPromoInput(e.target.value.toUpperCase());
+                      setPromoError(null);
+                    }}
+                    placeholder="WELCOME10"
+                    data-testid="input-promo-code"
+                    maxLength={20}
+                    className={`flex-1 h-10 px-3 rounded-lg border text-sm font-bold outline-none focus:border-[#E6502E] ${
+                      isDark
+                        ? "bg-white/5 border-white/15 text-white placeholder:text-white/40"
+                        : "bg-white border-stone-300 text-stone-900 placeholder:text-stone-400"
+                    }`}
+                  />
+                  <button
+                    type="button"
+                    onClick={tryApplyPromo}
+                    disabled={!promoInput.trim()}
+                    data-testid="button-apply-promo"
+                    className={`px-4 h-10 rounded-lg font-bold text-sm disabled:opacity-40 ${
+                      isDark
+                        ? "bg-[#FF8855] text-black hover:bg-[#FF6B35]"
+                        : "bg-[#E6502E] text-white hover:bg-[#C4441E]"
+                    }`}
+                  >
+                    Apply
+                  </button>
+                </div>
+                {promoError && (
+                  <p
+                    className={`text-xs font-bold ${
+                      isDark ? "text-red-300" : "text-red-600"
+                    }`}
+                    data-testid="text-promo-error"
+                  >
+                    {promoError}
+                  </p>
+                )}
+                <p className={`text-[11px] ${subtle}`}>
+                  Try WELCOME10, EPPLAA20, FIRSTORDER, or LAGOS500.
+                </p>
+              </>
+            )}
+
+            {promoResult.ok && (
+              <div
+                className={`flex items-center gap-2 rounded-lg p-2 ${
+                  isDark
+                    ? "bg-emerald-500/10 border border-emerald-500/30 text-emerald-200"
+                    : "bg-emerald-50 border border-emerald-200 text-emerald-800"
+                }`}
+                data-testid="banner-promo-applied"
+              >
+                <Check className="w-4 h-4 shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <p className="text-xs font-bold leading-tight">
+                    {draft.promoCode} applied
+                  </p>
+                  <p className="text-[11px] opacity-90 leading-tight">
+                    {promoResult.label}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={clearPromo}
+                  data-testid="button-clear-promo"
+                  aria-label="Remove promo"
+                  className={`h-7 w-7 rounded-full flex items-center justify-center ${
+                    isDark
+                      ? "bg-white/10 hover:bg-white/20"
+                      : "bg-emerald-100 hover:bg-emerald-200"
+                  }`}
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            )}
+          </div>
+        </Section>
+
         <Section title="Totals" subtle={subtle}>
           <div className={`rounded-xl border p-3 space-y-2 ${cardBorder}`}>
             <Row
@@ -245,10 +408,30 @@ export default function CheckoutReview() {
             <Row
               label="Shipping"
               value={
-                shipping === 0 ? "FREE" : formatPrice(shipping, country)
+                shipping === 0
+                  ? "FREE"
+                  : shippingDiscount >= shipping
+                    ? "FREE"
+                    : formatPrice(shipping, country)
               }
               subtle={subtle}
             />
+            {discount > 0 && (
+              <Row
+                label={`Promo (${draft.promoCode})`}
+                value={`- ${formatPrice(discount, country)}`}
+                subtle={subtle}
+                accent={isDark ? "text-emerald-300" : "text-emerald-700"}
+              />
+            )}
+            {shippingDiscount > 0 && (
+              <Row
+                label={`Shipping promo (${draft.promoCode})`}
+                value={`- ${formatPrice(shippingDiscount, country)}`}
+                subtle={subtle}
+                accent={isDark ? "text-emerald-300" : "text-emerald-700"}
+              />
+            )}
             <div
               className={`pt-2 border-t flex items-center justify-between ${
                 isDark ? "border-white/10" : "border-stone-200"
@@ -318,15 +501,17 @@ function Row({
   label,
   value,
   subtle,
+  accent,
 }: {
   label: string;
   value: string;
   subtle: string;
+  accent?: string;
 }) {
   return (
     <div className="flex items-center justify-between text-sm">
-      <span className={subtle}>{label}</span>
-      <span className="font-bold">{value}</span>
+      <span className={accent ?? subtle}>{label}</span>
+      <span className={`font-bold ${accent ?? ""}`}>{value}</span>
     </div>
   );
 }

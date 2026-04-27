@@ -1,7 +1,8 @@
-import { Search } from "lucide-react";
+import { Search, Play, ChevronRight, Clock } from "lucide-react";
 import { Link } from "wouter";
 import { useTheme } from "@/lib/theme-context";
 import { SEED_PRODUCTS, SEED_STREAMS } from "@/lib/seed";
+import { SEED_REPLAYS } from "@/lib/replays";
 import { useCountry } from "@/lib/country-context";
 import { formatPrice } from "@/lib/format";
 import { ThemeToggle } from "@/components/theme-toggle";
@@ -56,6 +57,58 @@ export default function Discovery() {
 
       {/* Feed Grid */}
       <div className="flex-1 overflow-y-auto px-2 pb-6 no-scrollbar">
+        {/* Replays rail — horizontal scroll of recently-ended streams */}
+        <div className="px-2 mb-3">
+          <div className="flex items-center justify-between mb-2">
+            <h2 className="text-sm font-black tracking-tight">
+              Live replays
+            </h2>
+            <Link
+              href="/replays"
+              data-testid="link-all-replays"
+              className={`text-[11px] font-bold flex items-center gap-0.5 ${
+                isDark ? "text-[#FF8855]" : "text-[#E6502E]"
+              }`}
+            >
+              See all <ChevronRight className="w-3 h-3" />
+            </Link>
+          </div>
+          <div className="flex gap-2 overflow-x-auto no-scrollbar -mx-2 px-2 pb-1">
+            {SEED_REPLAYS.slice(0, 5).map((r) => (
+              <Link
+                key={r.id}
+                href={`/replay/${r.id}`}
+                data-testid={`link-replay-rail-${r.id}`}
+                className="relative shrink-0 w-28 aspect-[3/4] rounded-xl overflow-hidden block"
+              >
+                <img
+                  src={r.posterImage}
+                  alt={r.title}
+                  className="w-full h-full object-cover"
+                />
+                <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/20 to-black/40" />
+                <div className="absolute inset-0 flex items-center justify-center">
+                  <div className="h-9 w-9 rounded-full bg-black/55 backdrop-blur flex items-center justify-center border border-white/25">
+                    <Play className="h-4 w-4 fill-white text-white ml-0.5" />
+                  </div>
+                </div>
+                <div className="absolute top-1.5 left-1.5 bg-black/65 backdrop-blur text-white text-[9px] font-bold px-1 py-0.5 rounded flex items-center gap-0.5">
+                  <Clock className="h-2.5 w-2.5" />
+                  {r.durationLabel}
+                </div>
+                <div className="absolute bottom-1.5 left-1.5 right-1.5">
+                  <p className="text-[10px] font-bold leading-tight text-white line-clamp-2">
+                    {r.title}
+                  </p>
+                  <p className="text-[9px] text-white/80 mt-0.5">
+                    {r.hostName} · {r.viewCount}
+                  </p>
+                </div>
+              </Link>
+            ))}
+          </div>
+        </div>
+
         <div className="grid grid-cols-2 gap-2">
           
           {SEED_STREAMS.slice(0, 1).map((stream) => (

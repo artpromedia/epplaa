@@ -22,6 +22,9 @@ export function Layout({ children }: { children: React.ReactNode }) {
   const { count } = useCart();
 
   const isLiveRoute = location.startsWith("/live/") || isBroadcasting;
+  // Replay detail is a full-screen viewer (same UX as live); the listing page
+  // /replays keeps the bottom nav so users can browse other tabs.
+  const isReplayDetail = location.startsWith("/replay/");
   const inSellerMode = mode === "seller" && status === "approved";
 
   // Cart + checkout flows are full-screen with their own sticky action bar; the
@@ -30,7 +33,8 @@ export function Layout({ children }: { children: React.ReactNode }) {
   const isCheckoutFlow =
     location === "/cart" || location.startsWith("/checkout");
   const isRateFlow = /^\/orders\/[^/]+\/rate$/.test(location);
-  const hideTabNav = isLiveRoute || isCheckoutFlow || isRateFlow;
+  const hideTabNav =
+    isLiveRoute || isReplayDetail || isCheckoutFlow || isRateFlow;
 
   // Hide floating cart on routes where it would be redundant or get in the way.
   const hideFloatingCart =
@@ -38,7 +42,8 @@ export function Layout({ children }: { children: React.ReactNode }) {
     isCheckoutFlow ||
     isRateFlow ||
     location.startsWith("/product/") || // product detail has its own CTA
-    isLiveRoute;
+    isLiveRoute ||
+    isReplayDetail;
 
   return (
     <div className="flex justify-center w-full min-h-[100dvh] bg-stone-100 dark:bg-black/90">

@@ -41,6 +41,8 @@ import OrderDetail from "@/pages/order-detail";
 import Search from "@/pages/search";
 import Wishlist from "@/pages/wishlist";
 import RateOrder from "@/pages/reviews/rate-order";
+import Replays from "@/pages/replays";
+import ReplayDetail from "@/pages/replay-detail";
 
 const queryClient = new QueryClient();
 
@@ -62,6 +64,8 @@ function Router() {
         <Route path="/orders" component={Orders} />
         <Route path="/orders/:orderId" component={OrderDetail} />
         <Route path="/orders/:orderId/rate" component={RateOrder} />
+        <Route path="/replays" component={Replays} />
+        <Route path="/replay/:replayId" component={ReplayDetail} />
         <Route path="/inbox" component={Inbox} />
         <Route path="/profile" component={Profile} />
         <Route path="/search" component={Search} />
