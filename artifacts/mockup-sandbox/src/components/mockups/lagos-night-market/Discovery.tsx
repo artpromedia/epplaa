@@ -8,20 +8,20 @@ export default function Discovery() {
   const categories = ["For You", "Beauty", "Phones", "Fashion", "Home", "Imports", "Electronics"];
 
   return (
-    <div className={`w-[390px] h-[844px] relative overflow-hidden font-sans select-none flex flex-col ${isDark ? 'bg-[#050505] text-white' : 'bg-[#fcfcf9] text-zinc-900'}`}>
+    <div className={`w-[390px] h-[844px] relative overflow-hidden font-sans select-none flex flex-col ${isDark ? 'bg-[#050505] text-white' : 'bg-[#fbeed3] text-stone-900'}`}>
       {/* Header */}
       <div className={`pt-12 pb-4 px-4 z-10 ${isDark ? 'bg-gradient-to-b from-[#000000] to-transparent' : 'bg-gradient-to-b from-white to-transparent'}`}>
         <div className="flex items-center gap-3 mb-4">
           <div className="relative flex-1">
-            <Search className={`absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 ${isDark ? 'text-white/50' : 'text-zinc-400'}`} />
+            <Search className={`absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 ${isDark ? 'text-white/50' : 'text-stone-400'}`} />
             <Input 
               placeholder="Search Lagos Night Market..." 
-              className={`pl-10 h-10 rounded-full text-sm ${isDark ? 'bg-white/5 border-white/10 focus-visible:ring-[#ff00ff] placeholder:text-white/40' : 'bg-black/5 border-black/10 focus-visible:ring-[#d900d9] placeholder:text-zinc-400 text-zinc-900'}`}
+              className={`pl-10 h-10 rounded-full text-sm ${isDark ? 'bg-white/5 border-white/10 focus-visible:ring-[#ff00ff] placeholder:text-white/40' : 'bg-stone-300/35 border-stone-400/55 focus-visible:ring-[#d900d9] placeholder:text-stone-400 text-stone-900'}`}
             />
           </div>
           <button 
             onClick={() => setTheme(isDark ? "light" : "dark")}
-            className={`h-10 w-10 rounded-full flex items-center justify-center border transition-colors ${isDark ? 'bg-white/5 border-white/10 hover:bg-white/10 text-white' : 'bg-black/5 border-black/10 hover:bg-black/10 text-zinc-900'}`}
+            className={`h-10 w-10 rounded-full flex items-center justify-center border transition-colors ${isDark ? 'bg-white/5 border-white/10 hover:bg-white/10 text-white' : 'bg-stone-300/35 border-stone-400/55 hover:bg-stone-300/55 text-stone-900'}`}
           >
             {isDark ? <Sun className="h-5 w-5" /> : <Moon className="h-5 w-5" />}
           </button>
@@ -39,7 +39,7 @@ export default function Discovery() {
                     : "bg-[#00b3b3] text-white shadow-sm"
                   : isDark
                     ? "bg-white/5 text-white/70 border border-white/10 hover:bg-white/10 hover:text-white"
-                    : "bg-white border border-black/10 text-zinc-600 hover:bg-black/5 hover:text-zinc-900"
+                    : "bg-white border border-stone-400/55 text-stone-600 hover:bg-stone-300/40 hover:text-stone-900"
               }`}
             >
               {cat}
@@ -73,7 +73,7 @@ export default function Discovery() {
           </div>
 
           {/* Product Tile 1 */}
-          <div className={`relative rounded-xl overflow-hidden aspect-[3/4] ${isDark ? 'bg-[#111]' : 'bg-zinc-100 border border-black/5'}`}>
+          <div className={`relative rounded-xl overflow-hidden aspect-[3/4] ${isDark ? 'bg-[#111]' : 'bg-[#fbeed3] border border-stone-400/35'}`}>
             <img src="/__mockup/images/lagos-product-serum.png" className="w-full h-full object-cover opacity-90" alt="Product" />
             <div className={`absolute inset-0 bg-gradient-to-t ${isDark ? 'from-black/80' : 'from-black/60'} via-transparent to-transparent`}></div>
             <div className="absolute bottom-2 left-2 right-2">
@@ -83,7 +83,7 @@ export default function Discovery() {
           </div>
 
           {/* Product Tile 2 */}
-          <div className={`relative rounded-xl overflow-hidden aspect-[3/4] ${isDark ? 'bg-[#111]' : 'bg-zinc-100 border border-black/5'}`}>
+          <div className={`relative rounded-xl overflow-hidden aspect-[3/4] ${isDark ? 'bg-[#111]' : 'bg-[#fbeed3] border border-stone-400/35'}`}>
             <img src="/__mockup/images/lagos-feed-1.png" className="w-full h-full object-cover" alt="Product" />
             <div className={`absolute inset-0 bg-gradient-to-t ${isDark ? 'from-black/80' : 'from-black/60'} via-transparent to-transparent`}></div>
             <div className="absolute bottom-2 left-2 right-2">
@@ -113,7 +113,7 @@ export default function Discovery() {
           </div>
 
           {/* Product Tile 3 */}
-          <div className={`relative rounded-xl overflow-hidden aspect-[3/4] ${isDark ? 'bg-[#111]' : 'bg-zinc-100 border border-black/5'}`}>
+          <div className={`relative rounded-xl overflow-hidden aspect-[3/4] ${isDark ? 'bg-[#111]' : 'bg-[#fbeed3] border border-stone-400/35'}`}>
             <img src="/__mockup/images/lagos-product-carousel-1.png" className="w-full h-full object-cover opacity-90" alt="Product" />
             <div className={`absolute inset-0 bg-gradient-to-t ${isDark ? 'from-black/80' : 'from-black/60'} via-transparent to-transparent`}></div>
             <div className="absolute bottom-2 left-2 right-2">
@@ -126,8 +126,8 @@ export default function Discovery() {
       </div>
 
       {/* Bottom Nav */}
-      <div className={`absolute bottom-0 left-0 right-0 h-20 backdrop-blur-xl border-t flex items-center justify-around px-2 pb-4 z-20 ${isDark ? 'bg-[#0a0a0a]/90 border-white/5' : 'bg-white/90 border-black/10'}`}>
-        <button className={`flex flex-col items-center gap-1 w-16 ${isDark ? 'text-white/50 hover:text-white' : 'text-zinc-500 hover:text-zinc-900'}`}>
+      <div className={`absolute bottom-0 left-0 right-0 h-20 backdrop-blur-xl border-t flex items-center justify-around px-2 pb-4 z-20 ${isDark ? 'bg-[#0a0a0a]/90 border-white/5' : 'bg-[#fff5d8]/92 border-stone-400/55'}`}>
+        <button className={`flex flex-col items-center gap-1 w-16 ${isDark ? 'text-white/50 hover:text-white' : 'text-stone-500 hover:text-stone-900'}`}>
           <Home className="h-6 w-6" />
           <span className="text-[10px] font-medium">Home</span>
         </button>
@@ -139,17 +139,17 @@ export default function Discovery() {
         <div className="relative -top-5">
           <button className={`h-14 w-14 rounded-full p-[2px] ${isDark ? 'bg-gradient-to-tr from-[#ff00ff] to-[#00ffff] shadow-[0_0_20px_rgba(255,0,255,0.4)]' : 'bg-gradient-to-tr from-[#d900d9] to-[#00b3b3] shadow-md'}`}>
             <div className={`h-full w-full rounded-full flex items-center justify-center ${isDark ? 'bg-black' : 'bg-white'}`}>
-              <Plus className={`h-6 w-6 ${isDark ? 'text-white' : 'text-zinc-900'}`} />
+              <Plus className={`h-6 w-6 ${isDark ? 'text-white' : 'text-stone-900'}`} />
             </div>
           </button>
         </div>
 
-        <button className={`flex flex-col items-center gap-1 w-16 relative ${isDark ? 'text-white/50 hover:text-white' : 'text-zinc-500 hover:text-zinc-900'}`}>
+        <button className={`flex flex-col items-center gap-1 w-16 relative ${isDark ? 'text-white/50 hover:text-white' : 'text-stone-500 hover:text-stone-900'}`}>
           <MessageSquare className="h-6 w-6" />
           <span className={`absolute top-0 right-3 w-2 h-2 rounded-full ${isDark ? 'bg-[#ff00ff]' : 'bg-[#d900d9]'}`}></span>
           <span className="text-[10px] font-medium">Inbox</span>
         </button>
-        <button className={`flex flex-col items-center gap-1 w-16 ${isDark ? 'text-white/50 hover:text-white' : 'text-zinc-500 hover:text-zinc-900'}`}>
+        <button className={`flex flex-col items-center gap-1 w-16 ${isDark ? 'text-white/50 hover:text-white' : 'text-stone-500 hover:text-stone-900'}`}>
           <User className="h-6 w-6" />
           <span className="text-[10px] font-medium">Profile</span>
         </button>
