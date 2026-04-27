@@ -77,7 +77,7 @@ export default function Settings() {
   function signOut() {
     toast({
       title: "Signed out",
-      description: "Account auth ships in v2 — this is a preview.",
+      description: "Account auth ships in v2. This is a preview.",
     });
   }
 

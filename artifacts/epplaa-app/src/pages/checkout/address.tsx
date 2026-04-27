@@ -311,7 +311,7 @@ export default function CheckoutAddress() {
             }`}
           >
             <Check className="w-4 h-4 shrink-0" />
-            Great pin — rider will find you easily.
+            Great pin. Rider will find you easily.
           </div>
         )}
       </div>

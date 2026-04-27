@@ -138,7 +138,7 @@ export default function SellerGoLive() {
             <input
               value={streamTitle}
               onChange={(e) => setStreamTitle(e.target.value.slice(0, 80))}
-              placeholder="Friday night drop — Glow up szn ✨"
+              placeholder="Friday night drop, Glow up szn ✨"
               className={inputClass}
               data-testid="input-stream-title"
             />

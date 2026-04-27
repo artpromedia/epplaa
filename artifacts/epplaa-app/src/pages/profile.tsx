@@ -305,7 +305,7 @@ export default function Profile() {
                                   : "bg-white text-stone-900"
                               }
                             >
-                              {c.flag} {c.name} — {c.currency.code} (
+                              {c.flag} {c.name} · {c.currency.code} (
                               {c.currency.symbol})
                             </option>
                           );
@@ -324,7 +324,7 @@ export default function Profile() {
                   }`}
                 >
                   Shopping live across {Object.keys(COUNTRIES).length} African
-                  markets — payments, fulfillment, and currency switch
+                  markets. Payments, fulfillment, and currency switch
                   automatically.
                 </p>
               </div>

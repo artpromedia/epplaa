@@ -181,7 +181,7 @@ export default function RateOrder() {
                         isDark ? "text-emerald-300" : "text-emerald-700"
                       }`}
                     >
-                      Already reviewed — submit to update
+                      Already reviewed. Submit to update.
                     </p>
                   )}
                 </div>

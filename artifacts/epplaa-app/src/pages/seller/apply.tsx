@@ -293,7 +293,7 @@ export default function SellerApply() {
     });
     toast({
       title: "Application approved",
-      description: `Welcome to Epplaa Sellers — ${TIERS[projectedTier].label} tier unlocked.`,
+      description: `Welcome to Epplaa Sellers. ${TIERS[projectedTier].label} tier unlocked.`,
     });
     navigate("/seller/studio");
   }
@@ -325,7 +325,7 @@ export default function SellerApply() {
                     {
                       v: "individual",
                       title: "Individual",
-                      desc: "Just me selling — no business registration.",
+                      desc: "Just me selling. No business registration.",
                     },
                     {
                       v: "registered",
@@ -335,7 +335,7 @@ export default function SellerApply() {
                     {
                       v: "brand",
                       title: "Established Brand",
-                      desc: "Trademarked brand — Elite track.",
+                      desc: "Trademarked brand. Elite track.",
                     },
                   ] as { v: BusinessType; title: string; desc: string }[]
                 ).map((opt) => (
@@ -409,7 +409,7 @@ export default function SellerApply() {
             </div>
             <p className={`text-sm ${subtleText}`}>
               Sellers are onboarded based on the audience they bring from other
-              platforms. Add the accounts you actively use — your combined
+              platforms. Add the accounts you actively use. Your combined
               follower count sets your starting tier.
             </p>
 
