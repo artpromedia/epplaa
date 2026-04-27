@@ -35,7 +35,9 @@ export default function SellerStudio() {
   const { toast } = useToast();
   const [, navigate] = useLocation();
   const [showUpgrade, setShowUpgrade] = useState(false);
-  const [cac, setCac] = useState(application?.cacNumber ?? "");
+  const [registryNumber, setRegistryNumber] = useState(
+    application?.registryNumber ?? "",
+  );
   const [trademark, setTrademark] = useState(application?.trademarkRef ?? "");
 
   if (status !== "approved" || !stats || !application) {
@@ -61,8 +63,8 @@ export default function SellerStudio() {
 
   function performUpgrade() {
     if (!def.upgradeTo) return;
-    if (def.upgradeTo === "pro" && !cac.trim()) {
-      toast({ title: "Add your CAC registration number" });
+    if (def.upgradeTo === "pro" && !registryNumber.trim()) {
+      toast({ title: `Add your ${country.businessRegistry.numberLabel}` });
       return;
     }
     if (def.upgradeTo === "elite" && !trademark.trim()) {
@@ -70,7 +72,7 @@ export default function SellerStudio() {
       return;
     }
     upgradeTier(def.upgradeTo, {
-      cacNumber: cac.trim() || undefined,
+      registryNumber: registryNumber.trim() || undefined,
       trademarkRef: trademark.trim() || undefined,
     });
     toast({
@@ -332,21 +334,25 @@ export default function SellerStudio() {
               within 24-48 hours. For this preview, the upgrade is instant.
             </p>
             {def.upgradeTo === "pro" && (
-              <div className="space-y-3">
+              <div className="space-y-2">
                 <label className="block text-sm font-bold">
-                  CAC registration number
+                  {country.businessRegistry.numberLabel}
                 </label>
                 <input
-                  value={cac}
-                  onChange={(e) => setCac(e.target.value)}
-                  placeholder="RC-1234567"
+                  value={registryNumber}
+                  onChange={(e) => setRegistryNumber(e.target.value)}
+                  placeholder={country.businessRegistry.numberPlaceholder}
                   className={`w-full px-3 py-2 rounded-lg border text-sm outline-none ${
                     isDark
                       ? "bg-black/40 border-white/10 text-white"
                       : "bg-white border-stone-300 text-stone-900"
                   }`}
-                  data-testid="input-upgrade-cac"
+                  data-testid="input-upgrade-registry"
                 />
+                <p className={`text-xs ${subtleText}`}>
+                  {country.businessRegistry.numberHelper} ·{" "}
+                  {country.businessRegistry.fullName}
+                </p>
               </div>
             )}
             {def.upgradeTo === "elite" && (

@@ -36,12 +36,12 @@ export const TIERS: Record<SellerTier, TierDefinition> = {
     perks: [
       "Sell up to 20 active listings",
       "Broadcast 1 hour per day",
-      "Weekly payouts to your Naira account",
+      "Weekly payouts to a bank account in your name",
       "Standard buyer-protection coverage",
     ],
     requirements: [
-      "Verified BVN or NIN",
-      "Government-issued photo ID",
+      "Verified national ID (BVN/NIN, Ghana Card, SA ID, etc.)",
+      "Government-issued photo ID upload",
       "Bank account in your name",
     ],
     upgradeTo: "pro",
@@ -70,7 +70,7 @@ export const TIERS: Record<SellerTier, TierDefinition> = {
     ],
     requirements: [
       "Active Starter status with 5+ listings",
-      "CAC business registration number",
+      "Local business registration (CAC, RGD, BRS, CIPC, RCCM, etc.)",
       "Verified business bank account",
     ],
     upgradeTo: "elite",
@@ -112,6 +112,19 @@ export const TIER_ORDER: SellerTier[] = ["starter", "pro", "elite"];
 
 export function tierIndex(tier: SellerTier): number {
   return TIER_ORDER.indexOf(tier);
+}
+
+// Follower thresholds that determine the starting tier at vetting time.
+// A creator who already has an audience skips the slow Starter ramp.
+export const SOCIAL_TIER_THRESHOLDS = {
+  pro: 5_000,
+  elite: 50_000,
+} as const;
+
+export function tierFromSocialFollowers(totalFollowers: number): SellerTier {
+  if (totalFollowers >= SOCIAL_TIER_THRESHOLDS.elite) return "elite";
+  if (totalFollowers >= SOCIAL_TIER_THRESHOLDS.pro) return "pro";
+  return "starter";
 }
 
 export interface UpgradeProgress {

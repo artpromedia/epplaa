@@ -14,6 +14,29 @@ export interface FulfillmentOption {
   etaLabel: string;
 }
 
+export interface IdentityDoc {
+  code: string;
+  label: string;
+  helper: string;
+  expectedLength: number;
+  kind: "digits" | "alphanumeric";
+}
+
+export interface BusinessRegistry {
+  shortName: string;
+  fullName: string;
+  numberLabel: string;
+  numberPlaceholder: string;
+  numberHelper: string;
+}
+
+export interface BankAccountSpec {
+  label: string;
+  placeholder: string;
+  minDigits: number;
+  maxDigits: number;
+}
+
 export interface Country {
   code: CountryCode;
   name: string;
@@ -28,6 +51,10 @@ export interface Country {
   fulfillmentOptions: FulfillmentOption[];
   primaryCity: string;
   status: "live" | "coming-soon";
+  identityDocs: IdentityDoc[];
+  businessRegistry: BusinessRegistry;
+  bankAccount: BankAccountSpec;
+  payoutAuthority: string;
 }
 
 export const COUNTRIES: Record<CountryCode, Country> = {
@@ -43,6 +70,24 @@ export const COUNTRIES: Record<CountryCode, Country> = {
     },
     primaryCity: "Lagos",
     status: "live",
+    payoutAuthority: "Central Bank of Nigeria",
+    identityDocs: [
+      { code: "BVN", label: "BVN", helper: "Bank Verification Number", expectedLength: 11, kind: "digits" },
+      { code: "NIN", label: "NIN", helper: "National Identification Number", expectedLength: 11, kind: "digits" },
+    ],
+    businessRegistry: {
+      shortName: "CAC",
+      fullName: "Corporate Affairs Commission",
+      numberLabel: "CAC registration number",
+      numberPlaceholder: "RC-1234567",
+      numberHelper: "From your CAC certificate (RC- prefix).",
+    },
+    bankAccount: {
+      label: "NUBAN account number",
+      placeholder: "10-digit NUBAN",
+      minDigits: 10,
+      maxDigits: 10,
+    },
     paymentMethods: [
       { id: "paystack-card", label: "Card via Paystack", iconKey: "credit-card" },
       { id: "flutterwave-bank", label: "Bank Transfer", iconKey: "landmark" },
@@ -85,6 +130,24 @@ export const COUNTRIES: Record<CountryCode, Country> = {
     },
     primaryCity: "Accra",
     status: "live",
+    payoutAuthority: "Bank of Ghana",
+    identityDocs: [
+      { code: "GHANACARD", label: "Ghana Card", helper: "Format: GHA-XXXXXXXXX-X", expectedLength: 13, kind: "alphanumeric" },
+      { code: "VOTER", label: "Voter's ID", helper: "10-digit Voter's ID number", expectedLength: 10, kind: "digits" },
+    ],
+    businessRegistry: {
+      shortName: "RGD",
+      fullName: "Registrar General's Department",
+      numberLabel: "RGD company number",
+      numberPlaceholder: "CS123456789",
+      numberHelper: "From your RGD Certificate to Commence Business.",
+    },
+    bankAccount: {
+      label: "Bank account number",
+      placeholder: "10-16 digit account number",
+      minDigits: 10,
+      maxDigits: 16,
+    },
     paymentMethods: [
       { id: "mtn-momo", label: "MTN Mobile Money", iconKey: "smartphone" },
       { id: "vodafone-cash", label: "Vodafone Cash", iconKey: "smartphone" },
@@ -127,6 +190,24 @@ export const COUNTRIES: Record<CountryCode, Country> = {
     },
     primaryCity: "Nairobi",
     status: "live",
+    payoutAuthority: "Central Bank of Kenya",
+    identityDocs: [
+      { code: "NATIONAL_ID", label: "National ID", helper: "8-digit Kenyan National ID", expectedLength: 8, kind: "digits" },
+      { code: "HUDUMA", label: "Huduma Namba", helper: "9-digit Huduma number", expectedLength: 9, kind: "digits" },
+    ],
+    businessRegistry: {
+      shortName: "BRS",
+      fullName: "Business Registration Service",
+      numberLabel: "Business Registration Number",
+      numberPlaceholder: "BN-AB1234567",
+      numberHelper: "From your BRS / eCitizen business certificate.",
+    },
+    bankAccount: {
+      label: "Bank account number",
+      placeholder: "10-14 digit account",
+      minDigits: 10,
+      maxDigits: 14,
+    },
     paymentMethods: [
       { id: "mpesa", label: "M-Pesa", iconKey: "smartphone" },
       { id: "airtel-money-ke", label: "Airtel Money", iconKey: "smartphone" },
@@ -169,6 +250,24 @@ export const COUNTRIES: Record<CountryCode, Country> = {
     },
     primaryCity: "Johannesburg",
     status: "live",
+    payoutAuthority: "South African Reserve Bank",
+    identityDocs: [
+      { code: "SA_ID", label: "SA ID", helper: "13-digit South African ID", expectedLength: 13, kind: "digits" },
+      { code: "PASSPORT_ZA", label: "Passport", helper: "9-character South African passport number", expectedLength: 9, kind: "alphanumeric" },
+    ],
+    businessRegistry: {
+      shortName: "CIPC",
+      fullName: "Companies and Intellectual Property Commission",
+      numberLabel: "CIPC registration number",
+      numberPlaceholder: "2024/123456/07",
+      numberHelper: "Format: YYYY/NNNNNN/NN from your CIPC certificate.",
+    },
+    bankAccount: {
+      label: "Bank account number",
+      placeholder: "9-11 digit account",
+      minDigits: 9,
+      maxDigits: 11,
+    },
     paymentMethods: [
       { id: "card-za", label: "Card", iconKey: "credit-card" },
       { id: "ozow-eft", label: "Instant EFT (Ozow)", iconKey: "landmark" },
@@ -211,6 +310,24 @@ export const COUNTRIES: Record<CountryCode, Country> = {
     },
     primaryCity: "Abidjan",
     status: "live",
+    payoutAuthority: "BCEAO (Banque Centrale)",
+    identityDocs: [
+      { code: "CNI", label: "CNI", helper: "Carte Nationale d'Identité (14 caractères)", expectedLength: 14, kind: "alphanumeric" },
+      { code: "PASSPORT_CI", label: "Passeport", helper: "Numéro de passeport (8 caractères)", expectedLength: 8, kind: "alphanumeric" },
+    ],
+    businessRegistry: {
+      shortName: "RCCM",
+      fullName: "Registre du Commerce et du Crédit Mobilier (CEPICI)",
+      numberLabel: "Numéro RCCM",
+      numberPlaceholder: "CI-ABJ-2024-A-12345",
+      numberHelper: "Délivré par le CEPICI / Tribunal de commerce.",
+    },
+    bankAccount: {
+      label: "Numéro de compte (RIB)",
+      placeholder: "Compte 24 chiffres",
+      minDigits: 16,
+      maxDigits: 28,
+    },
     paymentMethods: [
       { id: "orange-money", label: "Orange Money", iconKey: "smartphone" },
       { id: "mtn-momo-ci", label: "MTN Mobile Money", iconKey: "smartphone" },

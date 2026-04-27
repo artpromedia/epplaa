@@ -1,11 +1,24 @@
 import React, { createContext, useContext, useMemo, useState } from "react";
 import { useLocalStorage } from "./use-local-storage";
 import { CountryCode } from "./countries";
-import { SellerTier, TIERS } from "./seller-tiers";
+import { SellerTier, TIERS, tierFromSocialFollowers } from "./seller-tiers";
 
 export type SellerStatus = "none" | "pending" | "approved" | "rejected";
 export type AppMode = "buyer" | "seller";
 export type BusinessType = "individual" | "registered" | "brand";
+
+export type SocialPlatform =
+  | "instagram"
+  | "tiktok"
+  | "twitter"
+  | "facebook"
+  | "youtube";
+
+export interface SocialAccount {
+  platform: SocialPlatform;
+  handle: string;
+  followers: number;
+}
 
 export interface SellerApplication {
   businessType: BusinessType;
@@ -15,12 +28,15 @@ export interface SellerApplication {
   storeBio: string;
   primaryCategory: string;
   countryCode: CountryCode;
-  identification: { type: "BVN" | "NIN"; last4: string };
+  identification: { typeCode: string; typeLabel: string; last4: string };
   govIdLabel: string;
   payoutBank: string;
   payoutAccountLast4: string;
-  cacNumber?: string;
+  registryNumber?: string;
+  registryShortName?: string;
   trademarkRef?: string;
+  socialAccounts: SocialAccount[];
+  totalFollowers: number;
   submittedAt: number;
 }
 
@@ -63,7 +79,7 @@ interface SellerContextValue {
   ) => void;
   upgradeTier: (
     target: SellerTier,
-    extra: { cacNumber?: string; trademarkRef?: string },
+    extra: { registryNumber?: string; trademarkRef?: string },
   ) => void;
   addListing: (
     l: Omit<Listing, "id" | "createdAt" | "status">,
@@ -104,9 +120,11 @@ export function SellerProvider({ children }: { children: React.ReactNode }) {
   function submitApplication(app: Omit<SellerApplication, "submittedAt">) {
     const now = Date.now();
     setApplication({ ...app, submittedAt: now });
-    // Demo: auto-approve to Starter immediately. Production would set "pending".
+    // Demo: auto-approve immediately. Production would set "pending" for review.
     setStatus("approved");
-    setTier("starter");
+    // Starting tier is driven by the seller's existing social audience.
+    // Creators with an established following skip the slow Starter ramp.
+    setTier(tierFromSocialFollowers(app.totalFollowers));
     setStats({
       lifetimeGMVMinor: 0,
       thisMonthGMVMinor: 0,
@@ -119,13 +137,13 @@ export function SellerProvider({ children }: { children: React.ReactNode }) {
 
   function upgradeTier(
     target: SellerTier,
-    extra: { cacNumber?: string; trademarkRef?: string },
+    extra: { registryNumber?: string; trademarkRef?: string },
   ) {
     setTier(target);
     if (application) {
       setApplication({
         ...application,
-        cacNumber: extra.cacNumber ?? application.cacNumber,
+        registryNumber: extra.registryNumber ?? application.registryNumber,
         trademarkRef: extra.trademarkRef ?? application.trademarkRef,
         businessType:
           target === "pro"
