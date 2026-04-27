@@ -1,6 +1,7 @@
-// Synthetic referrals data. The hub displays an invite code, milestones, and
-// recent payouts that all live in localStorage so users can simulate inviting
-// friends and watch their wallet balance respond.
+// Static referral reward constants and seed activity used by the referrals
+// hub. The signed-in user's invite code comes from the API
+// (`useGetMyReferrals`); these constants are only used for display copy and
+// the demo activity feed.
 
 export interface ReferralActivity {
   id: string;
