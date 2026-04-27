@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Link, useLocation } from "wouter";
-import { useClerk } from "@clerk/clerk-react";
+import { useClerk, useSignIn } from "@clerk/clerk-react";
 import { startOtp, verifyOtp } from "@workspace/api-client-react";
 import { useToast } from "@/hooks/use-toast";
 
@@ -8,6 +8,7 @@ type Step = "phone" | "code";
 
 export default function PhoneSignInPage() {
   const { setActive } = useClerk();
+  const { signIn, isLoaded: signInReady } = useSignIn();
   const [, navigate] = useLocation();
   const { toast } = useToast();
 
@@ -48,8 +49,22 @@ export default function PhoneSignInPage() {
     try {
       const r = await verifyOtp({ phone, code });
       if (r.ok && r.ticket) {
-        await setActive({ session: r.ticket });
-        navigate("/");
+        if (!signInReady || !signIn) {
+          toast({ title: "Sign-in not ready", description: "Reload the page and try again." });
+          return;
+        }
+        // Exchange the Clerk sign-in token (ticket) for a session, then
+        // make that session active. `setActive` cannot accept the raw token.
+        const attempt = await signIn.create({ strategy: "ticket", ticket: r.ticket });
+        if (attempt.status === "complete" && attempt.createdSessionId) {
+          await setActive({ session: attempt.createdSessionId });
+          navigate("/");
+        } else {
+          toast({
+            title: "Sign-in incomplete",
+            description: `Status: ${attempt.status}. Please try again.`,
+          });
+        }
       } else if (r.ok) {
         toast({
           title: "Verified",

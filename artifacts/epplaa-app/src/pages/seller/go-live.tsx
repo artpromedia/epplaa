@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Link } from "wouter";
+import { sellerGoLiveBroadcast } from "@workspace/api-client-react";
 import {
   Radio,
   Square,
@@ -64,8 +65,9 @@ export default function SellerGoLive() {
     );
   }
 
-  function startBroadcast() {
-    if (!streamTitle.trim()) {
+  async function startBroadcast() {
+    const trimmed = streamTitle.trim();
+    if (!trimmed) {
       toast({ title: "Give your stream a title" });
       return;
     }
@@ -74,7 +76,7 @@ export default function SellerGoLive() {
       return;
     }
     recordBroadcast({
-      title: streamTitle.trim(),
+      title: trimmed,
       category,
       listingIds: selectedListings,
     });
@@ -82,8 +84,17 @@ export default function SellerGoLive() {
     setIsBroadcasting(true);
     toast({
       title: "You're live!",
-      description: `Streaming "${streamTitle.trim()}" to ${viewers} viewers.`,
+      description: `Streaming "${trimmed}" to ${viewers} viewers.`,
     });
+    // Fire follower fan-out via backend. Best-effort — UI is already live.
+    const handle = application?.storeHandle;
+    if (handle) {
+      try {
+        await sellerGoLiveBroadcast({ storeHandle: handle, title: trimmed });
+      } catch {
+        // Swallow: notifications are non-critical for the live experience.
+      }
+    }
   }
 
   function endBroadcast() {

@@ -214,6 +214,17 @@ export const GoLiveResponse = zod.object({
   fanout: zod.boolean(),
 });
 
+export const SellerGoLiveBroadcastBody = zod.object({
+  storeHandle: zod.string(),
+  title: zod.string(),
+  streamId: zod.string().optional(),
+});
+
+export const SellerGoLiveBroadcastResponse = zod.object({
+  ok: zod.boolean(),
+  fanout: zod.boolean(),
+});
+
 export const ListReplaysResponseItem = zod.object({
   id: zod.string(),
   hostName: zod.string(),

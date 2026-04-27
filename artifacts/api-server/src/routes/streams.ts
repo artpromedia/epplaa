@@ -96,4 +96,40 @@ router.post("/streams/:streamId/go-live", async (req, res) => {
   res.json({ ok: true, fanout });
 });
 
+/**
+ * Convenience endpoint used by the seller "Go live" UI which doesn't yet
+ * have a stream row. We fan out a "seller is live" notification to every
+ * follower of the caller's storeHandle. No isLive flag is flipped here —
+ * use POST /streams/:id/go-live for that.
+ *
+ * Body: { storeHandle: string, title: string, streamId?: string }
+ */
+router.post("/seller/go-live", async (req, res) => {
+  const userId = requireUserId(req, res);
+  if (!userId) return;
+  const body = req.body as { storeHandle?: string; title?: string; streamId?: string };
+  const storeHandle = String(body.storeHandle ?? "").trim();
+  const title = String(body.title ?? "").trim();
+  if (!storeHandle || !title) {
+    res.status(400).json({ error: "missing_fields" });
+    return;
+  }
+  const followers = await db
+    .select({ userId: schema.followsTable.userId })
+    .from(schema.followsTable)
+    .where(eq(schema.followsTable.sellerName, storeHandle));
+  for (const f of followers) {
+    await enqueueNotification({
+      userId: f.userId,
+      eventType: "seller_went_live",
+      payload: {
+        title: `${storeHandle} is live`,
+        body: title,
+        url: body.streamId ? `/live/${body.streamId}` : `/u/${storeHandle}`,
+      },
+    }).catch((err) => logger.error({ err: (err as Error).message }, "notify_seller_live_failed"));
+  }
+  res.json({ ok: true, fanout: followers.length });
+});
+
 export default router;

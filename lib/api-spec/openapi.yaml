@@ -182,6 +182,25 @@ paths:
         "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/GoLiveResponse" } } } }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
+  /seller/go-live:
+    post:
+      operationId: sellerGoLiveBroadcast
+      tags: [streams]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [storeHandle, title]
+              properties:
+                storeHandle: { type: string }
+                title: { type: string }
+                streamId: { type: string }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/GoLiveResponse" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "400": { $ref: "#/components/responses/BadRequest" }
 
   /replays:
     get:

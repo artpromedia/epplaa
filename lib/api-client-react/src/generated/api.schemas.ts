@@ -669,6 +669,12 @@ export type ListProductsParams = {
   category?: string;
 };
 
+export type SellerGoLiveBroadcastBody = {
+  storeHandle: string;
+  title: string;
+  streamId?: string;
+};
+
 export type ListFulfillmentLocationsParams = {
   countryCode: string;
   optionId?: string;

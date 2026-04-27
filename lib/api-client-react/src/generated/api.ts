@@ -72,6 +72,7 @@ import type {
   ReturnRecord,
   Review,
   SafetyReport,
+  SellerGoLiveBroadcastBody,
   SellerListing,
   SellerOrder,
   SellerProfile,
@@ -1259,6 +1260,89 @@ export const useGoLive = <
   TContext
 > => {
   return useMutation(getGoLiveMutationOptions(options));
+};
+
+export const getSellerGoLiveBroadcastUrl = () => {
+  return `/api/seller/go-live`;
+};
+
+export const sellerGoLiveBroadcast = async (
+  sellerGoLiveBroadcastBody: SellerGoLiveBroadcastBody,
+  options?: RequestInit,
+): Promise<GoLiveResponse> => {
+  return customFetch<GoLiveResponse>(getSellerGoLiveBroadcastUrl(), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(sellerGoLiveBroadcastBody),
+  });
+};
+
+export const getSellerGoLiveBroadcastMutationOptions = <
+  TError = ErrorType<BadRequestResponse | UnauthorizedResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof sellerGoLiveBroadcast>>,
+    TError,
+    { data: BodyType<SellerGoLiveBroadcastBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof sellerGoLiveBroadcast>>,
+  TError,
+  { data: BodyType<SellerGoLiveBroadcastBody> },
+  TContext
+> => {
+  const mutationKey = ["sellerGoLiveBroadcast"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof sellerGoLiveBroadcast>>,
+    { data: BodyType<SellerGoLiveBroadcastBody> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return sellerGoLiveBroadcast(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type SellerGoLiveBroadcastMutationResult = NonNullable<
+  Awaited<ReturnType<typeof sellerGoLiveBroadcast>>
+>;
+export type SellerGoLiveBroadcastMutationBody =
+  BodyType<SellerGoLiveBroadcastBody>;
+export type SellerGoLiveBroadcastMutationError = ErrorType<
+  BadRequestResponse | UnauthorizedResponse
+>;
+
+export const useSellerGoLiveBroadcast = <
+  TError = ErrorType<BadRequestResponse | UnauthorizedResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof sellerGoLiveBroadcast>>,
+    TError,
+    { data: BodyType<SellerGoLiveBroadcastBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof sellerGoLiveBroadcast>>,
+  TError,
+  { data: BodyType<SellerGoLiveBroadcastBody> },
+  TContext
+> => {
+  return useMutation(getSellerGoLiveBroadcastMutationOptions(options));
 };
 
 export const getListReplaysUrl = () => {

@@ -310,6 +310,28 @@ export async function reverifyIntent(intentId: string): Promise<typeof schema.pa
       .set({ status: "failed" })
       .where(eq(schema.paymentIntentsTable.id, intent.id))
       .returning();
+    // Notify the buyer that their payment failed so they can retry.
+    try {
+      const [order] = await db
+        .select({ id: schema.ordersTable.id, userId: schema.ordersTable.userId })
+        .from(schema.ordersTable)
+        .where(eq(schema.ordersTable.paymentIntentId, intent.id))
+        .limit(1);
+      if (order) {
+        await enqueueNotification({
+          userId: order.userId,
+          eventType: "order_payment_failed",
+          payload: {
+            title: "Payment failed",
+            body: "We couldn't process your payment. Tap to retry.",
+            url: `/orders/${order.id}`,
+            orderId: order.id,
+          },
+        });
+      }
+    } catch (err) {
+      logger.error({ err: (err as Error).message, intentId: intent.id }, "notify_payment_failed_error");
+    }
     return row;
   }
   return intent;
