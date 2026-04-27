@@ -633,15 +633,19 @@ async function loadSellerForUser(userId: string) {
  * Returns the count of payouts processed.
  */
 export async function processDuePayouts(): Promise<{ processed: number; failed: number }> {
+  // Atomic claim: flip pending→processing in a single UPDATE...RETURNING
+  // so concurrent workers cannot double-pay the same payout. The gateway
+  // call below operates only on rows we successfully claimed.
   const due = await db
-    .select()
-    .from(schema.payoutsTable)
+    .update(schema.payoutsTable)
+    .set({ status: "processing" })
     .where(
       and(
         eq(schema.payoutsTable.status, "pending"),
         sql`${schema.payoutsTable.holdUntil} <= now()`,
       ),
-    );
+    )
+    .returning();
   let processed = 0;
   let failed = 0;
   for (const payout of due) {
@@ -696,11 +700,27 @@ export async function processDuePayouts(): Promise<{ processed: number; failed: 
           paidAt: result.status === "processed" ? new Date() : null,
         })
         .where(eq(schema.payoutsTable.id, payout.id));
+      // Mark the order settled only when ALL its payout legs are
+      // resolved (paid or cancelled). Setting settledAt on the first
+      // successful leg would mislead finance dashboards into thinking
+      // the order is fully disbursed while later legs are still in
+      // flight or stuck.
       if (payout.orderId) {
-        await db
-          .update(schema.ordersTable)
-          .set({ settledAt: new Date() })
-          .where(eq(schema.ordersTable.id, payout.orderId));
+        const remaining = await db
+          .select({ id: schema.payoutsTable.id })
+          .from(schema.payoutsTable)
+          .where(
+            and(
+              eq(schema.payoutsTable.orderId, payout.orderId),
+              sql`${schema.payoutsTable.status} NOT IN ('paid', 'cancelled')`,
+            ),
+          );
+        if (remaining.length === 0) {
+          await db
+            .update(schema.ordersTable)
+            .set({ settledAt: new Date() })
+            .where(eq(schema.ordersTable.id, payout.orderId));
+        }
       }
       // Wallet withdrawals are user-initiated, so the matching wallet_txn
       // (kind='withdrawal', payout_id=this) must move out of 'pending' once
