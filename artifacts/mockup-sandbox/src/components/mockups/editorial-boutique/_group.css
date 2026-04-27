@@ -1,0 +1,36 @@
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Playfair+Display:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap');
+
+.editorial-theme {
+  --font-sans: 'DM Sans', 'Inter', system-ui, sans-serif;
+  --font-serif: 'Playfair Display', Georgia, serif;
+  --background: 40 20% 97%;
+  --foreground: 221 47% 20%;
+  --card: 40 20% 99%;
+  --card-foreground: 221 47% 20%;
+  --popover: 40 20% 99%;
+  --popover-foreground: 221 47% 20%;
+  --primary: 221 47% 20%;
+  --primary-foreground: 40 20% 97%;
+  --secondary: 40 10% 90%;
+  --secondary-foreground: 221 47% 20%;
+  --muted: 40 10% 90%;
+  --muted-foreground: 221 20% 45%;
+  --accent: 40 15% 92%;
+  --accent-foreground: 221 47% 20%;
+  --border: 221 20% 85%;
+  --input: 221 20% 85%;
+  --ring: 221 47% 20%;
+  --button-outline: rgba(27, 42, 74, 0.15);
+  --badge-outline: rgba(27, 42, 74, 0.10);
+  --elevate-1: rgba(27, 42, 74, 0.04);
+  --elevate-2: rgba(27, 42, 74, 0.08);
+  --radius: 0rem;
+
+  background-color: hsl(var(--background));
+  color: hsl(var(--foreground));
+  font-family: 'DM Sans', 'Inter', system-ui, sans-serif;
+}
+
+.editorial-theme .editorial-serif {
+  font-family: 'Playfair Display', Georgia, serif;
+}

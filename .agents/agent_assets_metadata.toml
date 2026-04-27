@@ -1,0 +1,134 @@
+uploads = []
+outputs = []
+
+[[generated]]
+id = "bsf1tLhEUXcRPqPvGzCVn"
+uri = "file://artifacts/mockup-sandbox/public/images/lagos-host-stream.png"
+type = "image"
+title = "Nigerian host streaming neon lights"
+
+[[generated]]
+id = "7Bw4_5gSu_dNmcpgBFZdl"
+uri = "file://artifacts/mockup-sandbox/public/images/lagos-product-serum.png"
+type = "image"
+title = "Neon lit skincare serum bottle"
+
+[[generated]]
+id = "a5LpLpAPLB2HNXesDPz4g"
+uri = "file://artifacts/mockup-sandbox/public/images/lagos-feed-1.png"
+type = "image"
+title = "Neon lit sneaker market stall"
+
+[[generated]]
+id = "DSpLgdDNB-rHbyvvob7Xl"
+uri = "file://artifacts/mockup-sandbox/public/images/lagos-feed-2.png"
+type = "image"
+title = "Neon lit wireless earbuds"
+
+[[generated]]
+id = "MZdbn3zYp5o0revlwBHz-"
+uri = "file://artifacts/mockup-sandbox/public/images/lagos-avatar-1.png"
+type = "image"
+title = "Nigerian male portrait neon lighting"
+
+[[generated]]
+id = "J6hhDh2kwDarNcslgJSID"
+uri = "file://artifacts/mockup-sandbox/public/images/lagos-avatar-2.png"
+type = "image"
+title = "Nigerian female portrait neon lighting"
+
+[[generated]]
+id = "2t9AcutZHVb-utRlah6-R"
+uri = "file://artifacts/mockup-sandbox/public/images/lagos-product-carousel-1.png"
+type = "image"
+title = "Neon lit fashion on mannequin"
+
+[[generated]]
+id = "IyygaM5qCi7LpjCuYpecn"
+uri = "file://artifacts/mockup-sandbox/public/images/editorial-host-live.png"
+type = "image"
+title = "Sophisticated Nigerian host skincare stream"
+
+[[generated]]
+id = "byjNqrijop_riTq7PkgXa"
+uri = "file://artifacts/mockup-sandbox/public/images/editorial-product-skincare.png"
+type = "image"
+title = "High-end skincare product bottle"
+
+[[generated]]
+id = "jkGYIEfjbL08MhcWTcHYg"
+uri = "file://artifacts/mockup-sandbox/public/images/editorial-feed-fashion.png"
+type = "image"
+title = "Editorial fashion Ankara two-piece"
+
+[[generated]]
+id = "CbxIhlDf4kAMqpPTBk_Q3"
+uri = "file://artifacts/mockup-sandbox/public/images/editorial-feed-tech.png"
+type = "image"
+title = "Minimalist wireless earbuds product"
+
+[[generated]]
+id = "WTRYxiBjBJjyTgFsP7wXV"
+uri = "file://artifacts/mockup-sandbox/public/images/editorial-feed-home.png"
+type = "image"
+title = "Artisan ceramic home decor"
+
+[[generated]]
+id = "vvtjOxMCXZWxeYdyP0niA"
+uri = "file://artifacts/mockup-sandbox/public/images/editorial-avatar-1.png"
+type = "image"
+title = "Elegant Nigerian seller portrait"
+
+[[generated]]
+id = "M30-mz1HShQJe03nw3sWz"
+uri = "file://artifacts/mockup-sandbox/public/images/editorial-avatar-2.png"
+type = "image"
+title = "Sophisticated Nigerian seller portrait"
+
+[[generated]]
+id = "aequ4X-XNpZ9Xe97C9Vcj"
+uri = "file://artifacts/mockup-sandbox/public/images/naija-pop-host.png"
+type = "image"
+title = "Nigerian host live streaming"
+
+[[generated]]
+id = "42SjXYPgUNrZnPfLRNuZe"
+uri = "file://artifacts/mockup-sandbox/public/images/naija-pop-product-serum.png"
+type = "image"
+title = "Korean glass skin serum"
+
+[[generated]]
+id = "TCo9UvqMFbpJt3fg5T0Wu"
+uri = "file://artifacts/mockup-sandbox/public/images/naija-pop-product-fashion.png"
+type = "image"
+title = "Ankara two piece fashion"
+
+[[generated]]
+id = "YXFkg8xapA1HPGLhQREm7"
+uri = "file://artifacts/mockup-sandbox/public/images/naija-pop-product-earbuds.png"
+type = "image"
+title = "Wireless earbuds"
+
+[[generated]]
+id = "xvWmMuV-crw6b8OjQg5wv"
+uri = "file://artifacts/mockup-sandbox/public/images/naija-pop-avatar.png"
+type = "image"
+title = "Nigerian seller avatar"
+
+[[generated]]
+id = "HGvacPqPdqtWqEdMuGR4P"
+uri = "file://artifacts/mockup-sandbox/public/images/naija-pop-feed-1.png"
+type = "image"
+title = "Man showing phone case"
+
+[[generated]]
+id = "5GcRtRGA1opiy_PsOemOH"
+uri = "file://artifacts/mockup-sandbox/public/images/naija-pop-feed-2.png"
+type = "image"
+title = "Woman showing makeup"
+
+[[generated]]
+id = "Wvz60hLGl5HulvTGBnpBu"
+uri = "file://artifacts/mockup-sandbox/public/images/naija-pop-feed-3.png"
+type = "image"
+title = "Sneakers"
