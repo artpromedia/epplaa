@@ -85,21 +85,23 @@ export default function SellerListings() {
       return;
     }
     const inv = Math.max(0, Number(inventory) || 0);
-    const next = addListing({
-      title: title.trim(),
-      priceMinor: Math.round(priceNum * country.currency.minorPerMajor),
-      countryCode: country.code,
-      category,
-      inventory: inv,
-    });
-    toast({
-      title: next.status === "draft" ? "Saved as draft" : "Listing live",
-      description:
-        next.status === "draft"
-          ? `You're at your ${def.label} tier listing cap. Upgrade for more.`
-          : "It's now visible in your storefront.",
-    });
-    reset();
+    void (async () => {
+      const next = await addListing({
+        title: title.trim(),
+        priceMinor: Math.round(priceNum * country.currency.minorPerMajor),
+        countryCode: country.code,
+        category,
+        inventory: inv,
+      });
+      toast({
+        title: next.status === "draft" ? "Saved as draft" : "Listing live",
+        description:
+          next.status === "draft"
+            ? `You're at your ${def.label} tier listing cap. Upgrade for more.`
+            : "It's now visible in your storefront.",
+      });
+      reset();
+    })();
   }
 
   return (

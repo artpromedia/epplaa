@@ -2,7 +2,7 @@ import { useState } from "react";
 import { MapPin, Plus, Trash2, Pencil, Star } from "lucide-react";
 import { useTheme } from "@/lib/theme-context";
 import { useCountry } from "@/lib/country-context";
-import { useLocalStorage } from "@/lib/use-local-storage";
+import { useMeArray } from "@/lib/use-me-arrays";
 import { PageHeader } from "@/components/page-header";
 import { useToast } from "@/hooks/use-toast";
 
@@ -30,10 +30,7 @@ export default function Addresses() {
   const isDark = resolvedTheme === "dark";
   const { country } = useCountry();
   const { toast } = useToast();
-  const [addresses, setAddresses] = useLocalStorage<Address[]>(
-    "epplaa-addresses",
-    [],
-  );
+  const [addresses, setAddresses] = useMeArray<Address>("addresses");
 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState({ ...EMPTY, city: country.primaryCity });

@@ -12,56 +12,20 @@ import {
 } from "lucide-react";
 import { useTheme } from "@/lib/theme-context";
 import { useCountry } from "@/lib/country-context";
-import { useLocalStorage } from "@/lib/use-local-storage";
-import {
-  NotificationPrefs,
-  DEFAULT_NOTIFICATIONS,
-} from "@/lib/notification-prefs";
+import { useNotificationPrefs } from "@/lib/notification-prefs";
+import { useClerk } from "@clerk/clerk-react";
 import { PageHeader } from "@/components/page-header";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/use-toast";
-
-const EPPLAA_KEYS = [
-  "epplaa-payment-methods",
-  "epplaa-addresses",
-  "epplaa-notifications",
-  "epplaa-country",
-  "epplaa-theme",
-  "epplaa-seller-status",
-  "epplaa-seller-tier",
-  "epplaa-app-mode",
-  "epplaa-seller-application",
-  "epplaa-seller-stats",
-  "epplaa-seller-listings",
-  "epplaa-cart",
-  "epplaa-orders",
-  "epplaa-checkout-draft",
-  "epplaa-wishlist",
-  "epplaa-follows",
-  "epplaa-reviews",
-  "epplaa-recently-viewed",
-  "epplaa-recent-searches",
-  "epplaa-payouts",
-  "epplaa-seller-orders",
-  "epplaa-seller-streams",
-  "epplaa-returns",
-  "epplaa-wallet-txns",
-  "epplaa-safety-reports",
-  "epplaa-safety-blocked",
-  "epplaa-onboarding",
-  "epplaa-referral-code",
-];
 
 export default function Settings() {
   const { resolvedTheme, theme } = useTheme();
   const isDark = resolvedTheme === "dark";
   const { country } = useCountry();
   const { toast } = useToast();
-  const [prefs, setPrefs] = useLocalStorage<NotificationPrefs>(
-    "epplaa-notifications",
-    DEFAULT_NOTIFICATIONS,
-  );
+  const [prefs, setPrefs] = useNotificationPrefs();
+  const { signOut } = useClerk();
   const [confirmingClear, setConfirmingClear] = useState(false);
 
   const cardClass = isDark
@@ -80,19 +44,24 @@ export default function Settings() {
         : "Light";
 
   function clearLocalData() {
-    EPPLAA_KEYS.forEach((k) => window.localStorage.removeItem(k));
+    try {
+      window.localStorage.removeItem("epplaa-theme");
+    } catch {
+      /* ignore */
+    }
     toast({
-      title: "Local data cleared",
+      title: "Local cache cleared",
       description: "Reloading to reset state...",
     });
     setTimeout(() => window.location.reload(), 600);
   }
 
-  function signOut() {
-    toast({
-      title: "Signed out",
-      description: "Account auth ships in v2. This is a preview.",
-    });
+  async function handleSignOut() {
+    try {
+      await signOut({ redirectUrl: "/sign-in" });
+    } catch {
+      toast({ title: "Sign out failed", description: "Try again." });
+    }
   }
 
   return (
@@ -252,7 +221,7 @@ export default function Settings() {
               </div>
             </button>
             <button
-              onClick={signOut}
+              onClick={handleSignOut}
               className={`w-full flex items-center gap-3 p-4 text-left ${
                 isDark ? "hover:bg-white/5" : "hover:bg-stone-50"
               }`}

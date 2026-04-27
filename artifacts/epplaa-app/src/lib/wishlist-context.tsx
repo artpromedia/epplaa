@@ -1,5 +1,11 @@
 import { createContext, useCallback, useContext, useMemo, ReactNode } from "react";
-import { useLocalStorage } from "./use-local-storage";
+import {
+  useListWishlist,
+  useAddToWishlist,
+  useRemoveFromWishlist,
+  useClearWishlist,
+} from "@workspace/api-client-react";
+import { useQueryClient } from "@tanstack/react-query";
 
 interface WishlistContextValue {
   productIds: string[];
@@ -14,10 +20,17 @@ interface WishlistContextValue {
 const WishlistContext = createContext<WishlistContextValue | null>(null);
 
 export function WishlistProvider({ children }: { children: ReactNode }) {
-  const [productIds, setProductIds] = useLocalStorage<string[]>(
-    "epplaa-wishlist",
-    [],
+  const query = useListWishlist();
+  const qc = useQueryClient();
+  const invalidate = useCallback(
+    () => qc.invalidateQueries({ queryKey: ["/api/wishlist"] }),
+    [qc],
   );
+  const addMut = useAddToWishlist({ mutation: { onSuccess: invalidate } });
+  const removeMut = useRemoveFromWishlist({ mutation: { onSuccess: invalidate } });
+  const clearMut = useClearWishlist({ mutation: { onSuccess: invalidate } });
+
+  const productIds = useMemo<string[]>(() => query.data ?? [], [query.data]);
 
   const isWishlisted = useCallback(
     (productId: string) => productIds.includes(productId),
@@ -25,36 +38,30 @@ export function WishlistProvider({ children }: { children: ReactNode }) {
   );
 
   const add = useCallback(
-    (productId: string) =>
-      setProductIds((prev) =>
-        prev.includes(productId) ? prev : [productId, ...prev],
-      ),
-    [setProductIds],
+    (productId: string) => {
+      if (!productIds.includes(productId)) addMut.mutate({ productId });
+    },
+    [productIds, addMut],
   );
 
   const remove = useCallback(
-    (productId: string) =>
-      setProductIds((prev) => prev.filter((id) => id !== productId)),
-    [setProductIds],
+    (productId: string) => removeMut.mutate({ productId }),
+    [removeMut],
   );
 
   const toggle = useCallback(
     (productId: string) => {
-      let nowSaved = false;
-      setProductIds((prev) => {
-        if (prev.includes(productId)) {
-          nowSaved = false;
-          return prev.filter((id) => id !== productId);
-        }
-        nowSaved = true;
-        return [productId, ...prev];
-      });
-      return nowSaved;
+      if (productIds.includes(productId)) {
+        removeMut.mutate({ productId });
+        return false;
+      }
+      addMut.mutate({ productId });
+      return true;
     },
-    [setProductIds],
+    [productIds, addMut, removeMut],
   );
 
-  const clear = useCallback(() => setProductIds([]), [setProductIds]);
+  const clear = useCallback(() => clearMut.mutate(), [clearMut]);
 
   const value = useMemo<WishlistContextValue>(
     () => ({
@@ -69,9 +76,7 @@ export function WishlistProvider({ children }: { children: ReactNode }) {
     [productIds, isWishlisted, add, remove, toggle, clear],
   );
 
-  return (
-    <WishlistContext.Provider value={value}>{children}</WishlistContext.Provider>
-  );
+  return <WishlistContext.Provider value={value}>{children}</WishlistContext.Provider>;
 }
 
 export function useWishlist(): WishlistContextValue {

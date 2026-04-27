@@ -13,11 +13,7 @@ import {
 import { useTheme } from "@/lib/theme-context";
 import { useCountry } from "@/lib/country-context";
 import { useCheckout } from "@/lib/checkout-context";
-import { useLocalStorage } from "@/lib/use-local-storage";
-import {
-  NotificationPrefs,
-  DEFAULT_NOTIFICATIONS,
-} from "@/lib/notification-prefs";
+import { useNotificationPrefs } from "@/lib/notification-prefs";
 import { Switch } from "@/components/ui/switch";
 import { PageHeader } from "@/components/page-header";
 import { BottomActions, CheckoutSteps } from "./method";
@@ -38,10 +34,7 @@ export default function CheckoutPayment() {
   const [picked, setPicked] = useState<string | undefined>(
     draft.paymentMethodId,
   );
-  const [prefs, setPrefs] = useLocalStorage<NotificationPrefs>(
-    "epplaa-notifications",
-    DEFAULT_NOTIFICATIONS,
-  );
+  const [prefs, setPrefs] = useNotificationPrefs();
 
   // Local mirror so toggles for this order don't surprise-mutate global prefs
   // until they confirm. We DO update the global prefs (per spec — channels are

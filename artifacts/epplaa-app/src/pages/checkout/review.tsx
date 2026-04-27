@@ -190,10 +190,12 @@ export default function CheckoutReview() {
       ...(isHomeDelivery ? {} : { pickupOTP: generateOTP() }),
     };
 
-    const order = addOrder(draftOrder);
-    clear();
-    resetCheckout();
-    setLocation(`/checkout/success/${order.id}`);
+    void (async () => {
+      const order = await addOrder(draftOrder);
+      clear();
+      resetCheckout();
+      setLocation(`/checkout/success/${order.id}`);
+    })();
   }
 
   function methodIcon() {

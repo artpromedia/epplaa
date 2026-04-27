@@ -1,5 +1,10 @@
 import { createContext, useCallback, useContext, useMemo, ReactNode } from "react";
-import { useLocalStorage } from "./use-local-storage";
+import {
+  useListFollows,
+  useFollowSeller,
+  useUnfollowSeller,
+} from "@workspace/api-client-react";
+import { useQueryClient } from "@tanstack/react-query";
 
 interface FollowsContextValue {
   followedSellers: string[];
@@ -13,10 +18,16 @@ interface FollowsContextValue {
 const FollowsContext = createContext<FollowsContextValue | null>(null);
 
 export function FollowsProvider({ children }: { children: ReactNode }) {
-  const [followedSellers, setFollowedSellers] = useLocalStorage<string[]>(
-    "epplaa-follows",
-    [],
+  const query = useListFollows();
+  const qc = useQueryClient();
+  const invalidate = useCallback(
+    () => qc.invalidateQueries({ queryKey: ["/api/follows"] }),
+    [qc],
   );
+  const followMut = useFollowSeller({ mutation: { onSuccess: invalidate } });
+  const unfollowMut = useUnfollowSeller({ mutation: { onSuccess: invalidate } });
+
+  const followedSellers = useMemo<string[]>(() => query.data ?? [], [query.data]);
 
   const isFollowing = useCallback(
     (sellerName: string) => followedSellers.includes(sellerName),
@@ -24,33 +35,27 @@ export function FollowsProvider({ children }: { children: ReactNode }) {
   );
 
   const follow = useCallback(
-    (sellerName: string) =>
-      setFollowedSellers((prev) =>
-        prev.includes(sellerName) ? prev : [...prev, sellerName],
-      ),
-    [setFollowedSellers],
+    (sellerName: string) => {
+      if (!followedSellers.includes(sellerName)) followMut.mutate({ sellerName });
+    },
+    [followedSellers, followMut],
   );
 
   const unfollow = useCallback(
-    (sellerName: string) =>
-      setFollowedSellers((prev) => prev.filter((s) => s !== sellerName)),
-    [setFollowedSellers],
+    (sellerName: string) => unfollowMut.mutate({ sellerName }),
+    [unfollowMut],
   );
 
   const toggle = useCallback(
     (sellerName: string) => {
-      let nowFollowing = false;
-      setFollowedSellers((prev) => {
-        if (prev.includes(sellerName)) {
-          nowFollowing = false;
-          return prev.filter((s) => s !== sellerName);
-        }
-        nowFollowing = true;
-        return [...prev, sellerName];
-      });
-      return nowFollowing;
+      if (followedSellers.includes(sellerName)) {
+        unfollowMut.mutate({ sellerName });
+        return false;
+      }
+      followMut.mutate({ sellerName });
+      return true;
     },
-    [setFollowedSellers],
+    [followedSellers, followMut, unfollowMut],
   );
 
   const value = useMemo<FollowsContextValue>(
@@ -65,9 +70,7 @@ export function FollowsProvider({ children }: { children: ReactNode }) {
     [followedSellers, isFollowing, follow, unfollow, toggle],
   );
 
-  return (
-    <FollowsContext.Provider value={value}>{children}</FollowsContext.Provider>
-  );
+  return <FollowsContext.Provider value={value}>{children}</FollowsContext.Provider>;
 }
 
 export function useFollows(): FollowsContextValue {

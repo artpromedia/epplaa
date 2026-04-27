@@ -5,7 +5,15 @@ import {
   useContext,
   useMemo,
 } from "react";
-import { useLocalStorage } from "./use-local-storage";
+import {
+  useGetWallet,
+  useWalletTopUp,
+  useWalletSpend,
+  useWalletWithdraw,
+  useWalletRefund,
+  useUpdateWalletSettings,
+} from "@workspace/api-client-react";
+import { useQueryClient } from "@tanstack/react-query";
 
 export type WalletTxnKind =
   | "topup"
@@ -17,28 +25,11 @@ export type WalletTxnKind =
 export interface WalletTxn {
   id: string;
   kind: WalletTxnKind;
-  amountMinor: number; // positive credits, negative debits
+  amountMinor: number;
   label: string;
   refId?: string;
   atIso: string;
 }
-
-const SEED_TXNS: WalletTxn[] = [
-  {
-    id: "wt-seed-1",
-    kind: "promo",
-    amountMinor: 200000, // 2,000 NGN
-    label: "Welcome credit",
-    atIso: new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString(),
-  },
-  {
-    id: "wt-seed-2",
-    kind: "spend",
-    amountMinor: -125000,
-    label: "Order EP-K9X8 (partial)",
-    atIso: new Date(Date.now() - 6 * 24 * 60 * 60 * 1000).toISOString(),
-  },
-];
 
 interface WalletContextValue {
   balanceMinor: number;
@@ -56,106 +47,75 @@ interface WalletContextValue {
 }
 
 const WalletContext = createContext<WalletContextValue | null>(null);
-const STORAGE_KEY = "epplaa-wallet-txns";
-const CCY_KEY = "epplaa-wallet-ccy";
-
-function makeId() {
-  return `wt_${Date.now().toString(36)}_${Math.random()
-    .toString(36)
-    .slice(2, 6)}`;
-}
 
 export function WalletProvider({ children }: { children: ReactNode }) {
-  const [txns, setTxns] = useLocalStorage<WalletTxn[]>(STORAGE_KEY, SEED_TXNS);
-  const [currencyCode, setCurrencyCode] = useLocalStorage<string>(CCY_KEY, "NGN");
+  const walletQuery = useGetWallet();
+  const qc = useQueryClient();
+  const invalidate = useCallback(
+    () => qc.invalidateQueries({ queryKey: ["/api/wallet"] }),
+    [qc],
+  );
 
-  const balanceMinor = useMemo(
-    () => txns.reduce((acc, t) => acc + t.amountMinor, 0),
-    [txns],
+  const topUpMut = useWalletTopUp({ mutation: { onSuccess: invalidate } });
+  const spendMut = useWalletSpend({ mutation: { onSuccess: invalidate } });
+  const withdrawMut = useWalletWithdraw({ mutation: { onSuccess: invalidate } });
+  const refundMut = useWalletRefund({ mutation: { onSuccess: invalidate } });
+  const settingsMut = useUpdateWalletSettings({ mutation: { onSuccess: invalidate } });
+
+  const balanceMinor = walletQuery.data?.balanceMinor ?? 0;
+  const currencyCode = walletQuery.data?.currencyCode ?? "NGN";
+  const txns = useMemo<WalletTxn[]>(
+    () =>
+      (walletQuery.data?.txns ?? []).map((t) => ({
+        id: t.id,
+        kind: t.kind as WalletTxnKind,
+        amountMinor: t.amountMinor,
+        label: t.label,
+        refId: t.refId ?? undefined,
+        atIso: t.atIso,
+      })),
+    [walletQuery.data?.txns],
   );
 
   const topUp = useCallback<WalletContextValue["topUp"]>(
     (amountMinor, label = "Top up") => {
       if (amountMinor <= 0) return;
-      setTxns((prev) => [
-        {
-          id: makeId(),
-          kind: "topup",
-          amountMinor,
-          label,
-          atIso: new Date().toISOString(),
-        },
-        ...prev,
-      ]);
+      topUpMut.mutate({ data: { amountMinor, label } });
     },
-    [setTxns],
+    [topUpMut],
   );
 
   const spend = useCallback<WalletContextValue["spend"]>(
     (amountMinor, label, refId) => {
       if (amountMinor <= 0) return false;
       if (balanceMinor < amountMinor) return false;
-      setTxns((prev) => [
-        {
-          id: makeId(),
-          kind: "spend",
-          amountMinor: -amountMinor,
-          label,
-          refId,
-          atIso: new Date().toISOString(),
-        },
-        ...prev,
-      ]);
+      spendMut.mutate({ data: { amountMinor, label, ...(refId ? { refId } : {}) } });
       return true;
     },
-    [balanceMinor, setTxns],
-  );
-
-  const refundFromReturn = useCallback<WalletContextValue["refundFromReturn"]>(
-    (returnId, amountMinor, label) => {
-      setTxns((prev) => {
-        if (prev.some((t) => t.refId === returnId && t.kind === "refund")) {
-          return prev;
-        }
-        return [
-          {
-            id: makeId(),
-            kind: "refund",
-            amountMinor,
-            label,
-            refId: returnId,
-            atIso: new Date().toISOString(),
-          },
-          ...prev,
-        ];
-      });
-    },
-    [setTxns],
+    [balanceMinor, spendMut],
   );
 
   const withdraw = useCallback<WalletContextValue["withdraw"]>(
     (amountMinor, destinationLabel) => {
       if (amountMinor <= 0) return false;
       if (balanceMinor < amountMinor) return false;
-      setTxns((prev) => [
-        {
-          id: makeId(),
-          kind: "withdrawal",
-          amountMinor: -amountMinor,
-          label: `Withdraw to ${destinationLabel}`,
-          atIso: new Date().toISOString(),
-        },
-        ...prev,
-      ]);
+      withdrawMut.mutate({ data: { amountMinor, destinationLabel } });
       return true;
     },
-    [balanceMinor, setTxns],
+    [balanceMinor, withdrawMut],
+  );
+
+  const refundFromReturn = useCallback<WalletContextValue["refundFromReturn"]>(
+    (returnId, amountMinor, label) => {
+      if (amountMinor <= 0) return;
+      refundMut.mutate({ data: { returnId, amountMinor, label } });
+    },
+    [refundMut],
   );
 
   const resetWallet = useCallback(() => {
-    setTxns(SEED_TXNS);
-    setCurrencyCode("NGN");
-  }, [setTxns, setCurrencyCode]);
+    settingsMut.mutate({ data: { currencyCode: "NGN" } });
+  }, [settingsMut]);
 
   const value = useMemo<WalletContextValue>(
     () => ({
@@ -168,21 +128,10 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       withdraw,
       resetWallet,
     }),
-    [
-      balanceMinor,
-      currencyCode,
-      txns,
-      topUp,
-      spend,
-      refundFromReturn,
-      withdraw,
-      resetWallet,
-    ],
+    [balanceMinor, currencyCode, txns, topUp, spend, refundFromReturn, withdraw, resetWallet],
   );
 
-  return (
-    <WalletContext.Provider value={value}>{children}</WalletContext.Provider>
-  );
+  return <WalletContext.Provider value={value}>{children}</WalletContext.Provider>;
 }
 
 export function useWallet(): WalletContextValue {

@@ -1,18 +1,23 @@
-import React, { createContext, useContext, useMemo, useState } from "react";
-import { useLocalStorage } from "./use-local-storage";
+import React, { createContext, useCallback, useContext, useMemo, useState } from "react";
+import {
+  useGetSellerMe,
+  useApplySeller,
+  useSetSellerMode,
+  useUpgradeSellerTier,
+  useListSellerListings,
+  useCreateSellerListing,
+  useDeleteSellerListing,
+  useUpdateSellerListing,
+} from "@workspace/api-client-react";
+import { useQueryClient } from "@tanstack/react-query";
 import { CountryCode } from "./countries";
-import { SellerTier, TIERS, tierFromSocialFollowers } from "./seller-tiers";
+import { SellerTier, tierFromSocialFollowers } from "./seller-tiers";
 
 export type SellerStatus = "none" | "pending" | "approved" | "rejected";
 export type AppMode = "buyer" | "seller";
 export type BusinessType = "individual" | "registered" | "brand";
 
-export type SocialPlatform =
-  | "instagram"
-  | "tiktok"
-  | "twitter"
-  | "facebook"
-  | "youtube";
+export type SocialPlatform = "instagram" | "tiktok" | "twitter" | "facebook" | "youtube";
 
 export interface SocialAccount {
   platform: SocialPlatform;
@@ -74,16 +79,9 @@ interface SellerContextValue {
   stats: SellerStats | null;
   listings: Listing[];
   setMode: (mode: AppMode) => void;
-  submitApplication: (
-    app: Omit<SellerApplication, "submittedAt">,
-  ) => void;
-  upgradeTier: (
-    target: SellerTier,
-    extra: { registryNumber?: string; trademarkRef?: string },
-  ) => void;
-  addListing: (
-    l: Omit<Listing, "id" | "createdAt" | "status">,
-  ) => Listing;
+  submitApplication: (app: Omit<SellerApplication, "submittedAt">) => void;
+  upgradeTier: (target: SellerTier, extra: { registryNumber?: string; trademarkRef?: string }) => void;
+  addListing: (l: Omit<Listing, "id" | "createdAt" | "status">) => Promise<Listing>;
   updateListing: (id: string, patch: Partial<Listing>) => void;
   removeListing: (id: string) => void;
   recordBroadcast: (data: BroadcastDraft) => void;
@@ -95,125 +93,120 @@ interface SellerContextValue {
 
 const SellerContext = createContext<SellerContextValue | undefined>(undefined);
 
-const STATUS_KEY = "epplaa-seller-status";
-const TIER_KEY = "epplaa-seller-tier";
-const MODE_KEY = "epplaa-app-mode";
-const APP_KEY = "epplaa-seller-application";
-const STATS_KEY = "epplaa-seller-stats";
-const LISTINGS_KEY = "epplaa-seller-listings";
-
 export function SellerProvider({ children }: { children: React.ReactNode }) {
-  const [status, setStatus] = useLocalStorage<SellerStatus>(STATUS_KEY, "none");
-  const [tier, setTier] = useLocalStorage<SellerTier>(TIER_KEY, "starter");
-  const [mode, setModeState] = useLocalStorage<AppMode>(MODE_KEY, "buyer");
-  const [application, setApplication] =
-    useLocalStorage<SellerApplication | null>(APP_KEY, null);
-  const [stats, setStats] = useLocalStorage<SellerStats | null>(STATS_KEY, null);
-  const [listings, setListings] = useLocalStorage<Listing[]>(LISTINGS_KEY, []);
+  const profileQuery = useGetSellerMe();
+  const listingsQuery = useListSellerListings();
+  const qc = useQueryClient();
+
+  const invalidateProfile = useCallback(
+    () => qc.invalidateQueries({ queryKey: ["/api/seller/me"] }),
+    [qc],
+  );
+  const invalidateListings = useCallback(
+    () => qc.invalidateQueries({ queryKey: ["/api/seller/listings"] }),
+    [qc],
+  );
+
+  const applyMut = useApplySeller({ mutation: { onSuccess: invalidateProfile } });
+  const setModeMut = useSetSellerMode({ mutation: { onSuccess: invalidateProfile } });
+  const upgradeMut = useUpgradeSellerTier({ mutation: { onSuccess: invalidateProfile } });
+  const createListingMut = useCreateSellerListing({ mutation: { onSuccess: invalidateListings } });
+  const deleteListingMut = useDeleteSellerListing({ mutation: { onSuccess: invalidateListings } });
+  const updateListingMut = useUpdateSellerListing({ mutation: { onSuccess: invalidateListings } });
+
   const [isBroadcasting, setIsBroadcasting] = useState(false);
+
+  const profile = profileQuery.data;
+  const status: SellerStatus = (profile?.status as SellerStatus) ?? "none";
+  const tier: SellerTier = (profile?.tier as SellerTier) ?? "starter";
+  const apiMode: AppMode = (profile?.mode as AppMode) ?? "buyer";
+  const application = (profile?.application as SellerApplication | null | undefined) ?? null;
+  const stats = (profile?.stats as SellerStats | null | undefined) ?? null;
+
+  const listings = useMemo<Listing[]>(
+    () =>
+      (listingsQuery.data ?? []).map((l) => ({
+        id: l.id,
+        title: l.title,
+        priceMinor: l.priceMinor,
+        countryCode: l.countryCode as CountryCode,
+        category: l.category,
+        inventory: l.inventory,
+        status: l.status as "draft" | "active",
+        createdAt: new Date(l.createdAtIso).getTime(),
+      })),
+    [listingsQuery.data],
+  );
 
   function setMode(next: AppMode) {
     if (next === "seller" && status !== "approved") return;
-    setModeState(next);
+    setModeMut.mutate({ data: { mode: next } });
   }
 
   function submitApplication(app: Omit<SellerApplication, "submittedAt">) {
-    const now = Date.now();
-    setApplication({ ...app, submittedAt: now });
-    // Demo: auto-approve immediately. Production would set "pending" for review.
-    setStatus("approved");
-    // Starting tier is driven by the seller's existing social audience.
-    // Creators with an established following skip the slow Starter ramp.
-    setTier(tierFromSocialFollowers(app.totalFollowers));
-    setStats({
-      lifetimeGMVMinor: 0,
-      thisMonthGMVMinor: 0,
-      ordersTotal: 0,
-      ordersPending: 0,
-      liveSessionsCount: 0,
-      joinedAt: now,
+    applyMut.mutate({
+      data: {
+        ...app,
+        submittedAt: Date.now(),
+        startingTier: tierFromSocialFollowers(app.totalFollowers),
+      } as Record<string, unknown>,
     });
   }
 
-  function upgradeTier(
-    target: SellerTier,
-    extra: { registryNumber?: string; trademarkRef?: string },
-  ) {
-    setTier(target);
-    if (application) {
-      setApplication({
-        ...application,
-        registryNumber: extra.registryNumber ?? application.registryNumber,
-        trademarkRef: extra.trademarkRef ?? application.trademarkRef,
-        businessType:
-          target === "pro"
-            ? "registered"
-            : target === "elite"
-              ? "brand"
-              : application.businessType,
-      });
-    }
+  function upgradeTier(target: SellerTier, extra: { registryNumber?: string; trademarkRef?: string }) {
+    upgradeMut.mutate({ data: { tier: target, ...extra } });
   }
 
-  function addListing(l: Omit<Listing, "id" | "createdAt" | "status">) {
-    const cap = TIERS[tier].maxListings;
-    const activeCount = listings.filter((x) => x.status === "active").length;
-    const next: Listing = {
-      ...l,
-      id: `lst_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
-      createdAt: Date.now(),
-      status: cap !== null && activeCount >= cap ? "draft" : "active",
+  async function addListing(l: Omit<Listing, "id" | "createdAt" | "status">): Promise<Listing> {
+    const created = await createListingMut.mutateAsync({
+      data: {
+        title: l.title,
+        priceMinor: l.priceMinor,
+        countryCode: l.countryCode,
+        category: l.category,
+        inventory: l.inventory,
+      },
+    });
+    return {
+      id: created.id,
+      title: created.title,
+      priceMinor: created.priceMinor,
+      countryCode: created.countryCode as CountryCode,
+      category: created.category,
+      inventory: created.inventory,
+      status: created.status as "draft" | "active",
+      createdAt: new Date(created.createdAtIso).getTime(),
     };
-    setListings((prev) => [next, ...prev]);
-    return next;
   }
 
   function updateListing(id: string, patch: Partial<Listing>) {
-    setListings((prev) =>
-      prev.map((l) => (l.id === id ? { ...l, ...patch } : l)),
-    );
+    const data: Record<string, unknown> = {};
+    if (typeof patch.title === "string") data.title = patch.title;
+    if (typeof patch.priceMinor === "number") data.priceMinor = patch.priceMinor;
+    if (typeof patch.category === "string") data.category = patch.category;
+    if (typeof patch.inventory === "number") data.inventory = patch.inventory;
+    if (patch.status === "draft" || patch.status === "active") data.status = patch.status;
+    if (Object.keys(data).length === 0) return;
+    updateListingMut.mutate({ listingId: id, data });
   }
 
   function removeListing(id: string) {
-    setListings((prev) => prev.filter((l) => l.id !== id));
+    deleteListingMut.mutate({ listingId: id });
   }
 
-  function recordBroadcast(_data: BroadcastDraft) {
-    setStats((prev) =>
-      prev
-        ? { ...prev, liveSessionsCount: prev.liveSessionsCount + 1 }
-        : prev,
-    );
-  }
+  function recordBroadcast(_data: BroadcastDraft) {}
 
-  function simulateSale(amountMinor: number) {
-    setStats((prev) =>
-      prev
-        ? {
-            ...prev,
-            lifetimeGMVMinor: prev.lifetimeGMVMinor + amountMinor,
-            thisMonthGMVMinor: prev.thisMonthGMVMinor + amountMinor,
-            ordersTotal: prev.ordersTotal + 1,
-            ordersPending: prev.ordersPending + 1,
-          }
-        : prev,
-    );
-  }
+  function simulateSale(_amountMinor: number) {}
 
   function resetSeller() {
-    setStatus("none");
-    setTier("starter");
-    setModeState("buyer");
-    setApplication(null);
-    setStats(null);
-    setListings([]);
+    setModeMut.mutate({ data: { mode: "buyer" } });
   }
 
   const value = useMemo<SellerContextValue>(
     () => ({
       status,
       tier,
-      mode: status === "approved" ? mode : "buyer",
+      mode: status === "approved" ? apiMode : "buyer",
       application,
       stats,
       listings,
@@ -229,12 +222,11 @@ export function SellerProvider({ children }: { children: React.ReactNode }) {
       isBroadcasting,
       setIsBroadcasting,
     }),
-    [status, tier, mode, application, stats, listings, isBroadcasting],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [status, tier, apiMode, application, stats, listings, isBroadcasting],
   );
 
-  return (
-    <SellerContext.Provider value={value}>{children}</SellerContext.Provider>
-  );
+  return <SellerContext.Provider value={value}>{children}</SellerContext.Provider>;
 }
 
 export function useSeller() {

@@ -411,9 +411,13 @@ export default function OrderDetail() {
 
         {canCancel && (
           <button
-            onClick={() => {
-              cancel(order.id);
-              toast({ title: "Order cancelled" });
+            onClick={async () => {
+              try {
+                await cancel(order.id);
+                toast({ title: "Order cancelled" });
+              } catch {
+                toast({ title: "Could not cancel order", variant: "destructive" });
+              }
             }}
             className={`w-full h-12 rounded-xl border font-bold flex items-center justify-center gap-2 ${
               isDark

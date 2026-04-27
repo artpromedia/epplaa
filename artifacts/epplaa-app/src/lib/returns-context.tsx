@@ -1,11 +1,12 @@
+import { createContext, ReactNode, useCallback, useContext, useMemo } from "react";
 import {
-  createContext,
-  ReactNode,
-  useCallback,
-  useContext,
-  useMemo,
-} from "react";
-import { useLocalStorage } from "./use-local-storage";
+  useListReturns,
+  useCreateReturn,
+  useTransitionReturn,
+  useAppendReturnMessage,
+  type ReturnRecord as ApiReturnRecord,
+} from "@workspace/api-client-react";
+import { useQueryClient } from "@tanstack/react-query";
 
 export type ReturnReason =
   | "wrong_item"
@@ -16,16 +17,15 @@ export type ReturnReason =
   | "changed_mind"
   | "other";
 
-export const RETURN_REASONS: { id: ReturnReason; label: string; needsPhoto: boolean }[] =
-  [
-    { id: "wrong_item", label: "Wrong item received", needsPhoto: true },
-    { id: "defective", label: "Defective or not working", needsPhoto: true },
-    { id: "damaged_in_transit", label: "Damaged in transit", needsPhoto: true },
-    { id: "not_described", label: "Not as described", needsPhoto: true },
-    { id: "size_fit", label: "Size or fit issue", needsPhoto: false },
-    { id: "changed_mind", label: "Changed my mind", needsPhoto: false },
-    { id: "other", label: "Other reason", needsPhoto: false },
-  ];
+export const RETURN_REASONS: { id: ReturnReason; label: string; needsPhoto: boolean }[] = [
+  { id: "wrong_item", label: "Wrong item received", needsPhoto: true },
+  { id: "defective", label: "Defective or not working", needsPhoto: true },
+  { id: "damaged_in_transit", label: "Damaged in transit", needsPhoto: true },
+  { id: "not_described", label: "Not as described", needsPhoto: true },
+  { id: "size_fit", label: "Size or fit issue", needsPhoto: false },
+  { id: "changed_mind", label: "Changed my mind", needsPhoto: false },
+  { id: "other", label: "Other reason", needsPhoto: false },
+];
 
 export type ReturnStatus =
   | "requested"
@@ -80,7 +80,7 @@ interface ReturnsContextValue {
     reason: ReturnReason;
     notes: string;
     photoCount: number;
-  }) => ReturnRecord;
+  }) => Promise<ReturnRecord>;
   approveReturn: (id: string) => void;
   rejectReturn: (id: string, reason: string) => void;
   markShippedBack: (id: string) => void;
@@ -90,199 +90,138 @@ interface ReturnsContextValue {
 }
 
 const ReturnsContext = createContext<ReturnsContextValue | null>(null);
-const STORAGE_KEY = "epplaa-returns";
 
-function reasonLabel(r: ReturnReason): string {
-  return RETURN_REASONS.find((x) => x.id === r)?.label ?? r;
+const TIMELINE_LABELS: Record<ReturnTimelineEvent["status"], string> = {
+  requested: "Return requested",
+  approved: "Return approved",
+  in_dispute: "Dispute opened",
+  rejected: "Return rejected",
+  shipped_back: "Item shipped back",
+  refunded: "Refund issued",
+  note: "Note",
+};
+
+function fromApi(r: ApiReturnRecord): ReturnRecord {
+  return {
+    id: r.id,
+    orderId: r.orderId,
+    productTitle: r.productTitle,
+    productImage: r.productImage ?? undefined,
+    refundAmountMinor: r.refundAmountMinor,
+    currencyCode: r.currencyCode,
+    reason: r.reason as ReturnReason,
+    reasonLabel: r.reasonLabel,
+    notes: r.notes,
+    photoCount: r.photoCount,
+    status: r.status as ReturnStatus,
+    createdAtIso: r.createdAtIso,
+    timeline: ((r.timeline ?? []) as unknown as Array<Record<string, unknown>>).map((t) => {
+      const status = (t.status as ReturnTimelineEvent["status"]) ?? "note";
+      const labelFromServer = t.label ? String(t.label) : "";
+      return {
+        status,
+        atIso: String(t.atIso ?? ""),
+        label: labelFromServer || TIMELINE_LABELS[status] || "Update",
+        detail: t.note ? String(t.note) : t.detail ? String(t.detail) : undefined,
+        byRole:
+          t.actor === "epplaa"
+            ? "support"
+            : (t.actor as ReturnTimelineEvent["byRole"]) ?? undefined,
+      };
+    }),
+    dispute: ((r.dispute ?? []) as unknown as Array<Record<string, unknown>>).map((d, i) => ({
+      id: String(d.id ?? `m_${i}`),
+      byRole:
+        d.actor === "epplaa"
+          ? "support"
+          : ((d.actor as DisputeMessage["byRole"]) ?? "buyer"),
+      body: String(d.body ?? ""),
+      atIso: String(d.atIso ?? ""),
+    })),
+  };
 }
 
-function makeId() {
-  return `RT-${Date.now().toString(36).toUpperCase()}${Math.random()
-    .toString(36)
-    .slice(2, 4)
-    .toUpperCase()}`;
-}
+export function ReturnsProvider({ children }: { children: ReactNode }) {
+  const query = useListReturns();
+  const qc = useQueryClient();
 
-export function ReturnsProvider({
-  children,
-  onRefund,
-}: {
-  children: ReactNode;
-  onRefund?: (rec: ReturnRecord) => void;
-}) {
-  const [returns, setReturns] = useLocalStorage<ReturnRecord[]>(STORAGE_KEY, []);
+  const invalidateAll = useCallback(() => {
+    qc.invalidateQueries({ queryKey: ["/api/returns"] });
+    // A refunded transition auto-credits the wallet server-side; refetch.
+    qc.invalidateQueries({ queryKey: ["/api/wallet"] });
+  }, [qc]);
 
-  const update = useCallback(
-    (id: string, fn: (r: ReturnRecord) => ReturnRecord) =>
-      setReturns((prev) => prev.map((r) => (r.id === id ? fn(r) : r))),
-    [setReturns],
+  const createMut = useCreateReturn({ mutation: { onSuccess: invalidateAll } });
+  const transitionMut = useTransitionReturn({ mutation: { onSuccess: invalidateAll } });
+  const messageMut = useAppendReturnMessage({ mutation: { onSuccess: invalidateAll } });
+
+  const returns = useMemo<ReturnRecord[]>(
+    () => (query.data ?? []).map(fromApi),
+    [query.data],
   );
 
   const request = useCallback<ReturnsContextValue["request"]>(
-    (input) => {
-      const now = new Date().toISOString();
-      const rec: ReturnRecord = {
-        id: makeId(),
-        orderId: input.orderId,
-        productTitle: input.productTitle,
-        productImage: input.productImage,
-        refundAmountMinor: input.refundAmountMinor,
-        currencyCode: input.currencyCode,
-        reason: input.reason,
-        reasonLabel: reasonLabel(input.reason),
-        notes: input.notes,
-        photoCount: input.photoCount,
-        status: "requested",
-        createdAtIso: now,
-        timeline: [
-          {
-            status: "requested",
-            atIso: now,
-            label: "Return requested",
-            detail: reasonLabel(input.reason),
-            byRole: "buyer",
-          },
-        ],
-        dispute: [],
-      };
-      setReturns((prev) => [rec, ...prev]);
-      return rec;
+    async (input) => {
+      const result = await createMut.mutateAsync({
+        data: { ...input } as Record<string, unknown>,
+      });
+      return fromApi(result);
     },
-    [setReturns],
+    [createMut],
   );
 
-  const approveReturn = useCallback(
-    (id: string) =>
-      update(id, (r) => ({
-        ...r,
-        status: "approved",
-        timeline: [
-          ...r.timeline,
-          {
-            status: "approved",
-            atIso: new Date().toISOString(),
-            label: "Return approved",
-            detail: "Ship the item back within 5 days using the prepaid label.",
-            byRole: "seller",
-          },
-        ],
-      })),
-    [update],
+  const transition = useCallback(
+    (id: string, status: ReturnStatus, detail?: string) => {
+      transitionMut.mutate({
+        returnId: id,
+        data: { status, ...(detail ? { detail } : {}) },
+      });
+    },
+    [transitionMut],
   );
 
+  const approveReturn = useCallback((id: string) => transition(id, "approved"), [transition]);
   const rejectReturn = useCallback(
-    (id: string, reason: string) =>
-      update(id, (r) => ({
-        ...r,
-        status: "rejected",
-        timeline: [
-          ...r.timeline,
-          {
-            status: "rejected",
-            atIso: new Date().toISOString(),
-            label: "Return rejected",
-            detail: reason,
-            byRole: "seller",
-          },
-        ],
-      })),
-    [update],
+    (id: string, reason: string) => transition(id, "rejected", reason),
+    [transition],
   );
-
-  const markShippedBack = useCallback(
-    (id: string) =>
-      update(id, (r) => ({
-        ...r,
-        status: "shipped_back",
-        timeline: [
-          ...r.timeline,
-          {
-            status: "shipped_back",
-            atIso: new Date().toISOString(),
-            label: "Item shipped back",
-            detail: "Tracking handed to courier.",
-            byRole: "buyer",
-          },
-        ],
-      })),
-    [update],
-  );
-
-  const refund = useCallback(
-    (id: string) => {
-      const target = returns.find((r) => r.id === id);
-      if (!target) return;
-      // Idempotency guard: never re-issue a refund. Only approved/received
-      // returns can transition to "refunded" — this protects the wallet
-      // bridge from being called twice for the same return.
-      if (target.status === "refunded") return;
-      if (target.status !== "approved" && target.status !== "shipped_back")
-        return;
-      const updated: ReturnRecord = {
-        ...target,
-        status: "refunded",
-        timeline: [
-          ...target.timeline,
-          {
-            status: "refunded",
-            atIso: new Date().toISOString(),
-            label: "Refund issued",
-            detail: "Credited to your Epplaa wallet within seconds.",
-            byRole: "support",
-          },
-        ],
-      };
-      setReturns((prev) => prev.map((r) => (r.id === id ? updated : r)));
-      onRefund?.(updated);
-    },
-    [onRefund, returns, setReturns],
-  );
+  const markShippedBack = useCallback((id: string) => transition(id, "shipped_back"), [transition]);
+  const refund = useCallback((id: string) => transition(id, "refunded"), [transition]);
 
   const openDispute = useCallback(
-    (id: string, message: string) =>
-      update(id, (r) => ({
-        ...r,
-        status: "in_dispute",
-        timeline: [
-          ...r.timeline,
-          {
-            status: "in_dispute",
-            atIso: new Date().toISOString(),
-            label: "Dispute opened",
-            detail: "Support team will review within 24 hours.",
-            byRole: "buyer",
+    (id: string, message: string) => {
+      transitionMut.mutate(
+        { returnId: id, data: { status: "in_dispute" } },
+        {
+          onSuccess: () => {
+            messageMut.mutate({
+              returnId: id,
+              data: { actor: "buyer", body: message },
+            });
           },
-        ],
-        dispute: [
-          ...r.dispute,
-          {
-            id: `dm_${Date.now()}`,
-            byRole: "buyer",
-            body: message,
-            atIso: new Date().toISOString(),
-          },
-        ],
-      })),
-    [update],
+        },
+      );
+    },
+    [transitionMut, messageMut],
   );
 
   const postMessage = useCallback<ReturnsContextValue["postMessage"]>(
-    (id, msg) =>
-      update(id, (r) => ({
-        ...r,
-        dispute: [
-          ...r.dispute,
-          { id: `dm_${Date.now()}`, atIso: new Date().toISOString(), ...msg },
-        ],
-      })),
-    [update],
+    (id, msg) => {
+      messageMut.mutate({
+        returnId: id,
+        data: {
+          actor: msg.byRole === "support" ? "epplaa" : msg.byRole,
+          body: msg.body,
+        },
+      });
+    },
+    [messageMut],
   );
 
   const byOrder = useCallback(
     (orderId: string) => returns.find((r) => r.orderId === orderId),
     [returns],
   );
-
   const getById = useCallback(
     (id: string) => returns.find((r) => r.id === id),
     [returns],
@@ -301,23 +240,10 @@ export function ReturnsProvider({
       openDispute,
       postMessage,
     }),
-    [
-      returns,
-      byOrder,
-      getById,
-      request,
-      approveReturn,
-      rejectReturn,
-      markShippedBack,
-      refund,
-      openDispute,
-      postMessage,
-    ],
+    [returns, byOrder, getById, request, approveReturn, rejectReturn, markShippedBack, refund, openDispute, postMessage],
   );
 
-  return (
-    <ReturnsContext.Provider value={value}>{children}</ReturnsContext.Provider>
-  );
+  return <ReturnsContext.Provider value={value}>{children}</ReturnsContext.Provider>;
 }
 
 export function useReturns(): ReturnsContextValue {

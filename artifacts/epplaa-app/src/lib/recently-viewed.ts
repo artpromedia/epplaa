@@ -1,23 +1,29 @@
-import { useCallback } from "react";
-import { useLocalStorage } from "./use-local-storage";
-
-const KEY = "epplaa-recently-viewed";
-const MAX = 12;
+import { useCallback, useMemo } from "react";
+import {
+  useListRecentlyViewed,
+  useTrackRecentlyViewed,
+  useClearRecentlyViewed,
+} from "@workspace/api-client-react";
+import { useQueryClient } from "@tanstack/react-query";
 
 export function useRecentlyViewed() {
-  const [productIds, setProductIds] = useLocalStorage<string[]>(KEY, []);
+  const query = useListRecentlyViewed();
+  const qc = useQueryClient();
+  const invalidate = useCallback(
+    () => qc.invalidateQueries({ queryKey: ["/api/recently-viewed"] }),
+    [qc],
+  );
+  const trackMut = useTrackRecentlyViewed({ mutation: { onSuccess: invalidate } });
+  const clearMut = useClearRecentlyViewed({ mutation: { onSuccess: invalidate } });
+
+  const productIds = useMemo<string[]>(() => query.data ?? [], [query.data]);
 
   const track = useCallback(
-    (productId: string) => {
-      setProductIds((prev) => {
-        const filtered = prev.filter((id) => id !== productId);
-        return [productId, ...filtered].slice(0, MAX);
-      });
-    },
-    [setProductIds],
+    (productId: string) => trackMut.mutate({ productId }),
+    [trackMut],
   );
 
-  const clear = useCallback(() => setProductIds([]), [setProductIds]);
+  const clear = useCallback(() => clearMut.mutate(), [clearMut]);
 
   return { productIds, track, clear };
 }

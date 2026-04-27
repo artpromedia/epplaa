@@ -1,11 +1,6 @@
-import {
-  createContext,
-  ReactNode,
-  useCallback,
-  useContext,
-  useMemo,
-} from "react";
-import { useLocalStorage } from "./use-local-storage";
+import { createContext, ReactNode, useCallback, useContext, useMemo } from "react";
+import { useGetOnboarding, useCompleteOnboarding } from "@workspace/api-client-react";
+import { useQueryClient } from "@tanstack/react-query";
 
 interface OnboardingState {
   completed: boolean;
@@ -15,14 +10,10 @@ interface OnboardingState {
 }
 
 interface OnboardingContextValue extends OnboardingState {
-  markComplete: (input: {
-    interests: string[];
-    notificationsOptIn: boolean;
-  }) => void;
+  markComplete: (input: { interests: string[]; notificationsOptIn: boolean }) => void;
   reset: () => void;
 }
 
-const STORAGE_KEY = "epplaa-onboarding";
 const DEFAULT: OnboardingState = {
   completed: false,
   interests: [],
@@ -44,32 +35,49 @@ export const ONBOARDING_INTERESTS = [
 ];
 
 export function OnboardingProvider({ children }: { children: ReactNode }) {
-  const [state, setState] = useLocalStorage<OnboardingState>(STORAGE_KEY, DEFAULT);
+  const query = useGetOnboarding();
+  const qc = useQueryClient();
+  const completeMut = useCompleteOnboarding({
+    mutation: {
+      onSuccess: () => qc.invalidateQueries({ queryKey: ["/api/onboarding"] }),
+    },
+  });
+
+  const state: OnboardingState = useMemo(() => {
+    const data = query.data;
+    if (!data) return DEFAULT;
+    return {
+      completed: data.completed,
+      interests: data.interests,
+      notificationsOptIn: data.notificationsOptIn,
+      completedAtIso: data.completedAtIso ?? null,
+    };
+  }, [query.data]);
 
   const markComplete = useCallback<OnboardingContextValue["markComplete"]>(
     ({ interests, notificationsOptIn }) => {
-      setState({
+      qc.setQueryData(["/api/onboarding"], {
         completed: true,
         interests,
         notificationsOptIn,
         completedAtIso: new Date().toISOString(),
       });
+      completeMut.mutate({ data: { interests, notificationsOptIn } });
     },
-    [setState],
+    [completeMut, qc],
   );
 
-  const reset = useCallback(() => setState(DEFAULT), [setState]);
+  const reset = useCallback(() => {
+    qc.setQueryData(["/api/onboarding"], DEFAULT);
+    completeMut.mutate({ data: { interests: [], notificationsOptIn: false } });
+  }, [completeMut, qc]);
 
   const value = useMemo<OnboardingContextValue>(
     () => ({ ...state, markComplete, reset }),
     [state, markComplete, reset],
   );
 
-  return (
-    <OnboardingContext.Provider value={value}>
-      {children}
-    </OnboardingContext.Provider>
-  );
+  return <OnboardingContext.Provider value={value}>{children}</OnboardingContext.Provider>;
 }
 
 export function useOnboarding() {

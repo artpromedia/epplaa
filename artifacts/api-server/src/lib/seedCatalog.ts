@@ -1,0 +1,83 @@
+// Seed products / streams / replays so the discovery page is not empty.
+// Idempotent: only inserts when the table is empty.
+
+export const SEED_PRODUCTS = [
+  {
+    id: "prod-1",
+    title: "Lagos Sunset Maxi Dress",
+    priceMinor: 1850000,
+    originalPriceMinor: 2400000,
+    originCountry: "Nigeria",
+    originLabel: "Made in Lagos",
+    sellerName: "Ada Beauty",
+    sellerAvatar: "/images/lagos-avatar-2.png",
+    rating: 4.8,
+    soldCount: 1240,
+    isLiveNow: true,
+    images: ["/images/lagos-feed-1.png", "/images/lagos-feed-2.png"],
+    variants: [{ name: "Size", options: ["S", "M", "L", "XL"] }, { name: "Colour", options: ["Sunset", "Midnight"] }],
+    category: "Fashion",
+    countryCode: "NG",
+  },
+  {
+    id: "prod-2",
+    title: "Ankara Power Bank 20K mAh",
+    priceMinor: 850000,
+    originCountry: "China",
+    originLabel: "Imported direct",
+    sellerName: "TechBoy",
+    sellerAvatar: "/images/lagos-avatar-1.png",
+    rating: 4.6,
+    soldCount: 890,
+    isLiveNow: false,
+    images: ["/images/lagos-feed-2.png"],
+    variants: [{ name: "Pattern", options: ["Lagos", "Accra", "Nairobi"] }],
+    category: "Phones",
+    countryCode: "NG",
+  },
+  {
+    id: "prod-3",
+    title: "Premium Ankara Wrap Set",
+    priceMinor: 1200000,
+    originalPriceMinor: 1500000,
+    originCountry: "Nigeria",
+    originLabel: "Made in Lagos",
+    sellerName: "Chika Styles",
+    sellerAvatar: "/images/lagos-avatar-2.png",
+    rating: 4.9,
+    soldCount: 2100,
+    isLiveNow: true,
+    images: ["/images/lagos-host-stream.png", "/images/lagos-feed-1.png"],
+    variants: [{ name: "Size", options: ["Petite", "Standard", "Plus"] }],
+    category: "Fashion",
+    countryCode: "NG",
+  },
+  {
+    id: "prod-4",
+    title: "Glow Up Beauty Kit",
+    priceMinor: 650000,
+    originCountry: "Ghana",
+    originLabel: "Made in Accra",
+    sellerName: "Bisi Essentials",
+    sellerAvatar: "/images/lagos-avatar-2.png",
+    rating: 4.7,
+    soldCount: 540,
+    isLiveNow: false,
+    images: ["/images/lagos-feed-1.png"],
+    variants: [{ name: "Skin Tone", options: ["Light", "Medium", "Deep"] }],
+    category: "Beauty",
+    countryCode: "NG",
+  },
+];
+
+export const SEED_STREAMS = [
+  { id: "feature", hostName: "Ada Beauty", hostAvatar: "/images/lagos-avatar-2.png", viewerCount: "12.4K", posterImage: "/images/lagos-host-stream.png", title: "Naija Beauty Haul \u00B7 Glow up szn", currentProductId: "prod-1", isLive: true },
+  { id: "stream-2", hostName: "TechBoy", hostAvatar: "/images/lagos-avatar-1.png", viewerCount: "5.1K", posterImage: "/images/lagos-feed-2.png", title: "Shenzhen tech drops", currentProductId: "prod-2", isLive: true },
+  { id: "stream-3", hostName: "Chika Styles", hostAvatar: "/images/lagos-avatar-2.png", viewerCount: "3.8K", posterImage: "/images/lagos-feed-1.png", title: "Premium Ankara fits", currentProductId: "prod-3", isLive: true },
+];
+
+export const SEED_REPLAYS = [
+  { id: "replay-1", hostName: "Ada Beauty", hostAvatar: "/images/lagos-avatar-2.png", posterImage: "/images/lagos-host-stream.png", title: "Naija Beauty Haul \u00B7 Glow up szn", durationLabel: "48:12", durationSeconds: 2892, viewCount: "12.4K", productIds: ["prod-1", "prod-2"], liveStreamId: "feature", recordedHoursAgo: 6 },
+  { id: "replay-2", hostName: "TechBoy", hostAvatar: "/images/lagos-avatar-1.png", posterImage: "/images/lagos-feed-2.png", title: "Shenzhen tech drops", durationLabel: "1:02:45", durationSeconds: 3765, viewCount: "8.6K", productIds: ["prod-3", "prod-4"], liveStreamId: "stream-2", recordedHoursAgo: 22 },
+  { id: "replay-3", hostName: "Chika Styles", hostAvatar: "/images/lagos-avatar-2.png", posterImage: "/images/lagos-feed-1.png", title: "Premium Ankara fits, grab yours", durationLabel: "55:30", durationSeconds: 3330, viewCount: "5.2K", productIds: ["prod-1", "prod-3"], liveStreamId: "stream-3", recordedHoursAgo: 48 },
+];

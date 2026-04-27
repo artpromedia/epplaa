@@ -23,33 +23,27 @@ import {
 } from "@/lib/search-utils";
 import { ThemeToggle } from "@/components/theme-toggle";
 
-const RECENT_QUERIES_KEY = "epplaa-recent-queries";
+import {
+  useListRecentSearches,
+  useAddRecentSearch,
+  useClearRecentSearches,
+} from "@workspace/api-client-react";
+import { useQueryClient } from "@tanstack/react-query";
 
 function useRecentQueries() {
-  const read = () => {
-    if (typeof window === "undefined") return [];
-    try {
-      const raw = window.localStorage.getItem(RECENT_QUERIES_KEY);
-      return raw ? (JSON.parse(raw) as string[]) : [];
-    } catch {
-      return [];
-    }
-  };
-  const [queries, setQueries] = useState<string[]>(read);
+  const listQuery = useListRecentSearches();
+  const qc = useQueryClient();
+  const invalidate = () => qc.invalidateQueries({ queryKey: ["/api/recent-searches"] });
+  const addMut = useAddRecentSearch({ mutation: { onSuccess: invalidate } });
+  const clearMut = useClearRecentSearches({ mutation: { onSuccess: invalidate } });
+  const queries = listQuery.data ?? [];
   function record(q: string) {
     const trimmed = q.trim();
     if (!trimmed) return;
-    const next = [trimmed, ...queries.filter((x) => x !== trimmed)].slice(0, 6);
-    setQueries(next);
-    try {
-      window.localStorage.setItem(RECENT_QUERIES_KEY, JSON.stringify(next));
-    } catch {}
+    addMut.mutate({ data: { query: trimmed } });
   }
   function clear() {
-    setQueries([]);
-    try {
-      window.localStorage.removeItem(RECENT_QUERIES_KEY);
-    } catch {}
+    clearMut.mutate();
   }
   return { queries, record, clear };
 }

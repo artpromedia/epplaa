@@ -20,7 +20,7 @@ import {
 import { formatPrice } from "@/lib/format";
 import { PageHeader } from "@/components/page-header";
 import { useToast } from "@/hooks/use-toast";
-import { useLocalStorage } from "@/lib/use-local-storage";
+import { useGetMyReferrals } from "@workspace/api-client-react";
 
 export default function ReferralsHub() {
   const { resolvedTheme } = useTheme();
@@ -29,10 +29,8 @@ export default function ReferralsHub() {
   const { topUp } = useWallet();
   const { toast } = useToast();
 
-  const [code] = useLocalStorage(
-    "epplaa-referral-code",
-    generateReferralCode(),
-  );
+  const referralsQuery = useGetMyReferrals();
+  const code = referralsQuery.data?.code ?? generateReferralCode();
   const shareLink = useMemo(() => buildShareLink(code), [code]);
   const activity = SEED_REFERRAL_ACTIVITY;
   const totalEarnedMinor = activity.reduce(

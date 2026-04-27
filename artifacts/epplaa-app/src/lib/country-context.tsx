@@ -1,5 +1,7 @@
-import React, { createContext, useContext, useState } from "react";
+import React, { createContext, useContext } from "react";
 import { Country, CountryCode, COUNTRIES } from "./countries";
+import { useGetMe, useUpdateMe } from "@workspace/api-client-react";
+import { useQueryClient } from "@tanstack/react-query";
 
 interface CountryContextState {
   country: Country;
@@ -8,36 +10,32 @@ interface CountryContextState {
 
 const CountryContext = createContext<CountryContextState | undefined>(undefined);
 
-const STORAGE_KEY = "epplaa-country";
 const DEFAULT_CODE: CountryCode = "NG";
 
-function isLiveCode(code: string | null): code is CountryCode {
+function isLiveCode(code: string | null | undefined): code is CountryCode {
   if (!code) return false;
   const entry = COUNTRIES[code as CountryCode];
   return Boolean(entry) && entry.status === "live";
 }
 
 export function CountryProvider({ children }: { children: React.ReactNode }) {
-  const [countryCode, setCountryCode] = useState<CountryCode>(() => {
-    if (typeof window === "undefined") return DEFAULT_CODE;
-    const saved = window.localStorage.getItem(STORAGE_KEY);
-    if (isLiveCode(saved)) return saved;
-    return DEFAULT_CODE;
-  });
+  const meQuery = useGetMe();
+  const updateMe = useUpdateMe();
+  const qc = useQueryClient();
 
-  const setCountry = (code: CountryCode) => {
-    if (!isLiveCode(code)) return;
-    window.localStorage.setItem(STORAGE_KEY, code);
-    setCountryCode(code);
-  };
+  const userCode = meQuery.data?.countryCode;
+  const code: CountryCode = isLiveCode(userCode) ? userCode : DEFAULT_CODE;
 
-  const value = {
-    country: COUNTRIES[countryCode],
-    setCountry,
+  const setCountry = (next: CountryCode) => {
+    if (!isLiveCode(next)) return;
+    updateMe.mutate(
+      { data: { countryCode: next } },
+      { onSuccess: () => qc.invalidateQueries({ queryKey: ["/api/me"] }) },
+    );
   };
 
   return (
-    <CountryContext.Provider value={value}>
+    <CountryContext.Provider value={{ country: COUNTRIES[code], setCountry }}>
       {children}
     </CountryContext.Provider>
   );
@@ -45,8 +43,6 @@ export function CountryProvider({ children }: { children: React.ReactNode }) {
 
 export function useCountry() {
   const context = useContext(CountryContext);
-  if (context === undefined) {
-    throw new Error("useCountry must be used within a CountryProvider");
-  }
+  if (context === undefined) throw new Error("useCountry must be used within a CountryProvider");
   return context;
 }

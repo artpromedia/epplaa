@@ -10,6 +10,12 @@ I prefer iterative development with clear, high-level feature specifications. Fo
 
 The system is built as a pnpm monorepo with Node.js 24 and TypeScript 5.9. The backend uses Express 5 with PostgreSQL and Drizzle ORM for data management, while the frontend is a React, Vite, Tailwind v4, shadcn/ui, and wouter application. API code generation is handled by Orval from an OpenAPI spec.
 
+**Authentication & Data Layer:**
+- Authentication is handled by Clerk (email/password, Google, Apple). The web app wraps the tree in `ClerkProvider` and gates protected routes via an `AuthGate`. Clerk session tokens are forwarded to the API by an `ApiAuthBridge` that registers a getter with the generated client.
+- The API server mounts a Clerk reverse proxy plus `clerkMiddleware`, then validates user identity per request via `requireUserId`. All mutating handlers scope DB queries to the authenticated user.
+- All previous `epplaa-*` localStorage state has been replaced with real API calls backed by Postgres (Drizzle). Only `epplaa-theme` remains client-side.
+- Generated query keys are absolute paths starting with `/api/...`; manual `setQueryData` / `invalidateQueries` calls must use the same prefix.
+
 **UI/UX Decisions:**
 - **Visual Direction:** "Lagos Sunset" theme with distinct light (cream, deep navy, coral) and dark (near-black, sky-blue, warm coral) modes.
 - **Theming:** Defaults to `prefers-color-scheme`, with manual override persisted in `localStorage`.

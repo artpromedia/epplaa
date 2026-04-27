@@ -1,10 +1,11 @@
 import { useCallback, useMemo } from "react";
-import { useLocalStorage } from "./use-local-storage";
-import { useSeller } from "./seller-context";
+import {
+  useGetSellerEarnings,
+  useRequestSellerPayout,
+  useMarkSellerPayoutPaid,
+} from "@workspace/api-client-react";
+import { useQueryClient } from "@tanstack/react-query";
 import { Country } from "./countries";
-
-const COMMISSION_RATE = 0.1;
-const HOLD_DAYS = 3;
 
 export interface PayoutRequest {
   id: string;
@@ -32,98 +33,82 @@ export interface EarningsSummary {
   holdDays: number;
 }
 
-function makePayoutId(): string {
-  return `po_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
-}
-
-function makePayoutReference(): string {
-  return `PO-${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).slice(2, 5).toUpperCase()}`;
-}
-
 export function useSellerEarnings(country: Country): {
   summary: EarningsSummary;
   requestPayout: (amountMinor: number) => PayoutRequest | null;
   markPayoutPaid: (id: string) => void;
 } {
-  const { stats, application } = useSeller();
-  const [payouts, setPayouts] = useLocalStorage<PayoutRequest[]>(
-    "epplaa-payouts",
-    [],
+  const query = useGetSellerEarnings({ countryCode: country.code });
+  const qc = useQueryClient();
+  const invalidate = useCallback(
+    () =>
+      qc.invalidateQueries({
+        queryKey: ["/api/seller/earnings", { countryCode: country.code }],
+      }),
+    [qc, country.code],
   );
+  const requestMut = useRequestSellerPayout({ mutation: { onSuccess: invalidate } });
+  const markPaidMut = useMarkSellerPayoutPaid({ mutation: { onSuccess: invalidate } });
 
   const summary = useMemo<EarningsSummary>(() => {
-    const lifetimeGmvMinor = stats?.lifetimeGMVMinor ?? 0;
-    const thisMonthGmvMinor = stats?.thisMonthGMVMinor ?? 0;
-    const commissionMinor = Math.round(lifetimeGmvMinor * COMMISSION_RATE);
-    const netLifetimeMinor = lifetimeGmvMinor - commissionMinor;
-    const pendingPayoutMinor = payouts
-      .filter((p) => p.status === "pending")
-      .reduce((s, p) => s + p.amountMinor, 0);
-    const paidOutMinor = payouts
-      .filter((p) => p.status === "paid")
-      .reduce((s, p) => s + p.amountMinor, 0);
-    const availableMinor = Math.max(
-      0,
-      netLifetimeMinor - pendingPayoutMinor - paidOutMinor,
-    );
-    return {
-      lifetimeGmvMinor,
-      thisMonthGmvMinor,
-      commissionMinor,
-      netLifetimeMinor,
-      pendingPayoutMinor,
-      paidOutMinor,
-      availableMinor,
-      ordersTotal: stats?.ordersTotal ?? 0,
-      ordersPending: stats?.ordersPending ?? 0,
-      payouts,
-      payoutThresholdMinor: 5000 * country.currency.minorPerMajor,
-      holdDays: HOLD_DAYS,
-    };
-  }, [stats, payouts, country.currency.minorPerMajor]);
-
-  const requestPayout = useCallback(
-    (amountMinor: number): PayoutRequest | null => {
-      if (amountMinor <= 0) return null;
-      if (amountMinor > summary.availableMinor) return null;
-      const bankLabel =
-        application?.payoutBank ??
-        country.bankAccount.bankNameExamples.split(",")[0]?.trim() ??
-        "Bank";
-      const bankLast4 = application?.payoutAccountLast4 ?? "0000";
-      const req: PayoutRequest = {
-        id: makePayoutId(),
-        requestedAtIso: new Date().toISOString(),
-        amountMinor,
-        status: "pending",
-        bankLabel,
-        bankLast4,
-        reference: makePayoutReference(),
+    const data = query.data;
+    if (!data) {
+      return {
+        lifetimeGmvMinor: 0,
+        thisMonthGmvMinor: 0,
+        commissionMinor: 0,
+        netLifetimeMinor: 0,
+        pendingPayoutMinor: 0,
+        paidOutMinor: 0,
+        availableMinor: 0,
+        ordersTotal: 0,
+        ordersPending: 0,
+        payouts: [],
+        payoutThresholdMinor: 5000 * country.currency.minorPerMajor,
+        holdDays: 3,
       };
-      setPayouts((prev) => [req, ...prev]);
-      return req;
-    },
-    [
-      application?.payoutBank,
-      application?.payoutAccountLast4,
-      country.bankAccount.bankNameExamples,
-      summary.availableMinor,
-      setPayouts,
-    ],
-  );
+    }
+    return {
+      lifetimeGmvMinor: data.lifetimeGmvMinor,
+      thisMonthGmvMinor: data.thisMonthGmvMinor,
+      commissionMinor: data.commissionMinor,
+      netLifetimeMinor: data.netLifetimeMinor,
+      pendingPayoutMinor: data.pendingPayoutMinor,
+      paidOutMinor: data.paidOutMinor,
+      availableMinor: data.availableMinor,
+      ordersTotal: data.ordersTotal,
+      ordersPending: data.ordersPending,
+      payoutThresholdMinor: data.payoutThresholdMinor,
+      holdDays: data.holdDays,
+      payouts: (data.payouts ?? []).map((p) => ({
+        id: p.id,
+        requestedAtIso: p.requestedAtIso,
+        amountMinor: p.amountMinor,
+        status: p.status as PayoutRequest["status"],
+        bankLabel: p.bankLabel,
+        bankLast4: p.bankLast4,
+        reference: p.reference,
+        paidAtIso: p.paidAtIso ?? undefined,
+      })),
+    };
+  }, [query.data, country.currency.minorPerMajor]);
 
-  const markPayoutPaid = useCallback(
-    (id: string) => {
-      setPayouts((prev) =>
-        prev.map((p) =>
-          p.id === id
-            ? { ...p, status: "paid", paidAtIso: new Date().toISOString() }
-            : p,
-        ),
-      );
-    },
-    [setPayouts],
-  );
+  function requestPayout(amountMinor: number): PayoutRequest | null {
+    if (amountMinor <= 0 || amountMinor > summary.availableMinor) return null;
+    requestMut.mutate({ data: { amountMinor } });
+    return {
+      id: `tmp_${Date.now()}`,
+      requestedAtIso: new Date().toISOString(),
+      amountMinor,
+      status: "pending",
+      bankLabel: "Bank",
+      bankLast4: "0000",
+      reference: "PENDING",
+    };
+  }
+  function markPayoutPaid(id: string) {
+    markPaidMut.mutate({ payoutId: id });
+  }
 
   return { summary, requestPayout, markPayoutPaid };
 }

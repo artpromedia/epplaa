@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useMemo, ReactNode } from "react";
-import { useLocalStorage } from "./use-local-storage";
+import { useListReviews, useCreateReview } from "@workspace/api-client-react";
+import { useQueryClient } from "@tanstack/react-query";
 
 export interface Review {
   id: string;
@@ -24,52 +25,67 @@ interface ReviewsContextValue {
 
 const ReviewsContext = createContext<ReviewsContextValue | null>(null);
 
-function makeReviewId(): string {
-  return `rev_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
-}
-
 export function ReviewsProvider({ children }: { children: ReactNode }) {
-  const [reviews, setReviews] = useLocalStorage<Review[]>("epplaa-reviews", []);
+  const query = useListReviews();
+  const qc = useQueryClient();
+  const createMut = useCreateReview({
+    mutation: {
+      onSuccess: () => qc.invalidateQueries({ queryKey: ["/api/reviews"] }),
+    },
+  });
+
+  const reviews = useMemo<Review[]>(
+    () =>
+      (query.data ?? []).map((r) => ({
+        id: r.id,
+        orderId: r.orderId,
+        productId: r.productId,
+        sellerName: r.sellerName,
+        rating: r.rating,
+        text: r.text,
+        createdAtIso: r.createdAtIso,
+      })),
+    [query.data],
+  );
 
   const add = useCallback<ReviewsContextValue["add"]>(
     (input) => {
-      const review: Review = {
+      const optimistic: Review = {
         ...input,
-        id: makeReviewId(),
+        id: `tmp_${Date.now()}`,
         createdAtIso: new Date().toISOString(),
       };
-      setReviews((prev) => {
-        const filtered = prev.filter(
-          (r) => !(r.orderId === input.orderId && r.productId === input.productId),
-        );
-        return [review, ...filtered];
+      createMut.mutate({
+        data: {
+          orderId: input.orderId,
+          productId: input.productId,
+          sellerName: input.sellerName,
+          rating: input.rating,
+          text: input.text,
+        },
       });
-      return review;
+      return optimistic;
     },
-    [setReviews],
+    [createMut],
   );
 
-  const remove = useCallback(
-    (id: string) => setReviews((prev) => prev.filter((r) => r.id !== id)),
-    [setReviews],
-  );
+  // The API does not yet expose a delete endpoint; treat as a no-op so callers
+  // never crash. Future: wire to DELETE /reviews/{reviewId}.
+  const remove = useCallback((_id: string) => {}, []);
 
   const getForOrderItem = useCallback(
     (orderId: string, productId: string) =>
       reviews.find((r) => r.orderId === orderId && r.productId === productId),
     [reviews],
   );
-
   const getForProduct = useCallback(
     (productId: string) => reviews.filter((r) => r.productId === productId),
     [reviews],
   );
-
   const getForSeller = useCallback(
     (sellerName: string) => reviews.filter((r) => r.sellerName === sellerName),
     [reviews],
   );
-
   const averageForProduct = useCallback(
     (productId: string, fallback = 0) => {
       const list = reviews.filter((r) => r.productId === productId);
@@ -78,7 +94,6 @@ export function ReviewsProvider({ children }: { children: ReactNode }) {
     },
     [reviews],
   );
-
   const averageForSeller = useCallback(
     (sellerName: string, fallback = 0) => {
       const list = reviews.filter((r) => r.sellerName === sellerName);
@@ -102,9 +117,7 @@ export function ReviewsProvider({ children }: { children: ReactNode }) {
     [reviews, add, remove, getForOrderItem, getForProduct, getForSeller, averageForProduct, averageForSeller],
   );
 
-  return (
-    <ReviewsContext.Provider value={value}>{children}</ReviewsContext.Provider>
-  );
+  return <ReviewsContext.Provider value={value}>{children}</ReviewsContext.Provider>;
 }
 
 export function useReviews(): ReviewsContextValue {

@@ -1,5 +1,11 @@
 import { createContext, useCallback, useContext, useMemo, ReactNode } from "react";
-import { useLocalStorage } from "./use-local-storage";
+import {
+  useCancelOrder,
+  useListOrders,
+  usePlaceOrder,
+  type Order as ApiOrder,
+} from "@workspace/api-client-react";
+import { useQueryClient } from "@tanstack/react-query";
 import { CountryCode } from "./countries";
 
 export type OrderStatus =
@@ -64,12 +70,10 @@ export interface Order {
   totalsMinor: {
     subtotal: number;
     shipping: number;
-    // Optional promo discount split into the two buckets it can affect.
     discount?: number;
     shippingDiscount?: number;
     total: number;
   };
-  // Promo code that was redeemed (uppercased) plus its display label.
   promo?: {
     code: string;
     label: string;
@@ -80,37 +84,66 @@ export interface Order {
 
 interface OrdersContextValue {
   orders: Order[];
-  add: (order: Omit<Order, "id" | "createdAtIso">) => Order;
+  add: (order: Omit<Order, "id" | "createdAtIso">) => Promise<Order>;
   getById: (id: string) => Order | undefined;
-  cancel: (id: string) => void;
+  cancel: (id: string) => Promise<void>;
 }
 
 const OrdersContext = createContext<OrdersContextValue | null>(null);
-
-function makeOrderId(): string {
-  const ts = Date.now().toString(36).toUpperCase();
-  const rand = Math.random().toString(36).slice(2, 5).toUpperCase();
-  return `EP-${ts}${rand}`;
-}
 
 export function generateOTP(): string {
   return Math.floor(1000 + Math.random() * 9000).toString();
 }
 
+function fromApi(o: ApiOrder): Order {
+  return {
+    id: o.id,
+    createdAtIso: o.createdAtIso,
+    status: o.status as OrderStatus,
+    countryCode: o.countryCode as CountryCode,
+    currencyCode: o.currencyCode,
+    items: o.items as unknown as OrderItem[],
+    fulfillment: o.fulfillment as unknown as OrderFulfillment,
+    payment: o.payment as unknown as OrderPayment,
+    notificationPrefs: o.notificationPrefs as unknown as OrderNotificationPrefs,
+    totalsMinor: o.totalsMinor as unknown as Order["totalsMinor"],
+    promo: o.promo as unknown as Order["promo"] | undefined,
+    pickupOTP: o.pickupOtp ?? undefined,
+    etaLabel: o.etaLabel,
+  };
+}
+
 export function OrdersProvider({ children }: { children: ReactNode }) {
-  const [orders, setOrders] = useLocalStorage<Order[]>("epplaa-orders", []);
+  const ordersQuery = useListOrders();
+  const qc = useQueryClient();
+  const placeOrder = usePlaceOrder({
+    mutation: {
+      onSuccess: () => {
+        qc.invalidateQueries({ queryKey: ["/api/orders"] });
+        qc.invalidateQueries({ queryKey: ["/api/cart"] });
+        qc.invalidateQueries({ queryKey: ["/api/checkout-draft"] });
+      },
+    },
+  });
+  const cancelOrder = useCancelOrder({
+    mutation: {
+      onSuccess: () => qc.invalidateQueries({ queryKey: ["/api/orders"] }),
+    },
+  });
+
+  const orders = useMemo<Order[]>(
+    () => (ordersQuery.data ?? []).map(fromApi),
+    [ordersQuery.data],
+  );
 
   const add = useCallback<OrdersContextValue["add"]>(
-    (draft) => {
-      const order: Order = {
-        ...draft,
-        id: makeOrderId(),
-        createdAtIso: new Date().toISOString(),
-      };
-      setOrders((prev) => [order, ...prev]);
-      return order;
+    async (draft) => {
+      const result = await placeOrder.mutateAsync({
+        data: { ...draft } as Record<string, unknown>,
+      });
+      return fromApi(result);
     },
-    [setOrders],
+    [placeOrder],
   );
 
   const getById = useCallback(
@@ -118,12 +151,11 @@ export function OrdersProvider({ children }: { children: ReactNode }) {
     [orders],
   );
 
-  const cancel = useCallback(
-    (id: string) =>
-      setOrders((prev) =>
-        prev.map((o) => (o.id === id ? { ...o, status: "cancelled" } : o)),
-      ),
-    [setOrders],
+  const cancel = useCallback<OrdersContextValue["cancel"]>(
+    async (id) => {
+      await cancelOrder.mutateAsync({ orderId: id });
+    },
+    [cancelOrder],
   );
 
   const value = useMemo<OrdersContextValue>(
@@ -131,9 +163,7 @@ export function OrdersProvider({ children }: { children: ReactNode }) {
     [orders, add, getById, cancel],
   );
 
-  return (
-    <OrdersContext.Provider value={value}>{children}</OrdersContext.Provider>
-  );
+  return <OrdersContext.Provider value={value}>{children}</OrdersContext.Provider>;
 }
 
 export function useOrders(): OrdersContextValue {

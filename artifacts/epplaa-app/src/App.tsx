@@ -1,6 +1,7 @@
 import { Switch, Route, Router as WouterRouter } from "wouter";
 import { ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { ClerkProvider } from "@clerk/clerk-react";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import NotFound from "@/pages/not-found";
@@ -13,10 +14,13 @@ import { CheckoutProvider } from "@/lib/checkout-context";
 import { ReviewsProvider } from "@/lib/reviews-context";
 import { FollowsProvider } from "@/lib/follows-context";
 import { WishlistProvider } from "@/lib/wishlist-context";
-import { WalletProvider, useWallet } from "@/lib/wallet-context";
+import { WalletProvider } from "@/lib/wallet-context";
 import { ReturnsProvider } from "@/lib/returns-context";
 import { SafetyProvider } from "@/lib/safety-context";
 import { OnboardingProvider, useOnboarding } from "@/lib/onboarding-context";
+import { ApiAuthBridge } from "@/lib/auth-bridge";
+import "@/lib/api-init";
+import { AuthGate } from "@/components/auth/auth-gate";
 import { Layout } from "@/components/layout";
 
 import Discovery from "@/pages/discovery";
@@ -58,8 +62,14 @@ import SafetyHub from "@/pages/safety";
 import ReportPage from "@/pages/safety/report";
 import OnboardingWelcome from "@/pages/onboarding/welcome";
 import ReferralsHub from "@/pages/referrals";
+import SignInPage from "@/pages/auth/sign-in";
+import SignUpPage from "@/pages/auth/sign-up";
 
 const queryClient = new QueryClient();
+
+const CLERK_PUBLISHABLE_KEY = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY as
+  | string
+  | undefined;
 
 function Router() {
   return (
@@ -110,22 +120,6 @@ function Router() {
   );
 }
 
-// Bridges wallet refunds into the returns context so a refunded return auto
-// credits the wallet exactly once (using the return id as refId so the wallet
-// can dedupe).
-function ReturnsBridge({ children }: { children: ReactNode }) {
-  const { refundFromReturn } = useWallet();
-  return (
-    <ReturnsProvider
-      onRefund={(rec) =>
-        refundFromReturn(rec.id, rec.refundAmountMinor, `Refund ${rec.id}`)
-      }
-    >
-      {children}
-    </ReturnsProvider>
-  );
-}
-
 // Gates the buyer experience behind the welcome flow until completion.
 function OnboardingGate({ children }: { children: ReactNode }) {
   const { completed } = useOnboarding();
@@ -133,49 +127,78 @@ function OnboardingGate({ children }: { children: ReactNode }) {
   return <>{children}</>;
 }
 
-function App() {
+function ProtectedShell() {
   return (
-    <QueryClientProvider client={queryClient}>
-      <ThemeProvider defaultTheme="system" storageKey="epplaa-theme">
-        <CountryProvider>
-          <SellerProvider>
-            <OrdersProvider>
-              <ReviewsProvider>
-                <FollowsProvider>
-                  <WishlistProvider>
-                    <CartProvider>
-                      <CheckoutProvider>
-                        <WalletProvider>
-                          <ReturnsBridge>
-                            <SafetyProvider>
-                              <OnboardingProvider>
-                                <TooltipProvider>
-                                  <WouterRouter
-                                    base={import.meta.env.BASE_URL.replace(
-                                      /\/$/,
-                                      "",
-                                    )}
-                                  >
-                                    <OnboardingGate>
-                                      <Router />
-                                    </OnboardingGate>
-                                  </WouterRouter>
-                                  <Toaster />
-                                </TooltipProvider>
-                              </OnboardingProvider>
-                            </SafetyProvider>
-                          </ReturnsBridge>
-                        </WalletProvider>
-                      </CheckoutProvider>
-                    </CartProvider>
-                  </WishlistProvider>
-                </FollowsProvider>
-              </ReviewsProvider>
-            </OrdersProvider>
-          </SellerProvider>
-        </CountryProvider>
-      </ThemeProvider>
-    </QueryClientProvider>
+    <CountryProvider>
+      <SellerProvider>
+        <OrdersProvider>
+          <ReviewsProvider>
+            <FollowsProvider>
+              <WishlistProvider>
+                <CartProvider>
+                  <CheckoutProvider>
+                    <WalletProvider>
+                      <ReturnsProvider>
+                        <SafetyProvider>
+                          <OnboardingProvider>
+                            <OnboardingGate>
+                              <Router />
+                            </OnboardingGate>
+                          </OnboardingProvider>
+                        </SafetyProvider>
+                      </ReturnsProvider>
+                    </WalletProvider>
+                  </CheckoutProvider>
+                </CartProvider>
+              </WishlistProvider>
+            </FollowsProvider>
+          </ReviewsProvider>
+        </OrdersProvider>
+      </SellerProvider>
+    </CountryProvider>
+  );
+}
+
+function AppRoutes() {
+  return (
+    <Switch>
+      <Route path="/sign-in" component={SignInPage} />
+      <Route path="/sign-in/:rest*" component={SignInPage} />
+      <Route path="/sign-up" component={SignUpPage} />
+      <Route path="/sign-up/:rest*" component={SignUpPage} />
+      <Route>
+        <ProtectedShell />
+      </Route>
+    </Switch>
+  );
+}
+
+function App() {
+  if (!CLERK_PUBLISHABLE_KEY) {
+    return (
+      <div className="min-h-screen flex items-center justify-center p-6 text-center text-sm text-red-600">
+        Missing VITE_CLERK_PUBLISHABLE_KEY. Set it in environment to load
+        Epplaa.
+      </div>
+    );
+  }
+  const basePath = import.meta.env.BASE_URL.replace(/\/$/, "");
+  return (
+    <ClerkProvider publishableKey={CLERK_PUBLISHABLE_KEY}>
+      <QueryClientProvider client={queryClient}>
+        <ApiAuthBridge />
+        <ThemeProvider defaultTheme="system" storageKey="epplaa-theme">
+          <TooltipProvider>
+            <WouterRouter base={basePath}>
+              <AuthGate>
+                <AppRoutes />
+              </AuthGate>
+            </WouterRouter>
+            <Toaster />
+          </TooltipProvider>
+        </ThemeProvider>
+      </QueryClientProvider>
+    </ClerkProvider>
   );
 }
 

@@ -94,21 +94,23 @@ export default function RequestReturn() {
       toast({ title: "Add a short note", description: "Tell us what happened." });
       return;
     }
-    const created = request({
-      orderId: order!.id,
-      productTitle: order!.items[0]?.title ?? "Order item",
-      productImage: order!.items[0]?.image,
-      refundAmountMinor: refundMinor,
-      currencyCode: order!.currencyCode,
-      reason,
-      notes: notes.trim(),
-      photoCount,
-    });
-    toast({
-      title: "Return requested",
-      description: `We notified the seller. Reference ${created.id}.`,
-    });
-    navigate(`/returns/${created.id}`);
+    void (async () => {
+      const created = await request({
+        orderId: order!.id,
+        productTitle: order!.items[0]?.title ?? "Order item",
+        productImage: order!.items[0]?.image,
+        refundAmountMinor: refundMinor,
+        currencyCode: order!.currencyCode,
+        reason,
+        notes: notes.trim(),
+        photoCount,
+      });
+      toast({
+        title: "Return requested",
+        description: `We notified the seller. Reference ${created.id}.`,
+      });
+      navigate(`/returns/${created.id}`);
+    })();
   }
 
   return (

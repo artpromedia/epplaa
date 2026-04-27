@@ -10,7 +10,7 @@ import {
 } from "lucide-react";
 import { useTheme } from "@/lib/theme-context";
 import { useCountry } from "@/lib/country-context";
-import { useLocalStorage } from "@/lib/use-local-storage";
+import { useMeArray } from "@/lib/use-me-arrays";
 import { PageHeader } from "@/components/page-header";
 import { useToast } from "@/hooks/use-toast";
 
@@ -77,10 +77,7 @@ export default function PaymentMethods() {
   const isDark = resolvedTheme === "dark";
   const { country } = useCountry();
   const { toast } = useToast();
-  const [methods, setMethods] = useLocalStorage<SavedPaymentMethod[]>(
-    "epplaa-payment-methods",
-    [],
-  );
+  const [methods, setMethods] = useMeArray<SavedPaymentMethod>("paymentMethods");
 
   const [showForm, setShowForm] = useState(false);
   const [methodId, setMethodId] = useState<string>(country.paymentMethods[0]?.id ?? "");

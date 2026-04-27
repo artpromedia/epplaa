@@ -1,11 +1,12 @@
+import { createContext, ReactNode, useCallback, useContext, useMemo } from "react";
 import {
-  createContext,
-  ReactNode,
-  useCallback,
-  useContext,
-  useMemo,
-} from "react";
-import { useLocalStorage } from "./use-local-storage";
+  useListSafetyReports,
+  useListBlockedSellers,
+  useSubmitSafetyReport,
+  useBlockSeller,
+  useUnblockSeller,
+} from "@workspace/api-client-react";
+import { useQueryClient } from "@tanstack/react-query";
 
 export type ReportTargetKind = "product" | "stream" | "seller" | "message";
 
@@ -56,17 +57,15 @@ export interface BlockedSeller {
 interface SafetyContextValue {
   reports: SafetyReport[];
   blocked: BlockedSeller[];
-  submitReport: (
-    input: {
-      targetKind: ReportTargetKind;
-      targetId: string;
-      targetLabel: string;
-      reason: ReportReason;
-      notes?: string;
-      blockSeller?: boolean;
-      sellerName?: string;
-    },
-  ) => SafetyReport;
+  submitReport: (input: {
+    targetKind: ReportTargetKind;
+    targetId: string;
+    targetLabel: string;
+    reason: ReportReason;
+    notes?: string;
+    blockSeller?: boolean;
+    sellerName?: string;
+  }) => SafetyReport;
   blockSeller: (sellerName: string, reason?: ReportReason | "manual") => void;
   unblockSeller: (sellerName: string) => void;
   isBlocked: (sellerName: string) => boolean;
@@ -74,32 +73,52 @@ interface SafetyContextValue {
 }
 
 const SafetyContext = createContext<SafetyContextValue | null>(null);
-const REPORTS_KEY = "epplaa-safety-reports";
-const BLOCKED_KEY = "epplaa-safety-blocked";
 
 export function SafetyProvider({ children }: { children: ReactNode }) {
-  const [reports, setReports] = useLocalStorage<SafetyReport[]>(REPORTS_KEY, []);
-  const [blocked, setBlocked] = useLocalStorage<BlockedSeller[]>(BLOCKED_KEY, []);
+  const reportsQuery = useListSafetyReports();
+  const blockedQuery = useListBlockedSellers();
+  const qc = useQueryClient();
 
-  const blockSeller = useCallback(
-    (sellerName: string, reason: ReportReason | "manual" = "manual") => {
-      setBlocked((prev) =>
-        prev.some((b) => b.sellerName === sellerName)
-          ? prev
-          : [
-              ...prev,
-              { sellerName, reason, atIso: new Date().toISOString() },
-            ],
-      );
-    },
-    [setBlocked],
+  const invalidateReports = useCallback(
+    () => qc.invalidateQueries({ queryKey: ["/api/safety/reports"] }),
+    [qc],
+  );
+  const invalidateBlocked = useCallback(
+    () => qc.invalidateQueries({ queryKey: ["/api/safety/blocked"] }),
+    [qc],
   );
 
-  const unblockSeller = useCallback(
-    (sellerName: string) => {
-      setBlocked((prev) => prev.filter((b) => b.sellerName !== sellerName));
-    },
-    [setBlocked],
+  const submitMut = useSubmitSafetyReport({
+    mutation: { onSuccess: () => { invalidateReports(); invalidateBlocked(); } },
+  });
+  const blockMut = useBlockSeller({ mutation: { onSuccess: invalidateBlocked } });
+  const unblockMut = useUnblockSeller({ mutation: { onSuccess: invalidateBlocked } });
+
+  const reports = useMemo<SafetyReport[]>(
+    () =>
+      (reportsQuery.data ?? []).map((r) => ({
+        id: r.id,
+        targetKind: r.targetKind as ReportTargetKind,
+        targetId: r.targetId,
+        targetLabel: r.targetLabel,
+        reason: r.reason as ReportReason,
+        notes: r.notes,
+        status: r.status as ReportStatus,
+        createdAtIso: r.createdAtIso,
+        updatedAtIso: r.updatedAtIso,
+        blockedAtSubmit: r.blockedAtSubmit,
+      })),
+    [reportsQuery.data],
+  );
+
+  const blocked = useMemo<BlockedSeller[]>(
+    () =>
+      (blockedQuery.data ?? []).map((b) => ({
+        sellerName: b.sellerName,
+        reason: b.reason as ReportReason | "manual",
+        atIso: b.atIso,
+      })),
+    [blockedQuery.data],
   );
 
   const isBlocked = useCallback(
@@ -107,11 +126,34 @@ export function SafetyProvider({ children }: { children: ReactNode }) {
     [blocked],
   );
 
+  const blockSeller = useCallback(
+    (sellerName: string, reason: ReportReason | "manual" = "manual") => {
+      blockMut.mutate({ data: { sellerName, reason } });
+    },
+    [blockMut],
+  );
+
+  const unblockSeller = useCallback(
+    (sellerName: string) => unblockMut.mutate({ sellerName }),
+    [unblockMut],
+  );
+
   const submitReport = useCallback<SafetyContextValue["submitReport"]>(
     ({ targetKind, targetId, targetLabel, reason, notes = "", blockSeller: blockOnSubmit = false, sellerName }) => {
+      submitMut.mutate({
+        data: {
+          targetKind,
+          targetId,
+          targetLabel,
+          reason,
+          notes,
+          blockSeller: blockOnSubmit,
+          ...(sellerName ? { sellerName } : {}),
+        },
+      });
       const now = new Date().toISOString();
-      const report: SafetyReport = {
-        id: `rep-${Math.random().toString(36).slice(2, 8).toUpperCase()}`,
+      return {
+        id: `tmp-${Math.random().toString(36).slice(2, 8).toUpperCase()}`,
         targetKind,
         targetId,
         targetLabel,
@@ -122,29 +164,13 @@ export function SafetyProvider({ children }: { children: ReactNode }) {
         updatedAtIso: now,
         blockedAtSubmit: blockOnSubmit,
       };
-      setReports((prev) => [report, ...prev]);
-      if (blockOnSubmit && sellerName) {
-        blockSeller(sellerName, reason);
-      }
-      // Synth: simulate review escalation after a tick by writing in_review state.
-      setTimeout(() => {
-        setReports((prev) =>
-          prev.map((r) =>
-            r.id === report.id
-              ? { ...r, status: "in_review", updatedAtIso: new Date().toISOString() }
-              : r,
-          ),
-        );
-      }, 1500);
-      return report;
     },
-    [setReports, blockSeller],
+    [submitMut],
   );
 
   const reset = useCallback(() => {
-    setReports([]);
-    setBlocked([]);
-  }, [setReports, setBlocked]);
+    blocked.forEach((b) => unblockMut.mutate({ sellerName: b.sellerName }));
+  }, [blocked, unblockMut]);
 
   const value = useMemo<SafetyContextValue>(
     () => ({
