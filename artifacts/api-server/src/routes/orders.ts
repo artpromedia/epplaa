@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { eq, and, desc } from "drizzle-orm";
+import { eq, and, desc, inArray } from "drizzle-orm";
 import { db, schema } from "../lib/db";
 import { requireUserId } from "../lib/auth";
 import { newOrderId, newOtp } from "../lib/ids";
@@ -15,8 +15,16 @@ const PICKUP_OPTION_IDS = new Set([
   "epplaa-box-abj", "pickup-ci",
 ]);
 
-/** Pay-on-delivery (cash) is only allowed at Box / pickup points. */
-const COD_PAYMENT_METHOD_ID = "cod";
+/**
+ * Pay-on-collection (cash) is only allowed at Box / pickup points. The
+ * frontend country catalog uses country-suffixed IDs ("cod-ke", "cod-za",
+ * "cod-ug", "cod-rw", "cod-et") for clarity; Nigeria still uses bare "cod"
+ * for backwards compatibility. Recognize all variants here.
+ */
+function isCodMethodId(id: string | undefined): boolean {
+  if (!id) return false;
+  return id === "cod" || id.startsWith("cod-");
+}
 
 function rowToOrder(r: typeof schema.ordersTable.$inferSelect) {
   return {
@@ -92,8 +100,10 @@ router.post("/orders", async (req, res) => {
   const countryCode = String(body.countryCode ?? "NG");
   const currencyCode = String(body.currencyCode ?? "NGN");
 
+  const isCod = isCodMethodId(payment.methodId);
+
   // Reject pay-on-delivery for non-pickup options.
-  if (payment.methodId === COD_PAYMENT_METHOD_ID && !isPickup) {
+  if (isCod && !isPickup) {
     res.status(400).json({ error: "cod_not_allowed", detail: "Pay on collection is only available for Box/PUDO pickups." });
     return;
   }
@@ -105,9 +115,50 @@ router.post("/orders", async (req, res) => {
   const discount = Number(totalsRaw.discount ?? 0);
   const shippingDiscount = Number(totalsRaw.shippingDiscount ?? 0);
   const vatRateBp = await getVatRateBp(countryCode);
-  // VAT applies to the taxable subtotal AFTER discounts (commerce convention).
+
+  // VAT applies only to line items sold by VAT-registered sellers.
+  // Look up the seller for each item, check their `vatRegistered` flag, and
+  // build the VAT-eligible subtotal. Shipping / discounts are apportioned
+  // pro-rata to the VAT-eligible share so VAT reflects only the registered
+  // portion of the order.
+  const items = (body.items as Array<{ productId?: string; priceMinor?: number; qty?: number }> | undefined) ?? [];
+  const productIds = Array.from(new Set(items.map((it) => String(it.productId ?? "")).filter(Boolean)));
+  let vatEligibleSubtotal = 0;
+  if (productIds.length > 0 && vatRateBp > 0) {
+    const productRows = await db
+      .select({ id: schema.productsTable.id, sellerUserId: schema.productsTable.sellerUserId })
+      .from(schema.productsTable)
+      .where(inArray(schema.productsTable.id, productIds));
+    const productSellerMap = new Map<string, string | null>(
+      productRows.map((p) => [p.id, p.sellerUserId]),
+    );
+    const sellerIds = Array.from(
+      new Set(productRows.map((p) => p.sellerUserId).filter((s): s is string => !!s)),
+    );
+    let vatRegisteredSellers = new Set<string>();
+    if (sellerIds.length > 0) {
+      const sellerRows = await db
+        .select({ userId: schema.sellersTable.userId, vatRegistered: schema.sellersTable.vatRegistered })
+        .from(schema.sellersTable)
+        .where(inArray(schema.sellersTable.userId, sellerIds));
+      vatRegisteredSellers = new Set(
+        sellerRows.filter((s) => s.vatRegistered).map((s) => s.userId),
+      );
+    }
+    for (const it of items) {
+      const sellerId = productSellerMap.get(String(it.productId ?? ""));
+      if (sellerId && vatRegisteredSellers.has(sellerId)) {
+        vatEligibleSubtotal += Number(it.priceMinor ?? 0) * Number(it.qty ?? 0);
+      }
+    }
+  }
+  const vatShare = subtotal > 0 ? vatEligibleSubtotal / subtotal : 0;
+  const vatTaxable = Math.max(
+    0,
+    vatEligibleSubtotal + (shipping - discount - shippingDiscount) * vatShare,
+  );
+  const vatMinor = computeVatMinor(Math.round(vatTaxable), vatRateBp);
   const taxable = Math.max(0, subtotal + shipping - discount - shippingDiscount);
-  const vatMinor = computeVatMinor(taxable, vatRateBp);
   const total = taxable + vatMinor;
 
   const totalsMinor = {
@@ -140,7 +191,6 @@ router.post("/orders", async (req, res) => {
     })
     .returning();
 
-  const isCod = payment.methodId === COD_PAYMENT_METHOD_ID;
   // Web app and API server share the same proxy host, so this resolves to
   // the public origin the gateway should redirect back to.
   const appOrigin = `${req.protocol}://${req.get("host")}`;

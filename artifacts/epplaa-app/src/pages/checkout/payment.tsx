@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { useTheme } from "@/lib/theme-context";
 import { useCountry } from "@/lib/country-context";
+import { isCodMethodId, isPickupOptionId } from "@/lib/countries";
 import { useCheckout } from "@/lib/checkout-context";
 import { useNotificationPrefs } from "@/lib/notification-prefs";
 import { Switch } from "@/components/ui/switch";
@@ -87,7 +88,17 @@ export default function CheckoutPayment() {
             How will you pay?
           </h3>
           <div className="space-y-2">
-            {country.paymentMethods.map((pm) => {
+            {country.paymentMethods
+              .filter((pm) => {
+                // Pay-on-collection (cash) is only valid at pickup points; hide
+                // it for door-delivery and other non-pickup fulfillment options
+                // so users can't pick a method the order endpoint will reject.
+                if (isCodMethodId(pm.id) && !isPickupOptionId(draft.fulfillmentOptionId)) {
+                  return false;
+                }
+                return true;
+              })
+              .map((pm) => {
               const Icon = iconFor(pm.iconKey);
               const isPicked = picked === pm.id;
               return (

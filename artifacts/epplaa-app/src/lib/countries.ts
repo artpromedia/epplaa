@@ -86,6 +86,29 @@ export interface Country {
   vatRateBp?: number;
 }
 
+/**
+ * True if a fulfillment option corresponds to a pickup point (Box / locker /
+ * PUDO partner / pickup branch). Pay-on-collection (COD) is only allowed for
+ * pickup options because the courier never holds cash. Naming convention
+ * across our country catalog: pickup IDs include "box" or end in "-pickup",
+ * plus the discrete cases below ("pudo", "pargo-locker").
+ */
+export function isPickupOptionId(optionId: string | undefined): boolean {
+  if (!optionId) return false;
+  if (optionId === "pudo") return true;
+  if (optionId === "pargo-locker") return true;
+  if (optionId.includes("box")) return true; // epplaa-box, epplaa-box-accra, ...
+  if (optionId.endsWith("-pickup")) return true; // speedaf-pickup, g4s-pickup, paxi-pickup, pickup-ci
+  if (optionId.startsWith("pickup-")) return true; // pickup-ci
+  return false;
+}
+
+/** True for any pay-on-collection method id (cod, cod-ke, cod-za, ...). */
+export function isCodMethodId(id: string | undefined): boolean {
+  if (!id) return false;
+  return id === "cod" || id.startsWith("cod-");
+}
+
 export const COUNTRIES: Record<CountryCode, Country> = {
   NG: {
     code: "NG",

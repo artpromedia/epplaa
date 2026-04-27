@@ -165,23 +165,35 @@ export default function WalletPage() {
               <h3 className="text-lg font-bold">Top up wallet</h3>
             </div>
             <p className={`text-xs mb-3 ${subtle}`}>
-              Funds load instantly in this preview. Real top-ups debit your
-              chosen payment method.
+              You'll be redirected to your bank or mobile-money provider to
+              complete payment. Your wallet balance updates once the payment
+              is confirmed.
             </p>
             <div className="grid grid-cols-2 gap-2">
               {TOPUP_AMOUNTS.map((amt) => (
                 <button
                   key={amt}
-                  onClick={() => {
-                    topUp(amt * country.currency.minorPerMajor, `Top up ${amt}`);
+                  onClick={async () => {
+                    setShowTopUp(false);
                     toast({
-                      title: "Wallet topped up",
-                      description: formatPrice(
+                      title: "Redirecting to payment",
+                      description: `${formatPrice(
                         amt * country.currency.minorPerMajor,
                         currencyCode,
-                      ),
+                      )} — your wallet will update after the gateway confirms.`,
                     });
-                    setShowTopUp(false);
+                    const pending = await topUp(
+                      amt * country.currency.minorPerMajor,
+                      `Top up ${amt}`,
+                    );
+                    if (!pending?.authorizationUrl) {
+                      toast({
+                        title: "Top-up could not start",
+                        description:
+                          "We couldn't reach the payment gateway. Please try again.",
+                        variant: "destructive",
+                      });
+                    }
                   }}
                   data-testid={`topup-${amt}`}
                   className={`px-3 py-3 rounded-xl border text-sm font-bold ${
