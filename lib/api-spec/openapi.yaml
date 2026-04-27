@@ -509,11 +509,13 @@ paths:
           application/json:
             schema:
               type: object
-              required: [amountMinor, destinationLabel]
+              required: [amountMinor, destinationLabel, bankCode, bankAccount]
               properties:
                 amountMinor: { type: integer }
                 destinationLabel: { type: string }
                 bankCode: { type: string }
+                bankAccount: { type: string, description: "Full destination account number (digits only)." }
+                bankAccountName: { type: string }
                 bankLast4: { type: string }
       responses:
         "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/WalletWithdrawResponse" } } } }

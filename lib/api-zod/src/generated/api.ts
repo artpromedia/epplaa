@@ -602,7 +602,11 @@ export const WalletSpendResponse = zod.object({
 export const WalletWithdrawBody = zod.object({
   amountMinor: zod.number(),
   destinationLabel: zod.string(),
-  bankCode: zod.string().optional(),
+  bankCode: zod.string(),
+  bankAccount: zod
+    .string()
+    .describe("Full destination account number (digits only)."),
+  bankAccountName: zod.string().optional(),
   bankLast4: zod.string().optional(),
 });
 
@@ -627,27 +631,6 @@ export const WalletWithdrawResponse = zod.object({
       status: zod.string(),
     })
     .optional(),
-});
-
-export const WalletPromoCreditBody = zod.object({
-  amountMinor: zod.number(),
-  label: zod.string(),
-  refId: zod.string().optional(),
-});
-
-export const WalletPromoCreditResponse = zod.object({
-  balanceMinor: zod.number(),
-  currencyCode: zod.string(),
-  txns: zod.array(
-    zod.object({
-      id: zod.string(),
-      kind: zod.string(),
-      amountMinor: zod.number(),
-      label: zod.string(),
-      refId: zod.string().nullish(),
-      atIso: zod.string(),
-    }),
-  ),
 });
 
 export const WalletRefundBody = zod.object({

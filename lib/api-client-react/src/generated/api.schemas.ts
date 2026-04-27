@@ -611,14 +611,11 @@ export type WalletSpendBody = {
 export type WalletWithdrawBody = {
   amountMinor: number;
   destinationLabel: string;
-  bankCode?: string;
+  bankCode: string;
+  /** Full destination account number (digits only). */
+  bankAccount: string;
+  bankAccountName?: string;
   bankLast4?: string;
-};
-
-export type WalletPromoCreditBody = {
-  amountMinor: number;
-  label: string;
-  refId?: string;
 };
 
 export type WalletRefundBody = {

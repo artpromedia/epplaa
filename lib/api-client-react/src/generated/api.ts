@@ -78,7 +78,6 @@ import type {
   UpgradeSellerTierBody,
   User,
   Wallet,
-  WalletPromoCreditBody,
   WalletRefundBody,
   WalletSpendBody,
   WalletTopUpBody,
@@ -3198,86 +3197,6 @@ export const useWalletWithdraw = <
   TContext
 > => {
   return useMutation(getWalletWithdrawMutationOptions(options));
-};
-
-export const getWalletPromoCreditUrl = () => {
-  return `/api/wallet/promo-credit`;
-};
-
-export const walletPromoCredit = async (
-  walletPromoCreditBody: WalletPromoCreditBody,
-  options?: RequestInit,
-): Promise<Wallet> => {
-  return customFetch<Wallet>(getWalletPromoCreditUrl(), {
-    ...options,
-    method: "POST",
-    headers: { "Content-Type": "application/json", ...options?.headers },
-    body: JSON.stringify(walletPromoCreditBody),
-  });
-};
-
-export const getWalletPromoCreditMutationOptions = <
-  TError = ErrorType<UnauthorizedResponse>,
-  TContext = unknown,
->(options?: {
-  mutation?: UseMutationOptions<
-    Awaited<ReturnType<typeof walletPromoCredit>>,
-    TError,
-    { data: BodyType<WalletPromoCreditBody> },
-    TContext
-  >;
-  request?: SecondParameter<typeof customFetch>;
-}): UseMutationOptions<
-  Awaited<ReturnType<typeof walletPromoCredit>>,
-  TError,
-  { data: BodyType<WalletPromoCreditBody> },
-  TContext
-> => {
-  const mutationKey = ["walletPromoCredit"];
-  const { mutation: mutationOptions, request: requestOptions } = options
-    ? options.mutation &&
-      "mutationKey" in options.mutation &&
-      options.mutation.mutationKey
-      ? options
-      : { ...options, mutation: { ...options.mutation, mutationKey } }
-    : { mutation: { mutationKey }, request: undefined };
-
-  const mutationFn: MutationFunction<
-    Awaited<ReturnType<typeof walletPromoCredit>>,
-    { data: BodyType<WalletPromoCreditBody> }
-  > = (props) => {
-    const { data } = props ?? {};
-
-    return walletPromoCredit(data, requestOptions);
-  };
-
-  return { mutationFn, ...mutationOptions };
-};
-
-export type WalletPromoCreditMutationResult = NonNullable<
-  Awaited<ReturnType<typeof walletPromoCredit>>
->;
-export type WalletPromoCreditMutationBody = BodyType<WalletPromoCreditBody>;
-export type WalletPromoCreditMutationError = ErrorType<UnauthorizedResponse>;
-
-export const useWalletPromoCredit = <
-  TError = ErrorType<UnauthorizedResponse>,
-  TContext = unknown,
->(options?: {
-  mutation?: UseMutationOptions<
-    Awaited<ReturnType<typeof walletPromoCredit>>,
-    TError,
-    { data: BodyType<WalletPromoCreditBody> },
-    TContext
-  >;
-  request?: SecondParameter<typeof customFetch>;
-}): UseMutationResult<
-  Awaited<ReturnType<typeof walletPromoCredit>>,
-  TError,
-  { data: BodyType<WalletPromoCreditBody> },
-  TContext
-> => {
-  return useMutation(getWalletPromoCreditMutationOptions(options));
 };
 
 export const getWalletRefundUrl = () => {

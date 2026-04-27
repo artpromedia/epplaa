@@ -28,6 +28,9 @@ export default function WalletPage() {
   const [showTopUp, setShowTopUp] = useState(false);
   const [showWithdraw, setShowWithdraw] = useState(false);
   const [withdrawAmount, setWithdrawAmount] = useState("");
+  const [withdrawBankCode, setWithdrawBankCode] = useState("");
+  const [withdrawBankAccount, setWithdrawBankAccount] = useState("");
+  const [withdrawAccountName, setWithdrawAccountName] = useState("");
 
   const subtle = isDark ? "text-white/50" : "text-stone-500";
   const cardClass = isDark
@@ -221,29 +224,75 @@ export default function WalletPage() {
               <h3 className="text-lg font-bold">Withdraw to bank</h3>
             </div>
             <p className={`text-xs mb-3 ${subtle}`}>
-              Goes to the saved payout bank in your account. Arrives in under 60
-              minutes for verified accounts.
+              Enter the destination bank account. Arrives in under 60 minutes
+              for verified accounts.
             </p>
-            <input
-              value={withdrawAmount}
-              onChange={(e) =>
-                setWithdrawAmount(e.target.value.replace(/\D/g, ""))
-              }
-              inputMode="numeric"
-              placeholder={`Amount in ${currencyCode}`}
-              data-testid="input-withdraw-amount"
-              className={`w-full px-3 py-2 rounded-lg border text-sm ${
+            {(() => {
+              const inputCls = `w-full px-3 py-2 rounded-lg border text-sm ${
                 isDark
                   ? "bg-black/40 border-white/10 text-white"
                   : "bg-white border-stone-300 text-stone-900"
-              }`}
-            />
+              }`;
+              return (
+                <div className="space-y-2">
+                  <input
+                    value={withdrawAmount}
+                    onChange={(e) =>
+                      setWithdrawAmount(e.target.value.replace(/\D/g, ""))
+                    }
+                    inputMode="numeric"
+                    placeholder={`Amount in ${currencyCode}`}
+                    data-testid="input-withdraw-amount"
+                    className={inputCls}
+                  />
+                  <input
+                    value={withdrawBankCode}
+                    onChange={(e) => setWithdrawBankCode(e.target.value.trim())}
+                    placeholder="Bank code (e.g. 044 for Access)"
+                    data-testid="input-withdraw-bank-code"
+                    className={inputCls}
+                  />
+                  <input
+                    value={withdrawBankAccount}
+                    onChange={(e) =>
+                      setWithdrawBankAccount(e.target.value.replace(/\D/g, ""))
+                    }
+                    inputMode="numeric"
+                    placeholder="Account number"
+                    data-testid="input-withdraw-account"
+                    className={inputCls}
+                  />
+                  <input
+                    value={withdrawAccountName}
+                    onChange={(e) => setWithdrawAccountName(e.target.value)}
+                    placeholder="Account holder name"
+                    data-testid="input-withdraw-account-name"
+                    className={inputCls}
+                  />
+                </div>
+              );
+            })()}
             <button
               onClick={() => {
                 const major = Number(withdrawAmount || "0");
                 if (!major) return;
+                if (!withdrawBankCode || !/^\d{6,20}$/.test(withdrawBankAccount)) {
+                  toast({
+                    title: "Bank details required",
+                    description: "Enter the bank code and full account number.",
+                  });
+                  return;
+                }
                 const minor = major * country.currency.minorPerMajor;
-                if (!withdraw(minor, "GTBank ••3210")) {
+                const last4 = withdrawBankAccount.slice(-4);
+                if (
+                  !withdraw(minor, {
+                    destinationLabel: `Bank ${withdrawBankCode} ••${last4}`,
+                    bankCode: withdrawBankCode,
+                    bankAccount: withdrawBankAccount,
+                    bankAccountName: withdrawAccountName,
+                  })
+                ) {
                   toast({
                     title: "Not enough balance",
                     description: "Top up first or pick a smaller amount.",
@@ -252,9 +301,12 @@ export default function WalletPage() {
                 }
                 toast({
                   title: "Withdrawal sent",
-                  description: `${formatPrice(minor, currencyCode)} to GTBank ••3210`,
+                  description: `${formatPrice(minor, currencyCode)} to bank ••${last4}`,
                 });
                 setWithdrawAmount("");
+                setWithdrawBankCode("");
+                setWithdrawBankAccount("");
+                setWithdrawAccountName("");
                 setShowWithdraw(false);
               }}
               data-testid="button-confirm-withdraw"

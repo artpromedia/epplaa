@@ -616,11 +616,19 @@ export async function processDuePayouts(): Promise<{ processed: number; failed: 
   let processed = 0;
   let failed = 0;
   for (const payout of due) {
-    const seller = await loadSellerForUser(payout.userId);
-    const application = (seller?.application as { bankCode?: string; bankAccount?: string; bankName?: string } | null) ?? null;
-    const bankCode = application?.bankCode ?? payout.bankCode ?? "";
-    const accountNumber = application?.bankAccount ?? "";
-    const accountName = application?.bankName ?? "Epplaa Seller";
+    // Wallet withdrawals carry the destination on the payout row itself
+    // (non-seller users have no `sellers.application`). Seller- and
+    // manufacturer-share payouts still resolve from the seller profile.
+    const seller =
+      payout.kind === "wallet_withdrawal" ? null : await loadSellerForUser(payout.userId);
+    const application =
+      (seller?.application as { bankCode?: string; bankAccount?: string; bankName?: string } | null) ?? null;
+    const bankCode = (payout.bankCode || application?.bankCode || "").trim();
+    const accountNumber = ((payout as { bankAccount?: string }).bankAccount || application?.bankAccount || "").trim();
+    const accountName =
+      (payout as { bankAccountName?: string }).bankAccountName?.trim() ||
+      application?.bankName ||
+      "Epplaa Seller";
     if (!bankCode || !accountNumber) {
       // Mark as scheduled — finance can complete manually.
       await db

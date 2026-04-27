@@ -11,7 +11,6 @@ import {
   useWalletSpend,
   useWalletWithdraw,
   useWalletRefund,
-  useWalletPromoCredit,
   useUpdateWalletSettings,
 } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -41,19 +40,25 @@ export interface PendingTopup {
   status: string;
 }
 
+export interface WithdrawDestination {
+  destinationLabel: string;
+  bankCode: string;
+  bankAccount: string;
+  bankAccountName?: string;
+}
+
 interface WalletContextValue {
   balanceMinor: number;
   currencyCode: string;
   txns: WalletTxn[];
   topUp: (amountMinor: number, label?: string) => Promise<PendingTopup | null>;
   spend: (amountMinor: number, label: string, refId?: string) => boolean;
-  creditPromo: (amountMinor: number, label: string, refId?: string) => void;
   refundFromReturn: (
     returnId: string,
     amountMinor: number,
     label: string,
   ) => void;
-  withdraw: (amountMinor: number, destinationLabel: string) => boolean;
+  withdraw: (amountMinor: number, destination: WithdrawDestination) => boolean;
   resetWallet: () => void;
 }
 
@@ -71,7 +76,6 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   const spendMut = useWalletSpend({ mutation: { onSuccess: invalidate } });
   const withdrawMut = useWalletWithdraw({ mutation: { onSuccess: invalidate } });
   const refundMut = useWalletRefund({ mutation: { onSuccess: invalidate } });
-  const promoMut = useWalletPromoCredit({ mutation: { onSuccess: invalidate } });
   const settingsMut = useUpdateWalletSettings({ mutation: { onSuccess: invalidate } });
 
   const balanceMinor = walletQuery.data?.balanceMinor ?? 0;
@@ -102,14 +106,6 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     [topUpMut],
   );
 
-  const creditPromo = useCallback<WalletContextValue["creditPromo"]>(
-    (amountMinor, label, refId) => {
-      if (amountMinor <= 0 || !label) return;
-      promoMut.mutate({ data: { amountMinor, label, ...(refId ? { refId } : {}) } });
-    },
-    [promoMut],
-  );
-
   const spend = useCallback<WalletContextValue["spend"]>(
     (amountMinor, label, refId) => {
       if (amountMinor <= 0) return false;
@@ -121,10 +117,19 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   );
 
   const withdraw = useCallback<WalletContextValue["withdraw"]>(
-    (amountMinor, destinationLabel) => {
+    (amountMinor, destination) => {
       if (amountMinor <= 0) return false;
       if (balanceMinor < amountMinor) return false;
-      withdrawMut.mutate({ data: { amountMinor, destinationLabel } });
+      if (!destination?.bankCode || !destination?.bankAccount) return false;
+      withdrawMut.mutate({
+        data: {
+          amountMinor,
+          destinationLabel: destination.destinationLabel,
+          bankCode: destination.bankCode,
+          bankAccount: destination.bankAccount,
+          ...(destination.bankAccountName ? { bankAccountName: destination.bankAccountName } : {}),
+        },
+      });
       return true;
     },
     [balanceMinor, withdrawMut],
@@ -149,7 +154,6 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       txns,
       topUp,
       spend,
-      creditPromo,
       refundFromReturn,
       withdraw,
       resetWallet,
@@ -160,7 +164,6 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       txns,
       topUp,
       spend,
-      creditPromo,
       refundFromReturn,
       withdraw,
       resetWallet,

@@ -10,7 +10,6 @@ import {
 } from "lucide-react";
 import { useTheme } from "@/lib/theme-context";
 import { useCountry } from "@/lib/country-context";
-import { useWallet } from "@/lib/wallet-context";
 import {
   REFERRAL_REWARDS,
   SEED_REFERRAL_ACTIVITY,
@@ -26,7 +25,6 @@ export default function ReferralsHub() {
   const { resolvedTheme } = useTheme();
   const isDark = resolvedTheme === "dark";
   const { country } = useCountry();
-  const { creditPromo } = useWallet();
   const { toast } = useToast();
 
   const referralsQuery = useGetMyReferrals();
@@ -75,17 +73,6 @@ export default function ReferralsHub() {
         description: "Paste it in WhatsApp, X, or anywhere.",
       });
     }
-  }
-
-  function claimDemoCredit() {
-    creditPromo(
-      REFERRAL_REWARDS.firstPurchaseMinor,
-      "Friend joined with your code",
-    );
-    toast({
-      title: "Wallet credited",
-      description: `+${formatPrice(REFERRAL_REWARDS.firstPurchaseMinor, country.currency.code)}`,
-    });
   }
 
   return (
@@ -223,19 +210,6 @@ export default function ReferralsHub() {
             ))}
           </div>
         </div>
-
-        <button
-          onClick={claimDemoCredit}
-          data-testid="button-demo-credit"
-          className={`w-full rounded-xl border-dashed border-2 p-3 flex items-center justify-center gap-2 text-xs font-bold ${
-            isDark
-              ? "border-white/15 text-white/60"
-              : "border-stone-300 text-stone-500"
-          }`}
-        >
-          <Sparkles className="w-3.5 h-3.5" />
-          Simulate a friend ordering (credits your wallet)
-        </button>
 
         <p className={`text-xs leading-relaxed ${subtle}`}>
           Capped at{" "}

@@ -23,6 +23,15 @@ export const payoutsTable = pgTable("payouts", {
   bankLabel: text("bank_label").notNull().default(""),
   bankCode: text("bank_code").notNull().default(""),
   bankLast4: text("bank_last4").notNull().default("0000"),
+  /**
+   * Full destination account number for wallet withdrawals. Required by the
+   * payout gateway; stored here because non-seller users have no
+   * `sellers.application` row to read from. Empty string for seller-share /
+   * manufacturer-share payouts (those resolve via the seller's bank profile).
+   */
+  bankAccount: text("bank_account").notNull().default(""),
+  /** Account holder name (defaults to "Epplaa Seller" when missing). */
+  bankAccountName: text("bank_account_name").notNull().default(""),
   reference: text("reference").notNull().default(""),
   /** Hold release time — funds cannot be paid out before this. */
   holdUntil: timestamp("hold_until", { withTimezone: true }),

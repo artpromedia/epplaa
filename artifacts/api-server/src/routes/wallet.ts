@@ -4,7 +4,7 @@ import { db, schema } from "../lib/db";
 import { requireUserId } from "../lib/auth";
 import { newWalletTxnId, newPayoutId, newPayoutReference } from "../lib/ids";
 import { ensureWalletBootstrapped, getWalletState } from "../lib/wallet";
-import { createPaymentIntent } from "../lib/payments";
+import { createPaymentIntent, gatewayRouter } from "../lib/payments";
 import { logger } from "../lib/logger";
 
 const router: IRouter = Router();
@@ -101,11 +101,22 @@ router.post("/wallet/withdraw", async (req, res) => {
     amountMinor?: number;
     destinationLabel?: string;
     bankCode?: string;
+    bankAccount?: string;
+    bankAccountName?: string;
     bankLast4?: string;
   };
   const amount = Number(body.amountMinor ?? 0);
+  const bankCode = (body.bankCode ?? "").trim();
+  const bankAccount = (body.bankAccount ?? "").trim();
   if (amount <= 0 || !body.destinationLabel) {
     res.status(400).json({ error: "bad_request" });
+    return;
+  }
+  // We must capture the destination account up-front. Without it the payouts
+  // cron has no way to execute the transfer and the user's funds would be
+  // debited but never sent.
+  if (!bankCode || !bankAccount || !/^\d{6,20}$/.test(bankAccount)) {
+    res.status(400).json({ error: "bad_request", detail: "missing_bank_details" });
     return;
   }
   if (state.balanceMinor < amount) {
@@ -114,6 +125,10 @@ router.post("/wallet/withdraw", async (req, res) => {
   }
   const payoutId = newPayoutId();
   const reference = newPayoutReference();
+  // Pick the configured live primary; falls back to dev-mock when no
+  // gateway is configured. Honors the circuit-breaker / failover policy.
+  const gatewayName = await gatewayRouter.pickPrimaryName();
+  const last4 = body.bankLast4 ?? bankAccount.slice(-4);
   await db.insert(schema.payoutsTable).values({
     id: payoutId,
     userId,
@@ -123,11 +138,13 @@ router.post("/wallet/withdraw", async (req, res) => {
     status: "pending",
     kind: "wallet_withdrawal",
     bankLabel: body.destinationLabel,
-    bankCode: body.bankCode ?? "",
-    bankLast4: body.bankLast4 ?? "0000",
+    bankCode,
+    bankAccount,
+    bankAccountName: body.bankAccountName?.trim() || "Epplaa User",
+    bankLast4: last4,
     reference,
     holdUntil: new Date(),
-    gateway: "paystack",
+    gateway: gatewayName,
   });
   await db.insert(schema.walletTxnsTable).values({
     id: newWalletTxnId(),
