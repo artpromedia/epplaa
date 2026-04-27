@@ -519,24 +519,6 @@ paths:
         "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/WalletWithdrawResponse" } } } }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
-  /wallet/promo-credit:
-    post:
-      operationId: walletPromoCredit
-      tags: [wallet]
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [amountMinor, label]
-              properties:
-                amountMinor: { type: integer }
-                label: { type: string }
-                refId: { type: string }
-      responses:
-        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Wallet" } } } }
-        "401": { $ref: "#/components/responses/Unauthorized" }
   /wallet/refund:
     post:
       operationId: walletRefund

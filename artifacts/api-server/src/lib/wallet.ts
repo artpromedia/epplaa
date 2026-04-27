@@ -1,7 +1,11 @@
 import { eq, desc } from "drizzle-orm";
 import { db, schema } from "./db";
-import { newWalletTxnId } from "./ids";
 
+/**
+ * Ensures a wallet_settings row exists for the user. Real money flow:
+ * no synthetic seed credit is granted. Balances move only via gateway-
+ * confirmed top-ups, refunds, spends, and withdrawals.
+ */
 export async function ensureWalletBootstrapped(userId: string): Promise<void> {
   const existing = await db
     .select({ userId: schema.walletSettingsTable.userId })
@@ -10,16 +14,9 @@ export async function ensureWalletBootstrapped(userId: string): Promise<void> {
     .limit(1);
   if (existing.length > 0) return;
 
-  await db.insert(schema.walletSettingsTable).values({ userId, currencyCode: "NGN" }).onConflictDoNothing();
   await db
-    .insert(schema.walletTxnsTable)
-    .values({
-      id: newWalletTxnId(),
-      userId,
-      kind: "promo",
-      amountMinor: 200000,
-      label: "Welcome credit",
-    })
+    .insert(schema.walletSettingsTable)
+    .values({ userId, currencyCode: "NGN" })
     .onConflictDoNothing();
 }
 

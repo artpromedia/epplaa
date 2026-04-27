@@ -144,27 +144,6 @@ router.post("/wallet/withdraw", async (req, res) => {
   });
 });
 
-router.post("/wallet/promo-credit", async (req, res) => {
-  const userId = requireUserId(req, res);
-  if (!userId) return;
-  await ensureWalletBootstrapped(userId);
-  const body = req.body as { amountMinor?: number; label?: string; refId?: string };
-  const amount = Number(body.amountMinor ?? 0);
-  if (amount <= 0 || !body.label) {
-    res.status(400).json({ error: "bad_request" });
-    return;
-  }
-  await db.insert(schema.walletTxnsTable).values({
-    id: newWalletTxnId(),
-    userId,
-    kind: "promo",
-    amountMinor: amount,
-    label: body.label,
-    refId: body.refId ?? null,
-  });
-  res.json(await getWalletState(userId));
-});
-
 router.post("/wallet/refund", async (req, res) => {
   const userId = requireUserId(req, res);
   if (!userId) return;

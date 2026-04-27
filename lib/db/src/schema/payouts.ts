@@ -38,6 +38,13 @@ export const payoutsTable = pgTable("payouts", {
   uniqueIndex("payouts_order_seller_share_uniq")
     .on(t.orderId, t.sellerId)
     .where(sql`${t.kind} = 'seller_share' AND ${t.orderId} IS NOT NULL`),
+  /**
+   * Same idempotency guard for manufacturer-share payouts so a replayed
+   * webhook cannot double-pay a manufacturer.
+   */
+  uniqueIndex("payouts_order_manufacturer_share_uniq")
+    .on(t.orderId, t.sellerId)
+    .where(sql`${t.kind} = 'manufacturer_share' AND ${t.orderId} IS NOT NULL`),
 ]);
 
 export type Payout = typeof payoutsTable.$inferSelect;

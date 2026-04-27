@@ -423,37 +423,63 @@ async function finalizeOrderAfterPayment(
   const productIds = Array.from(new Set(items.map((i) => i.productId).filter(Boolean)));
   const products = productIds.length > 0
     ? await db
-        .select({ id: schema.productsTable.id, sellerUserId: schema.productsTable.sellerUserId })
+        .select({
+          id: schema.productsTable.id,
+          sellerUserId: schema.productsTable.sellerUserId,
+          manufacturerUserId: schema.productsTable.manufacturerUserId,
+          manufacturerShareBp: schema.productsTable.manufacturerShareBp,
+        })
         .from(schema.productsTable)
         .where(inArray(schema.productsTable.id, productIds))
     : [];
-  const sellerByProductId = new Map<string, string | null>();
-  for (const p of products) sellerByProductId.set(p.id, p.sellerUserId);
+  const productMeta = new Map<string, { sellerUserId: string | null; manufacturerUserId: string | null; manufacturerShareBp: number }>();
+  for (const p of products) {
+    productMeta.set(p.id, {
+      sellerUserId: p.sellerUserId,
+      manufacturerUserId: p.manufacturerUserId,
+      manufacturerShareBp: p.manufacturerShareBp ?? 0,
+    });
+  }
 
-  // Aggregate gross-per-seller from the line items.
+  // Per-line split: platform 10%, manufacturer (if attributed) X bp, seller remainder.
+  // Then aggregate by recipient so each (order, recipient) is one payout row.
+  const PLATFORM_BP = 1000; // 10%
   const grossPerSeller = new Map<string, number>();
+  const grossPerManufacturer = new Map<string, number>();
   let unattributedMinor = 0;
   for (const it of items) {
     const lineGross = Number(it.priceMinor ?? 0) * Number(it.qty ?? 0);
-    const sellerUserId = sellerByProductId.get(it.productId) ?? null;
+    if (lineGross <= 0) continue;
+    const meta = productMeta.get(it.productId);
+    const sellerUserId = meta?.sellerUserId ?? null;
     if (!sellerUserId) {
       unattributedMinor += lineGross;
       continue;
     }
-    grossPerSeller.set(sellerUserId, (grossPerSeller.get(sellerUserId) ?? 0) + lineGross);
+    const mfgBp = Math.max(0, Math.min(meta?.manufacturerShareBp ?? 0, 10000 - PLATFORM_BP));
+    const mfgId = meta?.manufacturerUserId ?? null;
+    const platformShare = Math.round((lineGross * PLATFORM_BP) / 10000);
+    const manufacturerShare = mfgId ? Math.round((lineGross * mfgBp) / 10000) : 0;
+    const sellerShare = lineGross - platformShare - manufacturerShare;
+    if (sellerShare > 0) {
+      grossPerSeller.set(sellerUserId, (grossPerSeller.get(sellerUserId) ?? 0) + sellerShare);
+    }
+    if (mfgId && manufacturerShare > 0) {
+      grossPerManufacturer.set(mfgId, (grossPerManufacturer.get(mfgId) ?? 0) + manufacturerShare);
+    }
   }
   if (unattributedMinor > 0) {
     logger.warn({ orderId, unattributedMinor }, "order_has_unattributed_lines_platform_absorbed");
   }
 
-  // Each seller's hold tier is independent.
-  for (const [sellerId, sellerGross] of grossPerSeller.entries()) {
+  // Seller payouts — tier-based hold (1d trusted / 7d starter).
+  const holdMillis: number[] = [];
+  for (const [sellerId, sellerNet] of grossPerSeller.entries()) {
     const seller = await loadSellerForUser(sellerId);
     const tier = seller?.tier ?? "starter";
     const holdDays = tier === "trusted" ? 1 : 7;
     const sellerHoldUntil = new Date(paidAt.getTime() + holdDays * 24 * 3600 * 1000);
-    const platformShare = Math.round((sellerGross * 1000) / 10000); // 10% commission
-    const sellerNet = sellerGross - platformShare;
+    holdMillis.push(sellerHoldUntil.getTime());
     if (sellerNet <= 0) continue;
     await db
       .insert(schema.payoutsTable)
@@ -474,22 +500,53 @@ async function finalizeOrderAfterPayment(
       .onConflictDoNothing(); // unique (order_id, seller_id) for seller_share
 
     logger.info(
-      { orderId, intentId, sellerId, sellerGross, sellerNet, platformShare, holdUntil: sellerHoldUntil.toISOString() },
+      { orderId, intentId, sellerId, sellerNet, holdUntil: sellerHoldUntil.toISOString() },
       "seller_payout_scheduled",
     );
   }
 
-  // Stamp the order's earliest hold release for buyer-facing surfaces.
-  const allHolds = Array.from(grossPerSeller.keys()).map(async (sid) => {
-    const s = await loadSellerForUser(sid);
-    const days = (s?.tier ?? "starter") === "trusted" ? 1 : 7;
-    return paidAt.getTime() + days * 24 * 3600 * 1000;
-  });
-  const holds = await Promise.all(allHolds);
-  if (holds.length > 0) {
+  // Manufacturer payouts — weekly batch via Flutterwave international rail.
+  // We use a 7-day hold so the daily payouts cron picks them up only on the
+  // weekly settlement boundary. Manufacturer onboarding/KYC and bank details
+  // are owned by the cross-border task; until then payouts wait in 'scheduled'
+  // state for finance.
+  const MANUFACTURER_HOLD_DAYS = 7;
+  for (const [manufacturerId, mfgNet] of grossPerManufacturer.entries()) {
+    if (mfgNet <= 0) continue;
+    const mfgHoldUntil = new Date(paidAt.getTime() + MANUFACTURER_HOLD_DAYS * 24 * 3600 * 1000);
+    holdMillis.push(mfgHoldUntil.getTime());
+    await db
+      .insert(schema.payoutsTable)
+      .values({
+        id: `po_${Date.now().toString(36)}_${orderId.slice(-4).toLowerCase()}_m${manufacturerId.slice(-4)}`,
+        userId: manufacturerId,
+        sellerId: manufacturerId, // recipient
+        orderId,
+        intentId,
+        amountMinor: mfgNet,
+        currencyCode: order.currencyCode,
+        status: "pending",
+        kind: "manufacturer_share",
+        holdUntil: mfgHoldUntil,
+        reference: `MO-${orderId}-${manufacturerId.slice(-6)}`,
+        // Manufacturer payouts ALWAYS use Flutterwave for international rail,
+        // regardless of which gateway charged the buyer.
+        gateway: "flutterwave",
+      })
+      .onConflictDoNothing();
+
+    logger.info(
+      { orderId, intentId, manufacturerId, mfgNet, holdUntil: mfgHoldUntil.toISOString() },
+      "manufacturer_payout_scheduled",
+    );
+  }
+
+  // Stamp the order's hold_until to the LATEST recipient hold so buyer
+  // surfaces show when the order is fully settled.
+  if (holdMillis.length > 0) {
     await db
       .update(schema.ordersTable)
-      .set({ holdUntil: new Date(Math.max(...holds)) })
+      .set({ holdUntil: new Date(Math.max(...holdMillis)) })
       .where(eq(schema.ordersTable.id, orderId));
   }
 }
@@ -592,10 +649,11 @@ export async function processDuePayouts(): Promise<{ processed: number; failed: 
     });
     if (result.ok) {
       processed++;
+      const finalStatus = result.status === "processed" ? "paid" : "processing";
       await db
         .update(schema.payoutsTable)
         .set({
-          status: result.status === "processed" ? "paid" : "processing",
+          status: finalStatus,
           gateway: gw.name,
           gatewayReference: result.transferReference,
           paidAt: result.status === "processed" ? new Date() : null,
@@ -607,16 +665,80 @@ export async function processDuePayouts(): Promise<{ processed: number; failed: 
           .set({ settledAt: new Date() })
           .where(eq(schema.ordersTable.id, payout.orderId));
       }
+      // Wallet withdrawals are user-initiated, so the matching wallet_txn
+      // (kind='withdrawal', payout_id=this) must move out of 'pending' once
+      // the gateway confirms the transfer. Without this the user's history
+      // shows a permanently-pending row even though funds are gone.
+      if (payout.kind === "wallet_withdrawal" && finalStatus === "paid") {
+        await db
+          .update(schema.walletTxnsTable)
+          .set({ status: "succeeded" })
+          .where(
+            and(
+              eq(schema.walletTxnsTable.payoutId, payout.id),
+              eq(schema.walletTxnsTable.kind, "withdrawal"),
+            ),
+          );
+      }
     } else {
       failed++;
       await db
         .update(schema.payoutsTable)
         .set({ status: "failed", errorMessage: result.errorMessage ?? "payout_failed" })
         .where(eq(schema.payoutsTable.id, payout.id));
+      // Compensating credit so user funds are not stranded after a failed
+      // withdrawal. Mark the original debit row as failed and write a
+      // counterbalancing positive 'refund' row referencing the same payout.
+      if (payout.kind === "wallet_withdrawal") {
+        await reverseFailedWithdrawal(payout.id, payout.userId, payout.amountMinor, result.errorMessage ?? "payout_failed");
+      }
     }
   }
   if (processed + failed > 0) {
     logger.info({ processed, failed }, "payouts_processed");
   }
   return { processed, failed };
+}
+
+/**
+ * On a failed withdrawal payout, mark the original debit wallet_txn as
+ * 'failed' and insert a compensating credit so the user's balance is made
+ * whole. The compensating credit is keyed off the payout id via the
+ * `wallet_txns_withdrawal_payout_uniq` index — but that index is scoped to
+ * `kind='withdrawal'`, so a 'refund' row for the same payout id is allowed.
+ * To keep this idempotent across cron retries we additionally check for an
+ * existing reversal row before inserting.
+ */
+async function reverseFailedWithdrawal(payoutId: string, userId: string, amountMinor: number, reason: string): Promise<void> {
+  await db
+    .update(schema.walletTxnsTable)
+    .set({ status: "failed" })
+    .where(
+      and(
+        eq(schema.walletTxnsTable.payoutId, payoutId),
+        eq(schema.walletTxnsTable.kind, "withdrawal"),
+      ),
+    );
+  const existing = await db
+    .select({ id: schema.walletTxnsTable.id })
+    .from(schema.walletTxnsTable)
+    .where(
+      and(
+        eq(schema.walletTxnsTable.payoutId, payoutId),
+        eq(schema.walletTxnsTable.kind, "refund"),
+      ),
+    )
+    .limit(1);
+  if (existing.length > 0) return;
+  await db.insert(schema.walletTxnsTable).values({
+    id: `wt_rv_${Date.now().toString(36)}_${payoutId.slice(-6)}`,
+    userId,
+    kind: "refund",
+    amountMinor: Math.abs(amountMinor),
+    label: `Withdrawal failed — refunded`,
+    refId: payoutId,
+    payoutId,
+    status: "succeeded",
+  });
+  logger.info({ payoutId, userId, amountMinor, reason }, "wallet_withdrawal_reversed");
 }
