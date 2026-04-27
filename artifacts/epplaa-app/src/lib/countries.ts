@@ -1,32 +1,32 @@
 export type CountryCode = "NG" | "GH" | "KE" | "ZA" | "CI";
 
 export interface PaymentMethod {
-  id: string;          // "paystack-card" | "flutterwave-momo" | "mpesa" | "bank-transfer" | "ussd" | "cod"
+  id: string;
   label: string;
-  iconKey: string;     // map in UI
+  iconKey: string;
 }
 
 export interface FulfillmentOption {
-  id: string;          // "epplaa-box" | "pudo" | "home-delivery"
+  id: string;
   label: string;
-  description: string; // e.g. "Smart locker pickup, free", "Pick up at partner store", "Door delivery via Kwik / Glovo / GIG"
-  feeMinor: number;    // in minor units of the country's currency (e.g. kobo for NGN), 0 = free
-  etaLabel: string;    // "Same day", "1-2 days"
+  description: string;
+  feeMinor: number;
+  etaLabel: string;
 }
 
 export interface Country {
   code: CountryCode;
-  name: string;        // "Nigeria"
-  flag: string;        // emoji or icon key
+  name: string;
+  flag: string;
   currency: {
-    code: string;      // "NGN"
-    symbol: string;    // "₦"
-    decimals: number;  // 2
-    minorPerMajor: number; // 100
+    code: string;
+    symbol: string;
+    decimals: number;
+    minorPerMajor: number;
   };
   paymentMethods: PaymentMethod[];
   fulfillmentOptions: FulfillmentOption[];
-  primaryCity: string;     // "Lagos"
+  primaryCity: string;
   status: "live" | "coming-soon";
 }
 
@@ -84,17 +84,34 @@ export const COUNTRIES: Record<CountryCode, Country> = {
       minorPerMajor: 100,
     },
     primaryCity: "Accra",
-    status: "coming-soon",
+    status: "live",
     paymentMethods: [
       { id: "mtn-momo", label: "MTN Mobile Money", iconKey: "smartphone" },
+      { id: "vodafone-cash", label: "Vodafone Cash", iconKey: "smartphone" },
+      { id: "airteltigo-money", label: "AirtelTigo Money", iconKey: "smartphone" },
+      { id: "paystack-card-gh", label: "Card via Paystack", iconKey: "credit-card" },
     ],
     fulfillmentOptions: [
       {
-        id: "home-delivery",
+        id: "epplaa-box-accra",
+        label: "Epplaa Box Locker",
+        description: "Free pickup at lockers across Accra.",
+        feeMinor: 0,
+        etaLabel: "1-2 days",
+      },
+      {
+        id: "speedaf-pickup",
+        label: "Speedaf Pickup Point",
+        description: "Collect from a verified Speedaf shop.",
+        feeMinor: 1500, // GHS 15
+        etaLabel: "2-3 days",
+      },
+      {
+        id: "home-delivery-gh",
         label: "Home Delivery",
-        description: "Standard delivery",
-        feeMinor: 5000, // 50 GHS
-        etaLabel: "1-3 days",
+        description: "Door delivery via Bolt / Yango.",
+        feeMinor: 3500, // GHS 35
+        etaLabel: "Same day",
       },
     ],
   },
@@ -109,17 +126,34 @@ export const COUNTRIES: Record<CountryCode, Country> = {
       minorPerMajor: 100,
     },
     primaryCity: "Nairobi",
-    status: "coming-soon",
+    status: "live",
     paymentMethods: [
       { id: "mpesa", label: "M-Pesa", iconKey: "smartphone" },
+      { id: "airtel-money-ke", label: "Airtel Money", iconKey: "smartphone" },
+      { id: "card-ke", label: "Card", iconKey: "credit-card" },
+      { id: "cod-ke", label: "Pay on Collection", iconKey: "banknote" },
     ],
     fulfillmentOptions: [
       {
-        id: "pickup",
-        label: "Pickup Location",
-        description: "Collect from partner",
-        feeMinor: 10000, // 100 KES
+        id: "epplaa-box-nbo",
+        label: "Epplaa Box Locker",
+        description: "Free pickup near you in Nairobi.",
+        feeMinor: 0,
         etaLabel: "1-2 days",
+      },
+      {
+        id: "g4s-pickup",
+        label: "G4S Pickup Point",
+        description: "Collect from a verified G4S point.",
+        feeMinor: 15000, // KES 150
+        etaLabel: "1-3 days",
+      },
+      {
+        id: "home-delivery-ke",
+        label: "Home Delivery",
+        description: "Doorstep delivery via Glovo / Bolt.",
+        feeMinor: 35000, // KES 350
+        etaLabel: "Same day",
       },
     ],
   },
@@ -134,17 +168,34 @@ export const COUNTRIES: Record<CountryCode, Country> = {
       minorPerMajor: 100,
     },
     primaryCity: "Johannesburg",
-    status: "coming-soon",
+    status: "live",
     paymentMethods: [
-      { id: "card", label: "Credit Card", iconKey: "credit-card" },
+      { id: "card-za", label: "Card", iconKey: "credit-card" },
+      { id: "ozow-eft", label: "Instant EFT (Ozow)", iconKey: "landmark" },
+      { id: "snapscan", label: "SnapScan", iconKey: "smartphone" },
+      { id: "cod-za", label: "Pay on Collection", iconKey: "banknote" },
     ],
     fulfillmentOptions: [
       {
-        id: "home-delivery",
+        id: "pargo-locker",
+        label: "Pargo Locker",
+        description: "Free pickup from a Pargo locker near you.",
+        feeMinor: 0,
+        etaLabel: "2-3 days",
+      },
+      {
+        id: "paxi-pickup",
+        label: "PEP Paxi Pickup",
+        description: "Collect from your nearest PEP store.",
+        feeMinor: 5995, // R 59.95
+        etaLabel: "3-5 days",
+      },
+      {
+        id: "home-delivery-za",
         label: "Door Delivery",
-        description: "Standard courier",
-        feeMinor: 10000, // 100 ZAR
-        etaLabel: "2-4 days",
+        description: "Via The Courier Guy / Pick n Pay ASAP.",
+        feeMinor: 9900, // R 99
+        etaLabel: "1-2 days",
       },
     ],
   },
@@ -156,20 +207,37 @@ export const COUNTRIES: Record<CountryCode, Country> = {
       code: "XOF",
       symbol: "CFA ",
       decimals: 0,
-      minorPerMajor: 1, // XOF usually has no minor units
+      minorPerMajor: 1, // XOF has no minor units
     },
     primaryCity: "Abidjan",
-    status: "coming-soon",
+    status: "live",
     paymentMethods: [
       { id: "orange-money", label: "Orange Money", iconKey: "smartphone" },
+      { id: "mtn-momo-ci", label: "MTN Mobile Money", iconKey: "smartphone" },
+      { id: "wave", label: "Wave", iconKey: "smartphone" },
+      { id: "card-ci", label: "Carte Bancaire", iconKey: "credit-card" },
     ],
     fulfillmentOptions: [
       {
-        id: "home-delivery",
-        label: "Livraison à domicile",
-        description: "Standard delivery",
+        id: "epplaa-box-abj",
+        label: "Point Relais Epplaa",
+        description: "Retrait gratuit dans un point relais à Abidjan.",
+        feeMinor: 0,
+        etaLabel: "2-3 jours",
+      },
+      {
+        id: "pickup-ci",
+        label: "Point Relais Partenaire",
+        description: "Collect from a verified partner shop.",
         feeMinor: 1500, // 1500 XOF
-        etaLabel: "1-3 jours",
+        etaLabel: "2-4 jours",
+      },
+      {
+        id: "home-delivery-ci",
+        label: "Livraison à domicile",
+        description: "Livraison à domicile via Glovo Abidjan.",
+        feeMinor: 3500, // 3500 XOF
+        etaLabel: "Même jour",
       },
     ],
   },
