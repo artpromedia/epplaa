@@ -29,7 +29,16 @@ The system is built as a pnpm monorepo with Node.js 24 and TypeScript 5.9. The b
 - **Cart & Checkout:** Persistent cart, multi-step checkout wizard with fulfillment options (home delivery, pickup points), payment methods, promo code application, and order review. Pickup orders generate a 4-digit OTP.
 - **Discovery & Social:** Product search with categories, wishlists, seller following, drop alerts for followed sellers, and product reviews.
 - **Live Shopping:** Real-time engagement features including bot chatter, viewer count, likes, user chat, and product pinning. Supports live replays with integrated product lists.
-- **Wallet System:** In-app wallet with top-up, spending, withdrawal, and refund capabilities, seeded with welcome credit.
+- **Wallet System:** In-app wallet with top-up, spending, withdrawal, and refund capabilities, seeded with welcome credit. Top-ups create real Paystack/Flutterwave payment intents; balances are credited only after a verified webhook. Withdrawals queue a payout row that the cron job pushes through the gateway.
+- **Payments, Splits, Payouts & VAT (Project Task #1):**
+  - **Gateways:** Paystack (primary) with Flutterwave failover. A circuit breaker opens on >40% failure across the last 5 attempts in a 5-minute window. When neither gateway is configured, a `dev-mock` gateway serves a hosted sandbox checkout (`/api/__devpay/:reference`) so flows are end-to-end testable without keys.
+  - **Webhooks:** `POST /api/webhooks/paystack`, `/flutterwave`, `/devmock` mounted **before** `express.json` with raw body parsing. Each event is verified (Paystack SHA-512 HMAC, Flutterwave verif-hash, dev-mock SHA-256), de-duplicated via a unique index on `payment_webhooks.eventId`, sanity-checked against the intent's expected amount, and marked succeeded idempotently.
+  - **Splits & Payouts:** On payment success, an order is finalized with a 10% platform commission split. The seller share is queued as a payout with a hold window — 1 day for trusted sellers, 7 days for starter sellers. A daily cron (`processDuePayouts`) pushes due payouts through the gateway transfer API.
+  - **VAT:** Computed server-side from the canonical `vat_rates` table (Nigeria seeded at 7.5%). Client `countries.ts` exposes `vatRateBp` for UI display only — server is authoritative.
+  - **Refunds:** `POST /api/orders/:id/refund` is allowed only within the 14-day window post-delivery; settled holds are clawed back via `refund_attempts`.
+  - **Reconciliation:** Daily cron pulls each gateway's settlement list and diffs against the ledger, recording mismatches in `reconciliation_runs` for the admin dashboard.
+  - **Admin:** `EPPLAA_ADMIN_USER_IDS` (comma-separated Clerk user IDs) gates `/api/admin/*` for gateway health, recon runs, payout retries, and intent inspection.
+  - **Required env:** `PAYSTACK_SECRET_KEY`, `FLUTTERWAVE_SECRET_KEY`, `FLUTTERWAVE_WEBHOOK_HASH`, `EPPLAA_ADMIN_USER_IDS`, `DEV_MOCK_SECRET` (only used when no gateway keys are present).
 - **Returns & Disputes:** Streamlined return request process with timeline tracking and dispute resolution.
 - **Cross-Border Imports:** Calculation of landed costs (FOB, freight, insurance, duty, VAT, clearance) for imported goods, with a clear customs timeline.
 - **Trust & Safety:** User reporting system for listings and sellers, with blocking functionality.
@@ -43,4 +52,4 @@ The system is built as a pnpm monorepo with Node.js 24 and TypeScript 5.9. The b
 - **API Framework:** Express 5
 - **Validation:** Zod (`zod/v4`), `drizzle-zod`
 - **API Codegen:** Orval (from OpenAPI spec)
-- **Payment Gateways:** Paystack, M-Pesa, Wave, Orange Money, Telebirr, Fawry (integrated based on country configurations)
+- **Payment Gateways:** Paystack (primary) and Flutterwave (failover) with shared HMAC-verified webhooks; a `dev-mock` sandbox checkout is used when no real keys are configured. M-Pesa, Wave, Orange Money, Telebirr, and Fawry are listed as country-specific payment methods in the catalogue and are routed through the Paystack/Flutterwave umbrella for now.

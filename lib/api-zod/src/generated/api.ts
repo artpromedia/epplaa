@@ -323,6 +323,120 @@ export const CancelOrderResponse = zod.object({
   createdAtIso: zod.string(),
 });
 
+export const RefundOrderParams = zod.object({
+  orderId: zod.coerce.string(),
+});
+
+export const RefundOrderBody = zod.object({
+  reason: zod.string().optional(),
+});
+
+export const RefundOrderResponse = zod.object({
+  ok: zod.boolean(),
+  refundId: zod.string().optional(),
+  refundReference: zod.string().optional(),
+});
+
+export const GetPaymentsModeResponse = zod.object({
+  mode: zod.string(),
+});
+
+export const GetPaymentIntentParams = zod.object({
+  intentId: zod.coerce.string(),
+});
+
+export const GetPaymentIntentResponse = zod.object({
+  id: zod.string(),
+  purpose: zod.string(),
+  orderId: zod.string().nullish(),
+  gateway: zod.string(),
+  reference: zod.string(),
+  amountMinor: zod.number(),
+  vatMinor: zod.number(),
+  currencyCode: zod.string(),
+  status: zod.string(),
+  authorizationUrl: zod.string().nullish(),
+  paidAtIso: zod.string().nullish(),
+  createdAtIso: zod.string(),
+});
+
+export const VerifyPaymentIntentParams = zod.object({
+  intentId: zod.coerce.string(),
+});
+
+export const VerifyPaymentIntentResponse = zod.object({
+  id: zod.string(),
+  purpose: zod.string(),
+  orderId: zod.string().nullish(),
+  gateway: zod.string(),
+  reference: zod.string(),
+  amountMinor: zod.number(),
+  vatMinor: zod.number(),
+  currencyCode: zod.string(),
+  status: zod.string(),
+  authorizationUrl: zod.string().nullish(),
+  paidAtIso: zod.string().nullish(),
+  createdAtIso: zod.string(),
+});
+
+export const AdminGetGatewayHealthResponseItem = zod.object({
+  gateway: zod.string(),
+  successCount: zod.number(),
+  failureCount: zod.number(),
+  windowStartedAtIso: zod.string().optional(),
+  circuitOpenUntilIso: zod.string().nullish(),
+  lastEventAtIso: zod.string().nullish(),
+});
+export const AdminGetGatewayHealthResponse = zod.array(
+  AdminGetGatewayHealthResponseItem,
+);
+
+export const AdminListReconciliationRunsResponseItem = zod.object({
+  id: zod.string(),
+  gateway: zod.string(),
+  windowStartIso: zod.string().optional(),
+  windowEndIso: zod.string().optional(),
+  ledgerCount: zod.number().optional(),
+  settlementCount: zod.number().optional(),
+  matchedCount: zod.number().optional(),
+  mismatches: zod.array(zod.record(zod.string(), zod.unknown())).optional(),
+  status: zod.string(),
+  errorMessage: zod.string().nullish(),
+  ranAtIso: zod.string(),
+});
+export const AdminListReconciliationRunsResponse = zod.array(
+  AdminListReconciliationRunsResponseItem,
+);
+
+export const AdminRunReconciliationResponse = zod.object({
+  ok: zod.boolean().optional(),
+  runs: zod.number().optional(),
+});
+
+export const AdminRunDuePayoutsResponse = zod.object({
+  ok: zod.boolean().optional(),
+  processed: zod.number().optional(),
+  failed: zod.number().optional(),
+});
+
+export const AdminListPaymentIntentsResponseItem = zod.object({
+  id: zod.string(),
+  purpose: zod.string(),
+  orderId: zod.string().nullish(),
+  gateway: zod.string(),
+  reference: zod.string(),
+  amountMinor: zod.number(),
+  vatMinor: zod.number(),
+  currencyCode: zod.string(),
+  status: zod.string(),
+  authorizationUrl: zod.string().nullish(),
+  paidAtIso: zod.string().nullish(),
+  createdAtIso: zod.string(),
+});
+export const AdminListPaymentIntentsResponse = zod.array(
+  AdminListPaymentIntentsResponseItem,
+);
+
 export const ListReturnsResponseItem = zod.object({
   id: zod.string(),
   userId: zod.string(),
@@ -452,6 +566,16 @@ export const WalletTopUpResponse = zod.object({
       atIso: zod.string(),
     }),
   ),
+  pendingTopup: zod
+    .object({
+      intentId: zod.string(),
+      reference: zod.string(),
+      gateway: zod.string(),
+      amountMinor: zod.number(),
+      authorizationUrl: zod.string().nullish(),
+      status: zod.string(),
+    })
+    .optional(),
 });
 
 export const WalletSpendBody = zod.object({
@@ -478,9 +602,40 @@ export const WalletSpendResponse = zod.object({
 export const WalletWithdrawBody = zod.object({
   amountMinor: zod.number(),
   destinationLabel: zod.string(),
+  bankCode: zod.string().optional(),
+  bankLast4: zod.string().optional(),
 });
 
 export const WalletWithdrawResponse = zod.object({
+  balanceMinor: zod.number(),
+  currencyCode: zod.string(),
+  txns: zod.array(
+    zod.object({
+      id: zod.string(),
+      kind: zod.string(),
+      amountMinor: zod.number(),
+      label: zod.string(),
+      refId: zod.string().nullish(),
+      atIso: zod.string(),
+    }),
+  ),
+  pendingWithdrawal: zod
+    .object({
+      payoutId: zod.string(),
+      reference: zod.string(),
+      amountMinor: zod.number(),
+      status: zod.string(),
+    })
+    .optional(),
+});
+
+export const WalletPromoCreditBody = zod.object({
+  amountMinor: zod.number(),
+  label: zod.string(),
+  refId: zod.string().optional(),
+});
+
+export const WalletPromoCreditResponse = zod.object({
   balanceMinor: zod.number(),
   currencyCode: zod.string(),
   txns: zod.array(

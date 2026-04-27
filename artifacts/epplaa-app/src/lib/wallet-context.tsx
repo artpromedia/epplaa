@@ -11,6 +11,7 @@ import {
   useWalletSpend,
   useWalletWithdraw,
   useWalletRefund,
+  useWalletPromoCredit,
   useUpdateWalletSettings,
 } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -31,12 +32,22 @@ export interface WalletTxn {
   atIso: string;
 }
 
+export interface PendingTopup {
+  intentId: string;
+  reference: string;
+  gateway: string;
+  amountMinor: number;
+  authorizationUrl?: string | null;
+  status: string;
+}
+
 interface WalletContextValue {
   balanceMinor: number;
   currencyCode: string;
   txns: WalletTxn[];
-  topUp: (amountMinor: number, label?: string) => void;
+  topUp: (amountMinor: number, label?: string) => Promise<PendingTopup | null>;
   spend: (amountMinor: number, label: string, refId?: string) => boolean;
+  creditPromo: (amountMinor: number, label: string, refId?: string) => void;
   refundFromReturn: (
     returnId: string,
     amountMinor: number,
@@ -60,6 +71,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   const spendMut = useWalletSpend({ mutation: { onSuccess: invalidate } });
   const withdrawMut = useWalletWithdraw({ mutation: { onSuccess: invalidate } });
   const refundMut = useWalletRefund({ mutation: { onSuccess: invalidate } });
+  const promoMut = useWalletPromoCredit({ mutation: { onSuccess: invalidate } });
   const settingsMut = useUpdateWalletSettings({ mutation: { onSuccess: invalidate } });
 
   const balanceMinor = walletQuery.data?.balanceMinor ?? 0;
@@ -78,11 +90,24 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   );
 
   const topUp = useCallback<WalletContextValue["topUp"]>(
-    (amountMinor, label = "Top up") => {
-      if (amountMinor <= 0) return;
-      topUpMut.mutate({ data: { amountMinor, label } });
+    async (amountMinor, label = "Top up") => {
+      if (amountMinor <= 0) return null;
+      const res = await topUpMut.mutateAsync({ data: { amountMinor, label } });
+      const pt = (res as unknown as { pendingTopup?: PendingTopup }).pendingTopup;
+      if (pt && pt.authorizationUrl) {
+        window.location.href = pt.authorizationUrl;
+      }
+      return pt ?? null;
     },
     [topUpMut],
+  );
+
+  const creditPromo = useCallback<WalletContextValue["creditPromo"]>(
+    (amountMinor, label, refId) => {
+      if (amountMinor <= 0 || !label) return;
+      promoMut.mutate({ data: { amountMinor, label, ...(refId ? { refId } : {}) } });
+    },
+    [promoMut],
   );
 
   const spend = useCallback<WalletContextValue["spend"]>(
@@ -124,11 +149,22 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       txns,
       topUp,
       spend,
+      creditPromo,
       refundFromReturn,
       withdraw,
       resetWallet,
     }),
-    [balanceMinor, currencyCode, txns, topUp, spend, refundFromReturn, withdraw, resetWallet],
+    [
+      balanceMinor,
+      currencyCode,
+      txns,
+      topUp,
+      spend,
+      creditPromo,
+      refundFromReturn,
+      withdraw,
+      resetWallet,
+    ],
   );
 
   return <WalletContext.Provider value={value}>{children}</WalletContext.Provider>;

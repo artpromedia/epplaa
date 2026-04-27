@@ -194,6 +194,16 @@ export default function CheckoutReview() {
       const order = await addOrder(draftOrder);
       clear();
       resetCheckout();
+      const authUrl = order.paymentIntent?.authorizationUrl;
+      if (authUrl) {
+        window.location.href = authUrl;
+        return;
+      }
+      const intentId = order.paymentIntent?.id;
+      if (intentId) {
+        setLocation(`/checkout/processing/${order.id}/${intentId}`);
+        return;
+      }
       setLocation(`/checkout/success/${order.id}`);
     })();
   }
@@ -434,6 +444,16 @@ export default function CheckoutReview() {
                 accent={isDark ? "text-emerald-300" : "text-emerald-700"}
               />
             )}
+            {country.vatRateBp && country.vatRateBp > 0 ? (
+              <Row
+                label={`VAT (${(country.vatRateBp / 100).toFixed(2).replace(/\.?0+$/, "")}%) — added at payment`}
+                value={`+ ${formatPrice(
+                  Math.round((total * country.vatRateBp) / 10000),
+                  country,
+                )}`}
+                subtle={subtle}
+              />
+            ) : null}
             <div
               className={`pt-2 border-t flex items-center justify-between ${
                 isDark ? "border-white/10" : "border-stone-200"
@@ -444,7 +464,13 @@ export default function CheckoutReview() {
                 className="text-xl font-black"
                 data-testid="text-review-total"
               >
-                {formatPrice(total, country)}
+                {formatPrice(
+                  total +
+                    (country.vatRateBp
+                      ? Math.round((total * country.vatRateBp) / 10000)
+                      : 0),
+                  country,
+                )}
               </span>
             </div>
           </div>

@@ -46,6 +46,7 @@ import CheckoutLocation from "@/pages/checkout/location";
 import CheckoutAddress from "@/pages/checkout/address";
 import CheckoutPayment from "@/pages/checkout/payment";
 import CheckoutReview from "@/pages/checkout/review";
+import CheckoutProcessing from "@/pages/checkout/processing";
 import CheckoutSuccess from "@/pages/checkout/success";
 import Orders from "@/pages/orders";
 import OrderDetail from "@/pages/order-detail";
@@ -85,6 +86,10 @@ function Router() {
         <Route path="/checkout/address" component={CheckoutAddress} />
         <Route path="/checkout/payment" component={CheckoutPayment} />
         <Route path="/checkout/review" component={CheckoutReview} />
+        <Route
+          path="/checkout/processing/:orderId/:intentId"
+          component={CheckoutProcessing}
+        />
         <Route path="/checkout/success/:orderId" component={CheckoutSuccess} />
         <Route path="/orders" component={Orders} />
         <Route path="/orders/:orderId" component={OrderDetail} />

@@ -82,9 +82,19 @@ export interface Order {
   etaLabel: string;
 }
 
+export interface PlacedOrder extends Order {
+  paymentIntent: {
+    id: string;
+    reference: string;
+    gateway: string;
+    status: string;
+    authorizationUrl?: string | null;
+  };
+}
+
 interface OrdersContextValue {
   orders: Order[];
-  add: (order: Omit<Order, "id" | "createdAtIso">) => Promise<Order>;
+  add: (order: Omit<Order, "id" | "createdAtIso">) => Promise<PlacedOrder>;
   getById: (id: string) => Order | undefined;
   cancel: (id: string) => Promise<void>;
 }
@@ -141,7 +151,18 @@ export function OrdersProvider({ children }: { children: ReactNode }) {
       const result = await placeOrder.mutateAsync({
         data: { ...draft } as Record<string, unknown>,
       });
-      return fromApi(result);
+      const base = fromApi(result as unknown as ApiOrder);
+      const pi = (result as unknown as { paymentIntent?: PlacedOrder["paymentIntent"] }).paymentIntent;
+      return {
+        ...base,
+        paymentIntent: pi ?? {
+          id: "",
+          reference: "",
+          gateway: "unknown",
+          status: "pending",
+          authorizationUrl: null,
+        },
+      };
     },
     [placeOrder],
   );

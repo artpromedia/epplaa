@@ -206,6 +206,106 @@ export interface PlaceOrderBody {
   [key: string]: unknown;
 }
 
+export interface PaymentIntent {
+  id: string;
+  purpose: string;
+  /** @nullable */
+  orderId?: string | null;
+  gateway: string;
+  reference: string;
+  amountMinor: number;
+  vatMinor: number;
+  currencyCode: string;
+  status: string;
+  /** @nullable */
+  authorizationUrl?: string | null;
+  /** @nullable */
+  paidAtIso?: string | null;
+  createdAtIso: string;
+}
+
+export type PlaceOrderResponseItemsItem = { [key: string]: unknown };
+
+export type PlaceOrderResponseFulfillment = { [key: string]: unknown };
+
+export type PlaceOrderResponsePayment = { [key: string]: unknown };
+
+export type PlaceOrderResponseNotificationPrefs = { [key: string]: unknown };
+
+export type PlaceOrderResponseTotalsMinor = { [key: string]: unknown };
+
+export type PlaceOrderResponsePromo = { [key: string]: unknown };
+
+export type PlaceOrderResponsePaymentIntent = {
+  id: string;
+  reference: string;
+  gateway: string;
+  status: string;
+  /** @nullable */
+  authorizationUrl?: string | null;
+};
+
+export interface PlaceOrderResponse {
+  id: string;
+  userId: string;
+  status: string;
+  countryCode: string;
+  currencyCode: string;
+  items: PlaceOrderResponseItemsItem[];
+  fulfillment: PlaceOrderResponseFulfillment;
+  payment: PlaceOrderResponsePayment;
+  notificationPrefs: PlaceOrderResponseNotificationPrefs;
+  totalsMinor: PlaceOrderResponseTotalsMinor;
+  promo?: PlaceOrderResponsePromo;
+  /** @nullable */
+  pickupOtp?: string | null;
+  etaLabel: string;
+  /** @nullable */
+  gateway?: string | null;
+  /** @nullable */
+  gatewayReference?: string | null;
+  /** @nullable */
+  paymentIntentId?: string | null;
+  /** @nullable */
+  paidAtIso?: string | null;
+  createdAtIso: string;
+  paymentIntent: PlaceOrderResponsePaymentIntent;
+}
+
+export interface RefundResponse {
+  ok: boolean;
+  refundId?: string;
+  refundReference?: string;
+}
+
+export interface GatewayHealthSnapshot {
+  gateway: string;
+  successCount: number;
+  failureCount: number;
+  windowStartedAtIso?: string;
+  /** @nullable */
+  circuitOpenUntilIso?: string | null;
+  /** @nullable */
+  lastEventAtIso?: string | null;
+}
+
+export type ReconciliationRunMismatchesItem = { [key: string]: unknown };
+
+export interface ReconciliationRun {
+  id: string;
+  gateway: string;
+  windowStartIso?: string;
+  windowEndIso?: string;
+  ledgerCount?: number;
+  settlementCount?: number;
+  matchedCount?: number;
+  mismatches?: ReconciliationRunMismatchesItem[];
+  status: string;
+  /** @nullable */
+  errorMessage?: string | null;
+  ranAtIso: string;
+}
+
 export type ReturnRecordTimelineItem = { [key: string]: unknown };
 
 export type ReturnRecordDisputeItem = { [key: string]: unknown };
@@ -247,6 +347,37 @@ export interface Wallet {
   balanceMinor: number;
   currencyCode: string;
   txns: WalletTxn[];
+}
+
+export type WalletTopupResponsePendingTopup = {
+  intentId: string;
+  reference: string;
+  gateway: string;
+  amountMinor: number;
+  /** @nullable */
+  authorizationUrl?: string | null;
+  status: string;
+};
+
+export interface WalletTopupResponse {
+  balanceMinor: number;
+  currencyCode: string;
+  txns: WalletTxn[];
+  pendingTopup?: WalletTopupResponsePendingTopup;
+}
+
+export type WalletWithdrawResponsePendingWithdrawal = {
+  payoutId: string;
+  reference: string;
+  amountMinor: number;
+  status: string;
+};
+
+export interface WalletWithdrawResponse {
+  balanceMinor: number;
+  currencyCode: string;
+  txns: WalletTxn[];
+  pendingWithdrawal?: WalletWithdrawResponsePendingWithdrawal;
 }
 
 export interface SafetyReport {
@@ -438,6 +569,25 @@ export type ListFulfillmentLocationsParams = {
   optionId?: string;
 };
 
+export type RefundOrderBody = {
+  reason?: string;
+};
+
+export type GetPaymentsMode200 = {
+  mode: string;
+};
+
+export type AdminRunReconciliation200 = {
+  ok?: boolean;
+  runs?: number;
+};
+
+export type AdminRunDuePayouts200 = {
+  ok?: boolean;
+  processed?: number;
+  failed?: number;
+};
+
 export type TransitionReturnBody = {
   status: string;
 };
@@ -461,6 +611,14 @@ export type WalletSpendBody = {
 export type WalletWithdrawBody = {
   amountMinor: number;
   destinationLabel: string;
+  bankCode?: string;
+  bankLast4?: string;
+};
+
+export type WalletPromoCreditBody = {
+  amountMinor: number;
+  label: string;
+  refId?: string;
 };
 
 export type WalletRefundBody = {

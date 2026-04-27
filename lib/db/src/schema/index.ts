@@ -23,3 +23,4 @@ export * from "./sellerListings";
 export * from "./sellerOrders";
 export * from "./sellerStreams";
 export * from "./payouts";
+export * from "./payments";

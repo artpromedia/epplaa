@@ -47,3 +47,27 @@ export function newOtp(): string {
 export function newSafeId(prefix: string): string {
   return `${prefix}_${Date.now().toString(36)}_${rand(3).toLowerCase()}`;
 }
+
+export function newPaymentIntentId(): string {
+  return `pi_${Date.now().toString(36)}_${rand(4).toLowerCase()}`;
+}
+
+export function newPaymentReference(): string {
+  return `EP_${Date.now().toString(36).toUpperCase()}_${rand(6)}`;
+}
+
+export function newPaymentAttemptId(): string {
+  return `pa_${Date.now().toString(36)}_${rand(3).toLowerCase()}`;
+}
+
+export function newWebhookId(): string {
+  return `wh_${Date.now().toString(36)}_${rand(3).toLowerCase()}`;
+}
+
+export function newRefundId(): string {
+  return `rf_${Date.now().toString(36)}_${rand(3).toLowerCase()}`;
+}
+
+export function newReconciliationId(): string {
+  return `rc_${Date.now().toString(36)}_${rand(3).toLowerCase()}`;
+}

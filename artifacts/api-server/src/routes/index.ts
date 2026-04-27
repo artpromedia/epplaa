@@ -21,6 +21,8 @@ import wishlistRouter from "./wishlist";
 import reviewsRouter from "./reviews";
 import discoveryRouter from "./discovery";
 import sellerRouter from "./seller";
+import paymentsRouter from "./payments";
+import adminRouter from "./admin";
 
 const router: IRouter = Router();
 
@@ -46,5 +48,7 @@ router.use(wishlistRouter);
 router.use(reviewsRouter);
 router.use(discoveryRouter);
 router.use(sellerRouter);
+router.use(paymentsRouter);
+router.use(adminRouter);
 
 export default router;

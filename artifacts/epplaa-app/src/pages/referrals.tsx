@@ -26,7 +26,7 @@ export default function ReferralsHub() {
   const { resolvedTheme } = useTheme();
   const isDark = resolvedTheme === "dark";
   const { country } = useCountry();
-  const { topUp } = useWallet();
+  const { creditPromo } = useWallet();
   const { toast } = useToast();
 
   const referralsQuery = useGetMyReferrals();
@@ -78,7 +78,10 @@ export default function ReferralsHub() {
   }
 
   function claimDemoCredit() {
-    topUp(REFERRAL_REWARDS.firstPurchaseMinor, "Friend joined with your code");
+    creditPromo(
+      REFERRAL_REWARDS.firstPurchaseMinor,
+      "Friend joined with your code",
+    );
     toast({
       title: "Wallet credited",
       description: `+${formatPrice(REFERRAL_REWARDS.firstPurchaseMinor, country.currency.code)}`,

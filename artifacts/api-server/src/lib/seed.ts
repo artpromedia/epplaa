@@ -2,6 +2,7 @@ import { db, schema } from "./db";
 import { logger } from "./logger";
 import { PROMO_CODES, SEED_FULFILLMENT_LOCATIONS } from "./static";
 import { SEED_PRODUCTS, SEED_STREAMS, SEED_REPLAYS } from "./seedCatalog";
+import { SEED_VAT_RATES } from "./vat";
 
 const HOUR = 3600 * 1000;
 
@@ -54,6 +55,20 @@ export async function seedDatabaseIfEmpty(): Promise<void> {
       await db.insert(schema.promoCodesTable).values(Object.values(PROMO_CODES)).onConflictDoNothing();
       logger.info({ count: Object.keys(PROMO_CODES).length }, "Seeded promo codes");
     }
+
+    // Seed VAT rates per country (idempotent — onConflictDoNothing on countryCode PK).
+    await db.insert(schema.vatRatesTable).values(SEED_VAT_RATES).onConflictDoNothing();
+
+    // Seed gateway_health rows so the router has somewhere to record events from
+    // the very first webhook (otherwise the rolling window logic short-circuits).
+    await db
+      .insert(schema.gatewayHealthTable)
+      .values([
+        { gateway: "paystack", successCount: 0, failureCount: 0 },
+        { gateway: "flutterwave", successCount: 0, failureCount: 0 },
+        { gateway: "devmock", successCount: 0, failureCount: 0 },
+      ])
+      .onConflictDoNothing();
   } catch (err) {
     logger.error({ err }, "Seed failed");
   }

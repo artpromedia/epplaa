@@ -78,6 +78,12 @@ export interface Country {
   businessRegistry: BusinessRegistry;
   bankAccount: BankAccountSpec;
   payoutAuthority: string;
+  /**
+   * Standard VAT rate in basis points (1% = 100 bp). Server is the
+   * authoritative source for tax computation; this is shown in checkout UI
+   * to set user expectations before they hit the payment gateway.
+   */
+  vatRateBp?: number;
 }
 
 export const COUNTRIES: Record<CountryCode, Country> = {
@@ -94,6 +100,7 @@ export const COUNTRIES: Record<CountryCode, Country> = {
     primaryCity: "Lagos",
     status: "live",
     payoutAuthority: "Central Bank of Nigeria",
+    vatRateBp: 750,
     identityDocs: [
       { code: "BVN", label: "BVN", helper: "Bank Verification Number", expectedLength: 11, kind: "digits" },
       { code: "NIN", label: "NIN", helper: "National Identification Number", expectedLength: 11, kind: "digits" },

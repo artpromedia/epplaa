@@ -237,8 +237,10 @@ paths:
         required: true
         content: { application/json: { schema: { $ref: "#/components/schemas/PlaceOrderBody" } } }
       responses:
-        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/Order" } } } }
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/PlaceOrderResponse" } } } }
+        "400": { description: Bad request }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "502": { description: Payment gateway initialization failed }
   /orders/{orderId}:
     get:
       operationId: getOrder
@@ -260,6 +262,133 @@ paths:
         "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Order" } } } }
         "404": { $ref: "#/components/responses/NotFound" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /orders/{orderId}/refund:
+    post:
+      operationId: refundOrder
+      tags: [orders]
+      parameters: [{ in: path, name: orderId, required: true, schema: { type: string } }]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason: { type: string }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/RefundResponse" } } } }
+        "400": { description: Refund not eligible }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "502": { description: Gateway refund failed }
+
+  /payments/mode:
+    get:
+      operationId: getPaymentsMode
+      tags: [payments]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [mode]
+                properties:
+                  mode: { type: string }
+
+  /payments/intents/{intentId}:
+    get:
+      operationId: getPaymentIntent
+      tags: [payments]
+      parameters: [{ in: path, name: intentId, required: true, schema: { type: string } }]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/PaymentIntent" } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /payments/intents/{intentId}/verify:
+    post:
+      operationId: verifyPaymentIntent
+      tags: [payments]
+      parameters: [{ in: path, name: intentId, required: true, schema: { type: string } }]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/PaymentIntent" } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /admin/payment-gateway-health:
+    get:
+      operationId: adminGetGatewayHealth
+      tags: [admin]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/GatewayHealthSnapshot" }
+        "403": { description: Forbidden }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /admin/reconciliation-runs:
+    get:
+      operationId: adminListReconciliationRuns
+      tags: [admin]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/ReconciliationRun" }
+        "403": { description: Forbidden }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /admin/reconciliation/run:
+    post:
+      operationId: adminRunReconciliation
+      tags: [admin]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { ok: { type: boolean }, runs: { type: integer } }
+        "403": { description: Forbidden }
+
+  /admin/payouts/run-due:
+    post:
+      operationId: adminRunDuePayouts
+      tags: [admin]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { ok: { type: boolean }, processed: { type: integer }, failed: { type: integer } }
+        "403": { description: Forbidden }
+
+  /admin/payment-intents:
+    get:
+      operationId: adminListPaymentIntents
+      tags: [admin]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/PaymentIntent" }
+        "403": { description: Forbidden }
 
   /returns:
     get:
@@ -348,8 +477,9 @@ paths:
                 amountMinor: { type: integer }
                 label: { type: string }
       responses:
-        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Wallet" } } } }
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/WalletTopupResponse" } } } }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "502": { description: Top-up payment init failed }
   /wallet/spend:
     post:
       operationId: walletSpend
@@ -383,9 +513,29 @@ paths:
               properties:
                 amountMinor: { type: integer }
                 destinationLabel: { type: string }
+                bankCode: { type: string }
+                bankLast4: { type: string }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/WalletWithdrawResponse" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /wallet/promo-credit:
+    post:
+      operationId: walletPromoCredit
+      tags: [wallet]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [amountMinor, label]
+              properties:
+                amountMinor: { type: integer }
+                label: { type: string }
+                refId: { type: string }
       responses:
         "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Wallet" } } } }
-        "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
   /wallet/refund:
     post:
@@ -1137,6 +1287,90 @@ components:
       type: object
       additionalProperties: true
 
+    PaymentIntent:
+      type: object
+      required: [id, purpose, gateway, reference, amountMinor, vatMinor, currencyCode, status, createdAtIso]
+      properties:
+        id: { type: string }
+        purpose: { type: string }
+        orderId: { type: ["string", "null"] }
+        gateway: { type: string }
+        reference: { type: string }
+        amountMinor: { type: integer }
+        vatMinor: { type: integer }
+        currencyCode: { type: string }
+        status: { type: string }
+        authorizationUrl: { type: ["string", "null"] }
+        paidAtIso: { type: ["string", "null"] }
+        createdAtIso: { type: string }
+
+    PlaceOrderResponse:
+      type: object
+      required: [id, userId, status, countryCode, currencyCode, items, fulfillment, payment, notificationPrefs, totalsMinor, etaLabel, createdAtIso, paymentIntent]
+      properties:
+        id: { type: string }
+        userId: { type: string }
+        status: { type: string }
+        countryCode: { type: string }
+        currencyCode: { type: string }
+        items: { type: array, items: { type: object, additionalProperties: true } }
+        fulfillment: { type: object, additionalProperties: true }
+        payment: { type: object, additionalProperties: true }
+        notificationPrefs: { type: object, additionalProperties: true }
+        totalsMinor: { type: object, additionalProperties: true }
+        promo: { type: object, additionalProperties: true }
+        pickupOtp: { type: ["string", "null"] }
+        etaLabel: { type: string }
+        gateway: { type: ["string", "null"] }
+        gatewayReference: { type: ["string", "null"] }
+        paymentIntentId: { type: ["string", "null"] }
+        paidAtIso: { type: ["string", "null"] }
+        createdAtIso: { type: string }
+        paymentIntent:
+          type: object
+          required: [id, reference, gateway, status]
+          properties:
+            id: { type: string }
+            reference: { type: string }
+            gateway: { type: string }
+            status: { type: string }
+            authorizationUrl: { type: ["string", "null"] }
+
+    RefundResponse:
+      type: object
+      required: [ok]
+      properties:
+        ok: { type: boolean }
+        refundId: { type: string }
+        refundReference: { type: string }
+
+    GatewayHealthSnapshot:
+      type: object
+      required: [gateway, successCount, failureCount]
+      properties:
+        gateway: { type: string }
+        successCount: { type: integer }
+        failureCount: { type: integer }
+        windowStartedAtIso: { type: string }
+        circuitOpenUntilIso: { type: ["string", "null"] }
+        lastEventAtIso: { type: ["string", "null"] }
+
+    ReconciliationRun:
+      type: object
+      required: [id, gateway, status, ranAtIso]
+      properties:
+        id: { type: string }
+        gateway: { type: string }
+        windowStartIso: { type: string }
+        windowEndIso: { type: string }
+        ledgerCount: { type: integer }
+        settlementCount: { type: integer }
+        matchedCount: { type: integer }
+        mismatches: { type: array, items: { type: object, additionalProperties: true } }
+        status: { type: string }
+        errorMessage: { type: ["string", "null"] }
+        ranAtIso: { type: string }
+
     ReturnRecord:
       type: object
       required: [id, userId, orderId, productTitle, refundAmountMinor, currencyCode, reason, reasonLabel, notes, photoCount, status, timeline, dispute, createdAtIso]
@@ -1187,6 +1421,40 @@ components:
         txns:
           type: array
           items: { $ref: "#/components/schemas/WalletTxn" }
+
+    WalletTopupResponse:
+      type: object
+      required: [balanceMinor, currencyCode, txns]
+      properties:
+        balanceMinor: { type: integer }
+        currencyCode: { type: string }
+        txns: { type: array, items: { $ref: "#/components/schemas/WalletTxn" } }
+        pendingTopup:
+          type: object
+          required: [intentId, reference, gateway, amountMinor, status]
+          properties:
+            intentId: { type: string }
+            reference: { type: string }
+            gateway: { type: string }
+            amountMinor: { type: integer }
+            authorizationUrl: { type: ["string", "null"] }
+            status: { type: string }
+
+    WalletWithdrawResponse:
+      type: object
+      required: [balanceMinor, currencyCode, txns]
+      properties:
+        balanceMinor: { type: integer }
+        currencyCode: { type: string }
+        txns: { type: array, items: { $ref: "#/components/schemas/WalletTxn" } }
+        pendingWithdrawal:
+          type: object
+          required: [payoutId, reference, amountMinor, status]
+          properties:
+            payoutId: { type: string }
+            reference: { type: string }
+            amountMinor: { type: integer }
+            status: { type: string }
 
     SafetyReport:
       type: object
