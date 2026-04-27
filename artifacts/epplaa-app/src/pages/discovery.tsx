@@ -22,7 +22,7 @@ export default function Discovery() {
             <Search className={`absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 ${isDark ? 'text-white/50' : 'text-stone-400'}`} />
             <input 
               placeholder={`Search Lagos Night Market...`} 
-              className={`w-full pl-10 h-10 rounded-full text-sm outline-none ${isDark ? 'bg-white/5 border border-white/10 focus-visible:ring-1 focus-visible:ring-[#ff00ff] placeholder:text-white/40' : 'bg-stone-300/35 border border-stone-400/55 focus-visible:ring-1 focus-visible:ring-[#d900d9] placeholder:text-stone-400 text-stone-900'}`}
+              className={`w-full pl-10 h-10 rounded-full text-sm outline-none ${isDark ? 'bg-white/5 border border-white/10 focus-visible:ring-1 focus-visible:ring-[#FF8855] placeholder:text-white/40' : 'bg-stone-300/35 border border-stone-400/55 focus-visible:ring-1 focus-visible:ring-[#E6502E] placeholder:text-stone-400 text-stone-900'}`}
             />
           </div>
           <ThemeToggle />
@@ -36,8 +36,8 @@ export default function Discovery() {
               className={`whitespace-nowrap px-4 py-1.5 rounded-full text-sm font-medium transition-colors ${
                 i === 0 
                   ? isDark 
-                    ? "bg-[#00ffff] text-black shadow-[0_0_10px_rgba(0,255,255,0.3)]" 
-                    : "bg-[#00b3b3] text-white shadow-sm"
+                    ? "bg-[#5BA3F5] text-black shadow-[0_0_10px_rgba(91,163,245,0.3)]" 
+                    : "bg-[#1B2A4A] text-white shadow-sm"
                   : isDark
                     ? "bg-white/5 text-white/70 border border-white/10 hover:bg-white/10 hover:text-white"
                     : "bg-white border border-stone-400/55 text-stone-600 hover:bg-stone-300/40 hover:text-stone-900"
@@ -57,7 +57,7 @@ export default function Discovery() {
             <Link key={stream.id} href={`/live/${stream.id}`} className="relative rounded-xl overflow-hidden aspect-[3/4] group block cursor-pointer">
               <img src={stream.posterImage} className="w-full h-full object-cover" alt="Stream" />
               <div className={`absolute inset-0 bg-gradient-to-t ${isDark ? 'from-black/80 via-transparent to-black/20' : 'from-black/70 via-transparent to-black/10'}`}></div>
-              <div className={`absolute top-2 left-2 text-white text-[10px] font-black px-2 py-0.5 rounded flex items-center gap-1 ${isDark ? 'bg-[#ff00ff] shadow-[0_0_10px_rgba(255,0,255,0.6)] animate-pulse' : 'bg-[#d900d9] shadow-sm animate-pulse'}`}>
+              <div className={`absolute top-2 left-2 text-white text-[10px] font-black px-2 py-0.5 rounded flex items-center gap-1 ${isDark ? 'bg-[#FF8855] shadow-[0_0_10px_rgba(255,136,85,0.6)] animate-pulse' : 'bg-[#E6502E] shadow-sm animate-pulse'}`}>
                 <span className="w-1.5 h-1.5 rounded-full bg-white"></span>
                 LIVE
               </div>
@@ -67,7 +67,7 @@ export default function Discovery() {
               <div className="absolute bottom-2 left-2 right-2">
                 <p className="text-xs font-bold leading-tight mb-1 text-white line-clamp-2">{stream.title}</p>
                 <div className="flex items-center gap-1">
-                  <img src={stream.hostAvatar} className={`w-4 h-4 rounded-full border ${isDark ? 'border-[#00ffff]' : 'border-[#00b3b3]'}`} alt="Host" />
+                  <img src={stream.hostAvatar} className={`w-4 h-4 rounded-full border ${isDark ? 'border-[#5BA3F5]' : 'border-[#1B2A4A]'}`} alt="Host" />
                   <span className="text-[10px] text-white/90">{stream.hostName}</span>
                 </div>
               </div>
@@ -75,23 +75,23 @@ export default function Discovery() {
           ))}
 
           {SEED_PRODUCTS.slice(0, 1).map((product) => (
-            <Link key={product.id} href={`/product/${product.id}`} className={`relative rounded-xl overflow-hidden aspect-[3/4] block cursor-pointer ${isDark ? 'bg-[#111]' : 'bg-[#fbeed3] border border-stone-400/35'}`}>
+            <Link key={product.id} href={`/product/${product.id}`} className={`relative rounded-xl overflow-hidden aspect-[3/4] block cursor-pointer ${isDark ? 'bg-[#171C30]' : 'bg-[#fbeed3] border border-stone-400/35'}`}>
               <img src={product.images[0]} className="w-full h-full object-cover opacity-90" alt="Product" />
               <div className={`absolute inset-0 bg-gradient-to-t ${isDark ? 'from-black/80' : 'from-black/60'} via-transparent to-transparent`}></div>
               <div className="absolute bottom-2 left-2 right-2">
                 <p className="text-xs font-medium leading-tight text-white/90 line-clamp-1 mb-1">{product.title}</p>
-                <p className={`text-sm font-black ${isDark ? 'text-[#00ffff]' : 'text-[#00b3b3]'}`}>{formatPrice(product.priceMinor, country)}</p>
+                <p className={`text-sm font-black ${isDark ? 'text-[#5BA3F5]' : 'text-[#1B2A4A]'}`}>{formatPrice(product.priceMinor, country)}</p>
               </div>
             </Link>
           ))}
 
           {SEED_PRODUCTS.slice(2, 3).map((product) => (
-            <Link key={product.id} href={`/product/${product.id}`} className={`relative rounded-xl overflow-hidden aspect-[3/4] block cursor-pointer ${isDark ? 'bg-[#111]' : 'bg-[#fbeed3] border border-stone-400/35'}`}>
+            <Link key={product.id} href={`/product/${product.id}`} className={`relative rounded-xl overflow-hidden aspect-[3/4] block cursor-pointer ${isDark ? 'bg-[#171C30]' : 'bg-[#fbeed3] border border-stone-400/35'}`}>
               <img src={product.images[0]} className="w-full h-full object-cover opacity-90" alt="Product" />
               <div className={`absolute inset-0 bg-gradient-to-t ${isDark ? 'from-black/80' : 'from-black/60'} via-transparent to-transparent`}></div>
               <div className="absolute bottom-2 left-2 right-2">
                 <p className="text-xs font-medium leading-tight text-white/90 line-clamp-1 mb-1">{product.title}</p>
-                <p className={`text-sm font-black ${isDark ? 'text-[#00ffff]' : 'text-[#00b3b3]'}`}>{formatPrice(product.priceMinor, country)}</p>
+                <p className={`text-sm font-black ${isDark ? 'text-[#5BA3F5]' : 'text-[#1B2A4A]'}`}>{formatPrice(product.priceMinor, country)}</p>
               </div>
             </Link>
           ))}
@@ -100,7 +100,7 @@ export default function Discovery() {
              <Link key={stream.id} href={`/live/${stream.id}`} className="relative rounded-xl overflow-hidden aspect-[3/4] group block cursor-pointer">
                <img src={stream.posterImage} className="w-full h-full object-cover" alt="Stream" />
                <div className={`absolute inset-0 bg-gradient-to-t ${isDark ? 'from-black/80 via-transparent to-black/20' : 'from-black/70 via-transparent to-black/10'}`}></div>
-               <div className={`absolute top-2 left-2 text-white text-[10px] font-black px-2 py-0.5 rounded flex items-center gap-1 ${isDark ? 'bg-[#ff00ff] shadow-[0_0_10px_rgba(255,0,255,0.6)] animate-pulse' : 'bg-[#d900d9] shadow-sm animate-pulse'}`}>
+               <div className={`absolute top-2 left-2 text-white text-[10px] font-black px-2 py-0.5 rounded flex items-center gap-1 ${isDark ? 'bg-[#FF8855] shadow-[0_0_10px_rgba(255,136,85,0.6)] animate-pulse' : 'bg-[#E6502E] shadow-sm animate-pulse'}`}>
                  <span className="w-1.5 h-1.5 rounded-full bg-white"></span>
                  LIVE
                </div>
@@ -110,7 +110,7 @@ export default function Discovery() {
                <div className="absolute bottom-2 left-2 right-2">
                  <p className="text-xs font-bold leading-tight mb-1 text-white line-clamp-2">{stream.title}</p>
                  <div className="flex items-center gap-1">
-                   <img src={stream.hostAvatar} className={`w-4 h-4 rounded-full border ${isDark ? 'border-[#ff00ff]' : 'border-[#d900d9]'}`} alt="Host" />
+                   <img src={stream.hostAvatar} className={`w-4 h-4 rounded-full border ${isDark ? 'border-[#FF8855]' : 'border-[#E6502E]'}`} alt="Host" />
                    <span className="text-[10px] text-white/90">{stream.hostName}</span>
                  </div>
                </div>
@@ -118,12 +118,12 @@ export default function Discovery() {
            ))}
 
           {SEED_PRODUCTS.slice(1, 2).map((product) => (
-            <Link key={product.id} href={`/product/${product.id}`} className={`relative rounded-xl overflow-hidden aspect-[3/4] block cursor-pointer ${isDark ? 'bg-[#111]' : 'bg-[#fbeed3] border border-stone-400/35'}`}>
+            <Link key={product.id} href={`/product/${product.id}`} className={`relative rounded-xl overflow-hidden aspect-[3/4] block cursor-pointer ${isDark ? 'bg-[#171C30]' : 'bg-[#fbeed3] border border-stone-400/35'}`}>
               <img src={product.images[0]} className="w-full h-full object-cover opacity-90" alt="Product" />
               <div className={`absolute inset-0 bg-gradient-to-t ${isDark ? 'from-black/80' : 'from-black/60'} via-transparent to-transparent`}></div>
               <div className="absolute bottom-2 left-2 right-2">
                 <p className="text-xs font-medium leading-tight text-white/90 line-clamp-1 mb-1">{product.title}</p>
-                <p className={`text-sm font-black ${isDark ? 'text-[#00ffff]' : 'text-[#00b3b3]'}`}>{formatPrice(product.priceMinor, country)}</p>
+                <p className={`text-sm font-black ${isDark ? 'text-[#5BA3F5]' : 'text-[#1B2A4A]'}`}>{formatPrice(product.priceMinor, country)}</p>
               </div>
             </Link>
           ))}
@@ -132,7 +132,7 @@ export default function Discovery() {
              <Link key={stream.id} href={`/live/${stream.id}`} className="relative rounded-xl overflow-hidden aspect-[3/4] group block cursor-pointer">
                <img src={stream.posterImage} className="w-full h-full object-cover" alt="Stream" />
                <div className={`absolute inset-0 bg-gradient-to-t ${isDark ? 'from-black/80 via-transparent to-black/20' : 'from-black/70 via-transparent to-black/10'}`}></div>
-               <div className={`absolute top-2 left-2 text-white text-[10px] font-black px-2 py-0.5 rounded flex items-center gap-1 ${isDark ? 'bg-[#ff00ff] shadow-[0_0_10px_rgba(255,0,255,0.6)] animate-pulse' : 'bg-[#d900d9] shadow-sm animate-pulse'}`}>
+               <div className={`absolute top-2 left-2 text-white text-[10px] font-black px-2 py-0.5 rounded flex items-center gap-1 ${isDark ? 'bg-[#FF8855] shadow-[0_0_10px_rgba(255,136,85,0.6)] animate-pulse' : 'bg-[#E6502E] shadow-sm animate-pulse'}`}>
                  <span className="w-1.5 h-1.5 rounded-full bg-white"></span>
                  LIVE
                </div>
@@ -142,7 +142,7 @@ export default function Discovery() {
                <div className="absolute bottom-2 left-2 right-2">
                  <p className="text-xs font-bold leading-tight mb-1 text-white line-clamp-2">{stream.title}</p>
                  <div className="flex items-center gap-1">
-                   <img src={stream.hostAvatar} className={`w-4 h-4 rounded-full border ${isDark ? 'border-[#ff00ff]' : 'border-[#d900d9]'}`} alt="Host" />
+                   <img src={stream.hostAvatar} className={`w-4 h-4 rounded-full border ${isDark ? 'border-[#FF8855]' : 'border-[#E6502E]'}`} alt="Host" />
                    <span className="text-[10px] text-white/90">{stream.hostName}</span>
                  </div>
                </div>

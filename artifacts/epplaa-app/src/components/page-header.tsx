@@ -16,7 +16,7 @@ export function PageHeader({
   return (
     <div
       className={`pt-12 pb-4 px-4 z-10 sticky top-0 ${
-        isDark ? "bg-[#050505]" : "bg-[#fbeed3]"
+        isDark ? "bg-[#0F1525]" : "bg-[#fbeed3]"
       }`}
     >
       <div className="flex items-center justify-between gap-3">

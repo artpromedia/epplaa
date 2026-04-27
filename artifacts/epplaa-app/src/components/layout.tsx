@@ -7,36 +7,57 @@ import {
   LayoutGrid,
   Package,
   Radio,
+  ShoppingBag,
 } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import { useTheme } from "@/lib/theme-context";
 import { useSeller } from "@/lib/seller-context";
+import { useCart } from "@/lib/cart-context";
 
 export function Layout({ children }: { children: React.ReactNode }) {
   const [location] = useLocation();
   const { resolvedTheme } = useTheme();
   const isDark = resolvedTheme === "dark";
   const { mode, status, isBroadcasting } = useSeller();
+  const { count } = useCart();
 
   const isLiveRoute = location.startsWith("/live/") || isBroadcasting;
   const inSellerMode = mode === "seller" && status === "approved";
+
+  // Cart + checkout flows are full-screen with their own sticky action bar; the
+  // tab nav would overlap that bar, so hide it on those routes (escape via the
+  // page-header back arrow).
+  const isCheckoutFlow =
+    location === "/cart" || location.startsWith("/checkout");
+  const hideTabNav = isLiveRoute || isCheckoutFlow;
+
+  // Hide floating cart on routes where it would be redundant or get in the way.
+  const hideFloatingCart =
+    inSellerMode ||
+    isCheckoutFlow ||
+    location.startsWith("/product/") || // product detail has its own CTA
+    isLiveRoute;
 
   return (
     <div className="flex justify-center w-full min-h-[100dvh] bg-stone-100 dark:bg-black/90">
       <div
         className={`w-full max-w-[390px] h-[100dvh] relative overflow-hidden font-sans select-none flex flex-col shadow-2xl ${
-          isDark ? "bg-[#050505] text-white" : "bg-[#fbeed3] text-stone-900"
+          isDark ? "bg-[#0F1525] text-white" : "bg-[#fbeed3] text-stone-900"
         }`}
       >
         <div
           className={`flex-1 overflow-y-auto no-scrollbar ${
-            !isLiveRoute ? "pb-20" : ""
+            !hideTabNav ? "pb-20" : ""
           }`}
         >
           {children}
         </div>
 
-        {!isLiveRoute &&
+        {!hideFloatingCart && count > 0 && (
+          <FloatingCart isDark={isDark} count={count} />
+        )}
+
+        {!hideTabNav &&
           (inSellerMode ? (
             <SellerNav location={location} isDark={isDark} />
           ) : (
@@ -47,12 +68,37 @@ export function Layout({ children }: { children: React.ReactNode }) {
   );
 }
 
+function FloatingCart({ isDark, count }: { isDark: boolean; count: number }) {
+  return (
+    <Link
+      href="/cart"
+      data-testid="link-floating-cart"
+      aria-label={`Cart (${count} item${count === 1 ? "" : "s"})`}
+      className={`absolute top-12 right-4 z-40 h-11 w-11 rounded-full flex items-center justify-center shadow-lg backdrop-blur-md ${
+        isDark
+          ? "bg-[#171C30]/90 text-white border border-white/10"
+          : "bg-[#fff5d8]/95 text-stone-900 border border-stone-400/55"
+      }`}
+    >
+      <ShoppingBag className="h-5 w-5" />
+      <span
+        className={`absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-black flex items-center justify-center text-white ${
+          isDark ? "bg-[#FF8855]" : "bg-[#E6502E]"
+        }`}
+        data-testid="text-cart-count"
+      >
+        {count > 99 ? "99+" : count}
+      </span>
+    </Link>
+  );
+}
+
 function navItemClasses(active: boolean, isDark: boolean) {
   return `flex flex-col items-center gap-1 w-16 ${
     active
       ? isDark
-        ? "text-[#00ffff]"
-        : "text-[#00b3b3]"
+        ? "text-[#5BA3F5]"
+        : "text-[#1B2A4A]"
       : isDark
         ? "text-white/50 hover:text-white"
         : "text-stone-500 hover:text-stone-900"
@@ -70,7 +116,7 @@ function NavBarShell({
     <div
       className={`absolute bottom-0 left-0 right-0 h-20 backdrop-blur-xl border-t flex items-center justify-around px-2 pb-4 z-50 ${
         isDark
-          ? "bg-[#0a0a0a]/90 border-white/5"
+          ? "bg-[#171C30]/90 border-white/5"
           : "bg-[#fff5d8]/92 border-stone-400/55"
       }`}
     >
@@ -95,8 +141,8 @@ function CenterAction({
         data-testid={testId}
         className={`flex h-14 w-14 rounded-full p-[2px] ${
           isDark
-            ? "bg-gradient-to-tr from-[#ff00ff] to-[#00ffff] shadow-[0_0_20px_rgba(255,0,255,0.4)]"
-            : "bg-gradient-to-tr from-[#d900d9] to-[#00b3b3] shadow-md"
+            ? "bg-gradient-to-tr from-[#FF8855] to-[#5BA3F5] shadow-[0_0_20px_rgba(255,136,85,0.4)]"
+            : "bg-gradient-to-tr from-[#E6502E] to-[#1B2A4A] shadow-md"
         }`}
       >
         <div
@@ -143,7 +189,7 @@ function BuyerNav({ location, isDark }: { location: string; isDark: boolean }) {
         <MessageSquare className="h-6 w-6" />
         <span
           className={`absolute top-0 right-3 w-2 h-2 rounded-full ${
-            isDark ? "bg-[#ff00ff]" : "bg-[#d900d9]"
+            isDark ? "bg-[#FF8855]" : "bg-[#E6502E]"
           }`}
         ></span>
         <span className="text-[10px] font-medium">Inbox</span>
@@ -188,7 +234,7 @@ function SellerNav({ location, isDark }: { location: string; isDark: boolean }) 
         <MessageSquare className="h-6 w-6" />
         <span
           className={`absolute top-0 right-3 w-2 h-2 rounded-full ${
-            isDark ? "bg-[#ff00ff]" : "bg-[#d900d9]"
+            isDark ? "bg-[#FF8855]" : "bg-[#E6502E]"
           }`}
         ></span>
         <span className="text-[10px] font-medium">Inbox</span>

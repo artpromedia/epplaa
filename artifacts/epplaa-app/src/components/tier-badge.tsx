@@ -13,16 +13,16 @@ const PALETTES: Record<
   { darkBg: string; darkText: string; lightBg: string; lightText: string }
 > = {
   starter: {
-    darkBg: "bg-[#00ffff]/15",
-    darkText: "text-[#00ffff]",
-    lightBg: "bg-[#00b3b3]/15",
-    lightText: "text-[#00b3b3]",
+    darkBg: "bg-[#5BA3F5]/15",
+    darkText: "text-[#5BA3F5]",
+    lightBg: "bg-[#1B2A4A]/15",
+    lightText: "text-[#1B2A4A]",
   },
   pro: {
-    darkBg: "bg-[#ff00ff]/15",
-    darkText: "text-[#ff00ff]",
-    lightBg: "bg-[#d900d9]/15",
-    lightText: "text-[#d900d9]",
+    darkBg: "bg-[#FF8855]/15",
+    darkText: "text-[#FF8855]",
+    lightBg: "bg-[#E6502E]/15",
+    lightText: "text-[#E6502E]",
   },
   elite: {
     darkBg: "bg-amber-400/15",

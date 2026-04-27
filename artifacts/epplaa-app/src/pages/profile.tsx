@@ -36,7 +36,7 @@ export default function Profile() {
     <div className="flex flex-col h-full w-full">
       <div
         className={`pt-12 pb-6 px-4 z-10 sticky top-0 ${
-          isDark ? "bg-[#050505]" : "bg-[#fbeed3]"
+          isDark ? "bg-[#0F1525]" : "bg-[#fbeed3]"
         }`}
       >
         <div className="flex justify-between items-center">
@@ -47,7 +47,7 @@ export default function Profile() {
 
       <div className="px-4 pb-20">
         <div className="flex items-center gap-4 mb-6">
-          <div className="w-20 h-20 rounded-full bg-gradient-to-tr from-[#ff00ff] to-[#00ffff] p-1">
+          <div className="w-20 h-20 rounded-full bg-gradient-to-tr from-[#FF8855] to-[#5BA3F5] p-1">
             <div
               className={`w-full h-full rounded-full flex items-center justify-center text-2xl font-bold ${
                 isDark ? "bg-black text-white" : "bg-white text-stone-900"
@@ -65,7 +65,7 @@ export default function Profile() {
             {status === "approved" && (
               <p
                 className={`text-[10px] font-bold uppercase tracking-wider mt-1 ${
-                  isDark ? "text-[#00ffff]" : "text-[#00b3b3]"
+                  isDark ? "text-[#5BA3F5]" : "text-[#1B2A4A]"
                 }`}
               >
                 {mode === "seller" ? "Seller mode" : "Buyer mode"}
@@ -99,13 +99,13 @@ export default function Profile() {
                     <div
                       className={`w-10 h-10 rounded-full flex items-center justify-center ${
                         isDark
-                          ? "bg-gradient-to-tr from-[#ff00ff]/20 to-[#00ffff]/20"
-                          : "bg-gradient-to-tr from-[#d900d9]/15 to-[#00b3b3]/15"
+                          ? "bg-gradient-to-tr from-[#FF8855]/20 to-[#5BA3F5]/20"
+                          : "bg-gradient-to-tr from-[#E6502E]/15 to-[#1B2A4A]/15"
                       }`}
                     >
                       <Sparkles
                         className={`w-5 h-5 ${
-                          isDark ? "text-[#00ffff]" : "text-[#00b3b3]"
+                          isDark ? "text-[#5BA3F5]" : "text-[#1B2A4A]"
                         }`}
                       />
                     </div>
@@ -171,13 +171,13 @@ export default function Profile() {
                     <div
                       className={`w-10 h-10 rounded-full flex items-center justify-center ${
                         isDark
-                          ? "bg-gradient-to-tr from-[#ff00ff]/20 to-[#00ffff]/20"
-                          : "bg-gradient-to-tr from-[#d900d9]/15 to-[#00b3b3]/15"
+                          ? "bg-gradient-to-tr from-[#FF8855]/20 to-[#5BA3F5]/20"
+                          : "bg-gradient-to-tr from-[#E6502E]/15 to-[#1B2A4A]/15"
                       }`}
                     >
                       <ArrowLeftRight
                         className={`w-5 h-5 ${
-                          isDark ? "text-[#00ffff]" : "text-[#00b3b3]"
+                          isDark ? "text-[#5BA3F5]" : "text-[#1B2A4A]"
                         }`}
                       />
                     </div>
@@ -278,8 +278,8 @@ export default function Profile() {
                         className={`w-full flex items-center justify-between p-3 rounded-lg border text-left transition-colors ${
                           isSelected
                             ? isDark
-                              ? "bg-[#00ffff]/10 border-[#00ffff]/30"
-                              : "bg-[#00b3b3]/10 border-[#00b3b3]/30"
+                              ? "bg-[#5BA3F5]/10 border-[#5BA3F5]/30"
+                              : "bg-[#1B2A4A]/10 border-[#1B2A4A]/30"
                             : isDisabled
                               ? isDark
                                 ? "bg-black/20 border-white/5 opacity-50"
@@ -298,8 +298,8 @@ export default function Profile() {
                               className={`font-bold ${
                                 isSelected
                                   ? isDark
-                                    ? "text-[#00ffff]"
-                                    : "text-[#00b3b3]"
+                                    ? "text-[#5BA3F5]"
+                                    : "text-[#1B2A4A]"
                                   : ""
                               }`}
                             >
@@ -329,7 +329,7 @@ export default function Profile() {
                           {isSelected && (
                             <div
                               className={`w-4 h-4 rounded-full flex items-center justify-center ${
-                                isDark ? "bg-[#00ffff]" : "bg-[#00b3b3]"
+                                isDark ? "bg-[#5BA3F5]" : "bg-[#1B2A4A]"
                               }`}
                             >
                               <div

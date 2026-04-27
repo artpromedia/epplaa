@@ -1,10 +1,13 @@
+import { useState } from "react";
 import { ChevronLeft, Share2, Heart, Star, MapPin, Truck, Package, ShieldCheck } from "lucide-react";
 import { Link, useParams, useLocation } from "wouter";
 import { useTheme } from "@/lib/theme-context";
 import { SEED_PRODUCTS } from "@/lib/seed";
 import { useCountry } from "@/lib/country-context";
+import { useCart } from "@/lib/cart-context";
 import { formatPrice } from "@/lib/format";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { useToast } from "@/hooks/use-toast";
 
 export default function ProductDetail() {
   const { productId } = useParams<{ productId: string }>();
@@ -12,11 +15,34 @@ export default function ProductDetail() {
   const { resolvedTheme } = useTheme();
   const isDark = resolvedTheme === "dark";
   const { country } = useCountry();
+  const { add } = useCart();
+  const { toast } = useToast();
 
   const product = SEED_PRODUCTS.find(p => p.id === productId) || SEED_PRODUCTS[0];
 
+  const [selectedVariants, setSelectedVariants] = useState<Record<string, string>>(
+    () => Object.fromEntries(product.variants.map(v => [v.name, v.options[0]]))
+  );
+
+  const variantNotes = product.variants
+    .map(v => `${v.name}: ${selectedVariants[v.name]}`)
+    .join(" · ");
+
+  function handleAddToCart() {
+    add(product.id, 1, variantNotes || undefined);
+    toast({
+      title: "Added to cart",
+      description: product.title.slice(0, 60),
+    });
+  }
+
+  function handleBuyNow() {
+    add(product.id, 1, variantNotes || undefined);
+    setLocation("/cart");
+  }
+
   return (
-    <div className={`w-full h-full relative overflow-hidden font-sans select-none flex flex-col ${isDark ? 'bg-[#050505] text-white' : 'bg-[#fbeed3] text-stone-900'}`}>
+    <div className={`w-full h-full relative overflow-hidden font-sans select-none flex flex-col ${isDark ? 'bg-[#0F1525] text-white' : 'bg-[#fbeed3] text-stone-900'}`}>
       
       {/* Top Header Transparent */}
       <div className="absolute top-0 left-0 right-0 p-4 pt-12 flex justify-between z-20">
@@ -36,19 +62,19 @@ export default function ProductDetail() {
 
       <div className="flex-1 overflow-y-auto no-scrollbar pb-24">
         {/* Image Carousel */}
-        <div className={`relative w-full aspect-[4/5] ${isDark ? 'bg-[#111]' : 'bg-[#fbeed3]'}`}>
+        <div className={`relative w-full aspect-[4/5] ${isDark ? 'bg-[#171C30]' : 'bg-[#fbeed3]'}`}>
           <img src={product.images[0]} alt="Product" className="w-full h-full object-cover" />
           <div className={`absolute bottom-4 right-4 backdrop-blur text-[10px] font-bold px-2 py-1 rounded border ${isDark ? 'bg-black/60 text-white border-white/10' : 'bg-[#fff5d8]/75 text-stone-900 border-stone-400/55'}`}>
             1 / {product.images.length}
           </div>
-          <div className={`absolute inset-0 bg-gradient-to-t ${isDark ? 'from-[#050505]' : 'from-[#fcfcf9]'} via-transparent to-transparent opacity-80`}></div>
+          <div className={`absolute inset-0 bg-gradient-to-t ${isDark ? 'from-[#0F1525]' : 'from-[#fcfcf9]'} via-transparent to-transparent opacity-80`}></div>
         </div>
 
         {/* Product Info */}
         <div className="px-4 py-2">
           <div className="flex items-start justify-between gap-4">
             <div>
-              <p className={`text-3xl font-black tracking-tight ${isDark ? 'text-[#00ffff]' : 'text-[#00b3b3]'}`}>
+              <p className={`text-3xl font-black tracking-tight ${isDark ? 'text-[#5BA3F5]' : 'text-[#1B2A4A]'}`}>
                 {formatPrice(product.priceMinor, country)}
               </p>
               {product.originalPriceMinor > product.priceMinor && (
@@ -58,7 +84,7 @@ export default function ProductDetail() {
               )}
             </div>
             {product.originalPriceMinor > product.priceMinor && (
-              <div className={`text-[10px] font-bold px-2 py-1 rounded border ${isDark ? 'bg-[#ff00ff]/20 text-[#ff00ff] border-[#ff00ff]/30 shadow-[0_0_10px_rgba(255,0,255,0.2)]' : 'bg-[#d900d9]/10 text-[#d900d9] border-[#d900d9]/30'}`}>
+              <div className={`text-[10px] font-bold px-2 py-1 rounded border ${isDark ? 'bg-[#FF8855]/20 text-[#FF8855] border-[#FF8855]/30 shadow-[0_0_10px_rgba(255,136,85,0.2)]' : 'bg-[#E6502E]/10 text-[#E6502E] border-[#E6502E]/30'}`}>
                 -{Math.round((1 - product.priceMinor / product.originalPriceMinor) * 100)}% OFF
               </div>
             )}
@@ -68,12 +94,12 @@ export default function ProductDetail() {
           
           <div className={`flex items-center gap-3 mt-3 text-xs ${isDark ? 'text-white/60' : 'text-stone-500'}`}>
             <div className="flex items-center gap-1">
-              <Star className={`w-3 h-3 fill-current ${isDark ? 'text-[#ff00ff]' : 'text-[#d900d9]'}`} />
+              <Star className={`w-3 h-3 fill-current ${isDark ? 'text-[#FF8855]' : 'text-[#E6502E]'}`} />
               <span className={`font-bold ${isDark ? 'text-white' : 'text-stone-800'}`}>{product.rating}</span>
               <span>({product.soldCount} sold)</span>
             </div>
             <span>•</span>
-            <div className={`flex items-center gap-1 ${isDark ? 'text-[#00ffff]' : 'text-[#00b3b3]'}`}>
+            <div className={`flex items-center gap-1 ${isDark ? 'text-[#5BA3F5]' : 'text-[#1B2A4A]'}`}>
               <MapPin className="w-3 h-3" />
               <span>{product.originLabel}</span>
             </div>
@@ -85,22 +111,27 @@ export default function ProductDetail() {
           <div key={variant.name} className={`px-4 py-4 mt-2 border-y ${isDark ? 'border-white/10 bg-white/5' : 'border-stone-400/35 bg-stone-300/35'}`}>
             <p className="text-sm font-bold mb-3">Select {variant.name}</p>
             <div className="flex gap-3 overflow-x-auto no-scrollbar">
-              {variant.options.map((opt, i) => (
-                <button 
-                  key={opt} 
-                  className={`min-w-12 px-3 h-12 rounded-xl flex items-center justify-center text-sm font-bold border transition-all ${
-                    i === 0 
-                    ? isDark 
-                      ? "border-[#00ffff] bg-[#00ffff]/10 text-[#00ffff] shadow-[0_0_10px_rgba(0,255,255,0.2)]" 
-                      : "border-[#00b3b3] bg-[#00b3b3]/10 text-[#00b3b3] shadow-sm"
-                    : isDark
-                      ? "border-white/10 bg-black text-white/70 hover:border-white/30"
-                      : "border-stone-400/55 bg-white text-stone-600 hover:border-stone-500/45"
-                  }`}
-                >
-                  {opt}
-                </button>
-              ))}
+              {variant.options.map((opt) => {
+                const picked = selectedVariants[variant.name] === opt;
+                return (
+                  <button
+                    key={opt}
+                    onClick={() => setSelectedVariants(prev => ({ ...prev, [variant.name]: opt }))}
+                    data-testid={`variant-${variant.name}-${opt}`}
+                    className={`min-w-12 px-3 h-12 rounded-xl flex items-center justify-center text-sm font-bold border transition-all ${
+                      picked
+                      ? isDark
+                        ? "border-[#5BA3F5] bg-[#5BA3F5]/10 text-[#5BA3F5] shadow-[0_0_10px_rgba(91,163,245,0.2)]"
+                        : "border-[#1B2A4A] bg-[#1B2A4A]/10 text-[#1B2A4A] shadow-sm"
+                      : isDark
+                        ? "border-white/10 bg-black text-white/70 hover:border-white/30"
+                        : "border-stone-400/55 bg-white text-stone-600 hover:border-stone-500/45"
+                    }`}
+                  >
+                    {opt}
+                  </button>
+                );
+              })}
             </div>
           </div>
         ))}
@@ -109,9 +140,9 @@ export default function ProductDetail() {
         <div className="px-4 py-4 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="relative">
-              <img src={product.sellerAvatar} className={`w-12 h-12 rounded-full border-2 ${isDark ? 'border-[#ff00ff]' : 'border-[#d900d9]'}`} alt={product.sellerName} />
+              <img src={product.sellerAvatar} className={`w-12 h-12 rounded-full border-2 ${isDark ? 'border-[#FF8855]' : 'border-[#E6502E]'}`} alt={product.sellerName} />
               {product.isLiveNow && (
-                <div className={`absolute -bottom-1 left-1/2 -translate-x-1/2 text-white text-[8px] font-black px-1 rounded whitespace-nowrap animate-pulse ${isDark ? 'bg-[#ff00ff]' : 'bg-[#d900d9]'}`}>
+                <div className={`absolute -bottom-1 left-1/2 -translate-x-1/2 text-white text-[8px] font-black px-1 rounded whitespace-nowrap animate-pulse ${isDark ? 'bg-[#FF8855]' : 'bg-[#E6502E]'}`}>
                   LIVE
                 </div>
               )}
@@ -121,7 +152,7 @@ export default function ProductDetail() {
               <p className={`text-xs ${isDark ? 'text-white/50' : 'text-stone-500'}`}>98% positive</p>
             </div>
           </div>
-          <button className={`h-8 px-3 rounded-md text-xs font-bold border bg-transparent transition-colors ${isDark ? 'border-[#00ffff] text-[#00ffff] hover:bg-[#00ffff]/10' : 'border-[#00b3b3] text-[#00b3b3] hover:bg-[#00b3b3]/10'}`}>
+          <button className={`h-8 px-3 rounded-md text-xs font-bold border bg-transparent transition-colors ${isDark ? 'border-[#5BA3F5] text-[#5BA3F5] hover:bg-[#5BA3F5]/10' : 'border-[#1B2A4A] text-[#1B2A4A] hover:bg-[#1B2A4A]/10'}`}>
             View Shop
           </button>
         </div>
@@ -132,15 +163,15 @@ export default function ProductDetail() {
           
           <div className="space-y-3">
             {country.fulfillmentOptions.map((opt, i) => (
-              <div key={opt.id} className={`flex gap-3 p-3 rounded-xl border relative overflow-hidden ${i === 0 ? (isDark ? 'bg-black border-[#00ffff]/30' : 'bg-white border-[#00b3b3]/30') : (isDark ? 'bg-black border-white/10' : 'bg-white border-stone-400/55')}`}>
-                {i === 0 && <div className={`absolute top-0 left-0 w-1 h-full ${isDark ? 'bg-[#00ffff]' : 'bg-[#00b3b3]'}`}></div>}
-                {opt.id.includes('box') ? <Package className={`w-5 h-5 mt-0.5 shrink-0 ${i === 0 ? (isDark ? 'text-[#00ffff]' : 'text-[#00b3b3]') : (isDark ? 'text-white/50' : 'text-stone-400')}`} /> : 
-                 opt.id.includes('pudo') || opt.id.includes('pickup') ? <MapPin className={`w-5 h-5 mt-0.5 shrink-0 ${i === 0 ? (isDark ? 'text-[#00ffff]' : 'text-[#00b3b3]') : (isDark ? 'text-white/50' : 'text-stone-400')}`} /> :
-                 <Truck className={`w-5 h-5 mt-0.5 shrink-0 ${i === 0 ? (isDark ? 'text-[#00ffff]' : 'text-[#00b3b3]') : (isDark ? 'text-white/50' : 'text-stone-400')}`} />}
+              <div key={opt.id} className={`flex gap-3 p-3 rounded-xl border relative overflow-hidden ${i === 0 ? (isDark ? 'bg-black border-[#5BA3F5]/30' : 'bg-white border-[#1B2A4A]/30') : (isDark ? 'bg-black border-white/10' : 'bg-white border-stone-400/55')}`}>
+                {i === 0 && <div className={`absolute top-0 left-0 w-1 h-full ${isDark ? 'bg-[#5BA3F5]' : 'bg-[#1B2A4A]'}`}></div>}
+                {opt.id.includes('box') ? <Package className={`w-5 h-5 mt-0.5 shrink-0 ${i === 0 ? (isDark ? 'text-[#5BA3F5]' : 'text-[#1B2A4A]') : (isDark ? 'text-white/50' : 'text-stone-400')}`} /> : 
+                 opt.id.includes('pudo') || opt.id.includes('pickup') ? <MapPin className={`w-5 h-5 mt-0.5 shrink-0 ${i === 0 ? (isDark ? 'text-[#5BA3F5]' : 'text-[#1B2A4A]') : (isDark ? 'text-white/50' : 'text-stone-400')}`} /> :
+                 <Truck className={`w-5 h-5 mt-0.5 shrink-0 ${i === 0 ? (isDark ? 'text-[#5BA3F5]' : 'text-[#1B2A4A]') : (isDark ? 'text-white/50' : 'text-stone-400')}`} />}
                 <div className="flex-1">
                   <div className="flex justify-between items-start">
                     <p className={`text-sm font-bold ${i === 0 ? (isDark ? 'text-white' : 'text-stone-900') : (isDark ? 'text-white/80' : 'text-stone-800')}`}>{opt.label}</p>
-                    <p className={`text-sm font-bold ${opt.feeMinor === 0 ? (isDark ? 'text-[#00ffff]' : 'text-[#00b3b3]') : (isDark ? 'text-white/80' : 'text-stone-800')}`}>
+                    <p className={`text-sm font-bold ${opt.feeMinor === 0 ? (isDark ? 'text-[#5BA3F5]' : 'text-[#1B2A4A]') : (isDark ? 'text-white/80' : 'text-stone-800')}`}>
                       {opt.feeMinor === 0 ? 'FREE' : formatPrice(opt.feeMinor, country)}
                     </p>
                   </div>
@@ -159,11 +190,17 @@ export default function ProductDetail() {
       </div>
 
       {/* Sticky Bottom CTA */}
-      <div className={`absolute bottom-0 left-0 right-0 p-4 backdrop-blur-xl border-t flex gap-3 z-20 ${isDark ? 'bg-[#050505]/90 border-white/10' : 'bg-[#fbeed3]/90 border-stone-400/55'}`}>
-        <button className={`flex-1 h-14 rounded-xl border font-bold transition-colors ${isDark ? 'bg-white/5 border-white/20 text-white hover:bg-white/10' : 'bg-stone-300/35 border-stone-400/55 text-stone-900 hover:bg-stone-300/55'}`}>
+      <div className={`absolute bottom-0 left-0 right-0 p-4 backdrop-blur-xl border-t flex gap-3 z-20 ${isDark ? 'bg-[#0F1525]/90 border-white/10' : 'bg-[#fbeed3]/90 border-stone-400/55'}`}>
+        <button
+          onClick={handleAddToCart}
+          data-testid="button-add-to-cart"
+          className={`flex-1 h-14 rounded-xl border font-bold transition-colors ${isDark ? 'bg-white/5 border-white/20 text-white hover:bg-white/10' : 'bg-stone-300/35 border-stone-400/55 text-stone-900 hover:bg-stone-300/55'}`}>
           Add to Cart
         </button>
-        <button className={`flex-1 h-14 rounded-xl text-white font-black text-lg transition-all ${isDark ? 'bg-gradient-to-r from-[#ff00ff] to-[#cc00cc] shadow-[0_0_20px_rgba(255,0,255,0.4)] hover:shadow-[0_0_30px_rgba(255,0,255,0.6)]' : 'bg-gradient-to-r from-[#d900d9] to-[#b300b3] shadow-md hover:shadow-lg'}`}>
+        <button
+          onClick={handleBuyNow}
+          data-testid="button-buy-now"
+          className={`flex-1 h-14 rounded-xl text-white font-black text-lg transition-all ${isDark ? 'bg-gradient-to-r from-[#FF8855] to-[#FF6B35] shadow-[0_0_20px_rgba(255,136,85,0.4)] hover:shadow-[0_0_30px_rgba(255,136,85,0.6)]' : 'bg-gradient-to-r from-[#E6502E] to-[#C4441E] shadow-md hover:shadow-lg'}`}>
           Buy Now
         </button>
       </div>

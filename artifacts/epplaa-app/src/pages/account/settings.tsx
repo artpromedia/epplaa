@@ -7,26 +7,20 @@ import {
   Trash,
   LogOut,
   Monitor,
+  MessageCircle,
+  Smartphone,
 } from "lucide-react";
 import { useTheme } from "@/lib/theme-context";
 import { useCountry } from "@/lib/country-context";
 import { useLocalStorage } from "@/lib/use-local-storage";
+import {
+  NotificationPrefs,
+  DEFAULT_NOTIFICATIONS,
+} from "@/lib/notification-prefs";
 import { PageHeader } from "@/components/page-header";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/use-toast";
-
-interface NotificationPrefs {
-  liveDrops: boolean;
-  orderUpdates: boolean;
-  marketing: boolean;
-}
-
-const DEFAULT_NOTIFICATIONS: NotificationPrefs = {
-  liveDrops: true,
-  orderUpdates: true,
-  marketing: false,
-};
 
 const EPPLAA_KEYS = [
   "epplaa-payment-methods",
@@ -40,6 +34,9 @@ const EPPLAA_KEYS = [
   "epplaa-seller-application",
   "epplaa-seller-stats",
   "epplaa-seller-listings",
+  "epplaa-cart",
+  "epplaa-orders",
+  "epplaa-checkout-draft",
 ];
 
 export default function Settings() {
@@ -137,6 +134,46 @@ export default function Settings() {
                   data-testid="switch-marketing"
                 />
               }
+              border
+            />
+            <SettingRow
+              icon={<MessageCircle className="w-5 h-5" />}
+              isDark={isDark}
+              title="WhatsApp updates"
+              description={
+                prefs.whatsappNumber
+                  ? `On ${prefs.whatsappNumber}`
+                  : "Default channel for order updates."
+              }
+              control={
+                <Switch
+                  checked={prefs.whatsapp}
+                  onCheckedChange={(v) =>
+                    setPrefs((p) => ({ ...p, whatsapp: v }))
+                  }
+                  data-testid="switch-whatsapp"
+                />
+              }
+              border
+            />
+            <SettingRow
+              icon={<Smartphone className="w-5 h-5" />}
+              isDark={isDark}
+              title="SMS updates"
+              description={
+                prefs.smsNumber
+                  ? `On ${prefs.smsNumber}`
+                  : "Useful for OTP / pickup codes."
+              }
+              control={
+                <Switch
+                  checked={prefs.sms}
+                  onCheckedChange={(v) =>
+                    setPrefs((p) => ({ ...p, sms: v }))
+                  }
+                  data-testid="switch-sms"
+                />
+              }
             />
           </div>
         </section>
@@ -209,12 +246,12 @@ export default function Settings() {
             >
               <LogOut
                 className={`w-5 h-5 ${
-                  isDark ? "text-[#ff00ff]" : "text-[#d900d9]"
+                  isDark ? "text-[#FF8855]" : "text-[#E6502E]"
                 }`}
               />
               <span
                 className={`font-medium ${
-                  isDark ? "text-[#ff00ff]" : "text-[#d900d9]"
+                  isDark ? "text-[#FF8855]" : "text-[#E6502E]"
                 }`}
               >
                 Sign out
@@ -244,7 +281,7 @@ export default function Settings() {
           <div
             className={`max-w-sm w-full rounded-2xl border p-6 ${
               isDark
-                ? "bg-[#0a0a0a] border-white/10 text-white"
+                ? "bg-[#171C30] border-white/10 text-white"
                 : "bg-white border-stone-300 text-stone-900"
             }`}
           >
@@ -270,8 +307,8 @@ export default function Settings() {
                 onClick={clearLocalData}
                 className={`flex-1 py-2 rounded-full font-bold ${
                   isDark
-                    ? "bg-[#ff00ff] text-white"
-                    : "bg-[#d900d9] text-white"
+                    ? "bg-[#FF8855] text-white"
+                    : "bg-[#E6502E] text-white"
                 }`}
                 data-testid="button-confirm-clear"
               >

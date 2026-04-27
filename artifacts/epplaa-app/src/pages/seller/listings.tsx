@@ -55,7 +55,7 @@ export default function SellerListings() {
     ? "bg-white/5 border-white/10"
     : "bg-white border-stone-400/35";
   const subtleText = isDark ? "text-white/50" : "text-stone-500";
-  const inputClass = `w-full px-3 py-2 rounded-lg border text-sm outline-none focus:ring-2 focus:ring-[#00ffff]/30 ${
+  const inputClass = `w-full px-3 py-2 rounded-lg border text-sm outline-none focus:ring-2 focus:ring-[#5BA3F5]/30 ${
     isDark
       ? "bg-black/40 border-white/10 text-white placeholder:text-white/30"
       : "bg-white border-stone-300 text-stone-900 placeholder:text-stone-400"
@@ -106,7 +106,7 @@ export default function SellerListings() {
     <div className="flex flex-col h-full w-full">
       <div
         className={`pt-12 pb-4 px-4 z-10 sticky top-0 ${
-          isDark ? "bg-[#050505]" : "bg-[#fbeed3]"
+          isDark ? "bg-[#0F1525]" : "bg-[#fbeed3]"
         }`}
       >
         <div className="flex items-center justify-between gap-3">
@@ -153,7 +153,7 @@ export default function SellerListings() {
           <button
             onClick={() => setShowForm(true)}
             className={`w-full flex items-center justify-center gap-2 py-3 rounded-full font-bold ${
-              isDark ? "bg-[#00ffff] text-black" : "bg-[#00b3b3] text-white"
+              isDark ? "bg-[#5BA3F5] text-black" : "bg-[#1B2A4A] text-white"
             }`}
             data-testid="button-add-listing"
           >
@@ -230,7 +230,7 @@ export default function SellerListings() {
               <button
                 onClick={save}
                 className={`flex-1 py-2 rounded-full font-bold ${
-                  isDark ? "bg-[#00ffff] text-black" : "bg-[#00b3b3] text-white"
+                  isDark ? "bg-[#5BA3F5] text-black" : "bg-[#1B2A4A] text-white"
                 }`}
                 data-testid="button-save-listing"
               >
@@ -267,8 +267,8 @@ export default function SellerListings() {
                           className={`text-[10px] font-bold px-2 py-0.5 rounded ${
                             isActive
                               ? isDark
-                                ? "bg-[#00ffff]/15 text-[#00ffff]"
-                                : "bg-[#00b3b3]/15 text-[#00b3b3]"
+                                ? "bg-[#5BA3F5]/15 text-[#5BA3F5]"
+                                : "bg-[#1B2A4A]/15 text-[#1B2A4A]"
                               : isDark
                                 ? "bg-white/10 text-white/60"
                                 : "bg-stone-200 text-stone-500"
@@ -283,7 +283,7 @@ export default function SellerListings() {
                       <p className="font-bold truncate">{l.title}</p>
                       <p
                         className={`text-sm font-bold mt-1 ${
-                          isDark ? "text-[#00ffff]" : "text-[#00b3b3]"
+                          isDark ? "text-[#5BA3F5]" : "text-[#1B2A4A]"
                         }`}
                       >
                         {formatPrice(l.priceMinor, country)}
@@ -342,7 +342,7 @@ function NotApprovedState({ isDark }: { isDark: boolean }) {
     <div className="flex flex-col h-full w-full">
       <div
         className={`pt-12 pb-4 px-4 z-10 sticky top-0 ${
-          isDark ? "bg-[#050505]" : "bg-[#fbeed3]"
+          isDark ? "bg-[#0F1525]" : "bg-[#fbeed3]"
         }`}
       >
         <h1 className="text-xl font-bold">Listings</h1>
@@ -358,7 +358,7 @@ function NotApprovedState({ isDark }: { isDark: boolean }) {
         <Link
           href="/seller/apply"
           className={`inline-block px-6 py-3 rounded-full font-bold ${
-            isDark ? "bg-[#00ffff] text-black" : "bg-[#00b3b3] text-white"
+            isDark ? "bg-[#5BA3F5] text-black" : "bg-[#1B2A4A] text-white"
           }`}
         >
           Apply now

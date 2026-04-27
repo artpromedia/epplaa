@@ -6,6 +6,9 @@ import NotFound from "@/pages/not-found";
 import { ThemeProvider } from "@/lib/theme-context";
 import { CountryProvider } from "@/lib/country-context";
 import { SellerProvider } from "@/lib/seller-context";
+import { CartProvider } from "@/lib/cart-context";
+import { OrdersProvider } from "@/lib/orders-context";
+import { CheckoutProvider } from "@/lib/checkout-context";
 import { Layout } from "@/components/layout";
 
 import Discovery from "@/pages/discovery";
@@ -22,6 +25,16 @@ import SellerStudio from "@/pages/seller/studio";
 import SellerListings from "@/pages/seller/listings";
 import SellerGoLive from "@/pages/seller/go-live";
 
+import Cart from "@/pages/cart";
+import CheckoutMethod from "@/pages/checkout/method";
+import CheckoutLocation from "@/pages/checkout/location";
+import CheckoutAddress from "@/pages/checkout/address";
+import CheckoutPayment from "@/pages/checkout/payment";
+import CheckoutReview from "@/pages/checkout/review";
+import CheckoutSuccess from "@/pages/checkout/success";
+import Orders from "@/pages/orders";
+import OrderDetail from "@/pages/order-detail";
+
 const queryClient = new QueryClient();
 
 function Router() {
@@ -32,6 +45,15 @@ function Router() {
         <Route path="/discover" component={Discovery} />
         <Route path="/live/:streamId" component={LiveShopping} />
         <Route path="/product/:productId" component={ProductDetail} />
+        <Route path="/cart" component={Cart} />
+        <Route path="/checkout" component={CheckoutMethod} />
+        <Route path="/checkout/location" component={CheckoutLocation} />
+        <Route path="/checkout/address" component={CheckoutAddress} />
+        <Route path="/checkout/payment" component={CheckoutPayment} />
+        <Route path="/checkout/review" component={CheckoutReview} />
+        <Route path="/checkout/success/:orderId" component={CheckoutSuccess} />
+        <Route path="/orders" component={Orders} />
+        <Route path="/orders/:orderId" component={OrderDetail} />
         <Route path="/inbox" component={Inbox} />
         <Route path="/profile" component={Profile} />
         <Route path="/account/payment-methods" component={PaymentMethods} />
@@ -55,12 +77,18 @@ function App() {
       <ThemeProvider defaultTheme="system" storageKey="epplaa-theme">
         <CountryProvider>
           <SellerProvider>
-            <TooltipProvider>
-              <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, "")}>
-                <Router />
-              </WouterRouter>
-              <Toaster />
-            </TooltipProvider>
+            <OrdersProvider>
+              <CartProvider>
+                <CheckoutProvider>
+                  <TooltipProvider>
+                    <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, "")}>
+                      <Router />
+                    </WouterRouter>
+                    <Toaster />
+                  </TooltipProvider>
+                </CheckoutProvider>
+              </CartProvider>
+            </OrdersProvider>
           </SellerProvider>
         </CountryProvider>
       </ThemeProvider>

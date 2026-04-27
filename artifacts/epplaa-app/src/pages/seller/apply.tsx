@@ -123,7 +123,7 @@ export default function SellerApply() {
     ? "bg-white/5 border-white/10"
     : "bg-white border-stone-400/35";
   const subtleText = isDark ? "text-white/50" : "text-stone-500";
-  const inputClass = `w-full px-3 py-2 rounded-lg border text-sm outline-none focus:ring-2 focus:ring-[#00ffff]/30 ${
+  const inputClass = `w-full px-3 py-2 rounded-lg border text-sm outline-none focus:ring-2 focus:ring-[#5BA3F5]/30 ${
     isDark
       ? "bg-black/40 border-white/10 text-white placeholder:text-white/30"
       : "bg-white border-stone-300 text-stone-900 placeholder:text-stone-400"
@@ -137,7 +137,7 @@ export default function SellerApply() {
           <div className={`rounded-xl border p-6 text-center ${cardClass}`}>
             <Check
               className={`w-10 h-10 mx-auto mb-3 ${
-                isDark ? "text-[#00ffff]" : "text-[#00b3b3]"
+                isDark ? "text-[#5BA3F5]" : "text-[#1B2A4A]"
               }`}
             />
             <p className="font-bold mb-1">You're vetted</p>
@@ -149,7 +149,7 @@ export default function SellerApply() {
           <button
             onClick={() => navigate("/seller/studio")}
             className={`w-full py-3 rounded-full font-bold ${
-              isDark ? "bg-[#00ffff] text-black" : "bg-[#00b3b3] text-white"
+              isDark ? "bg-[#5BA3F5] text-black" : "bg-[#1B2A4A] text-white"
             }`}
             data-testid="button-go-studio"
           >
@@ -345,8 +345,8 @@ export default function SellerApply() {
                     className={`text-left p-3 rounded-lg border transition-colors ${
                       businessType === opt.v
                         ? isDark
-                          ? "bg-[#00ffff]/10 border-[#00ffff]/30"
-                          : "bg-[#00b3b3]/10 border-[#00b3b3]/30"
+                          ? "bg-[#5BA3F5]/10 border-[#5BA3F5]/30"
+                          : "bg-[#1B2A4A]/10 border-[#1B2A4A]/30"
                         : isDark
                           ? "bg-black/40 border-white/10 hover:bg-white/5"
                           : "bg-white border-stone-300 hover:bg-stone-50"
@@ -374,7 +374,7 @@ export default function SellerApply() {
                 <div className="flex items-center gap-2 mb-1">
                   <Building2
                     className={`w-4 h-4 ${
-                      isDark ? "text-[#00ffff]" : "text-[#00b3b3]"
+                      isDark ? "text-[#5BA3F5]" : "text-[#1B2A4A]"
                     }`}
                   />
                   <label className="block text-sm font-bold">
@@ -479,8 +479,8 @@ export default function SellerApply() {
             <div
               className={`rounded-lg p-3 border-2 border-dashed ${
                 isDark
-                  ? "border-[#00ffff]/30 bg-[#00ffff]/5"
-                  : "border-[#00b3b3]/30 bg-[#00b3b3]/5"
+                  ? "border-[#5BA3F5]/30 bg-[#5BA3F5]/5"
+                  : "border-[#1B2A4A]/30 bg-[#1B2A4A]/5"
               }`}
               data-testid="tier-preview"
             >
@@ -523,7 +523,7 @@ export default function SellerApply() {
             <div className="flex items-center gap-2">
               <ShieldCheck
                 className={`w-5 h-5 ${
-                  isDark ? "text-[#00ffff]" : "text-[#00b3b3]"
+                  isDark ? "text-[#5BA3F5]" : "text-[#1B2A4A]"
                 }`}
               />
               <h2 className="font-bold">Identity verification</h2>
@@ -545,8 +545,8 @@ export default function SellerApply() {
                     className={`flex-1 min-w-[120px] py-2 px-3 rounded-lg border font-medium text-sm ${
                       idTypeCode === d.code
                         ? isDark
-                          ? "bg-[#00ffff]/10 border-[#00ffff]/30 text-[#00ffff]"
-                          : "bg-[#00b3b3]/10 border-[#00b3b3]/30 text-[#00b3b3]"
+                          ? "bg-[#5BA3F5]/10 border-[#5BA3F5]/30 text-[#5BA3F5]"
+                          : "bg-[#1B2A4A]/10 border-[#1B2A4A]/30 text-[#1B2A4A]"
                         : isDark
                           ? "bg-black/40 border-white/10"
                           : "bg-white border-stone-300"
@@ -616,7 +616,7 @@ export default function SellerApply() {
             <div className="flex items-center gap-2">
               <Store
                 className={`w-5 h-5 ${
-                  isDark ? "text-[#00ffff]" : "text-[#00b3b3]"
+                  isDark ? "text-[#5BA3F5]" : "text-[#1B2A4A]"
                 }`}
               />
               <h2 className="font-bold">Set up your storefront</h2>
@@ -687,7 +687,7 @@ export default function SellerApply() {
             <div className="flex items-center gap-2">
               <Wallet
                 className={`w-5 h-5 ${
-                  isDark ? "text-[#00ffff]" : "text-[#00b3b3]"
+                  isDark ? "text-[#5BA3F5]" : "text-[#1B2A4A]"
                 }`}
               />
               <h2 className="font-bold">Where should we send payouts?</h2>
@@ -756,7 +756,7 @@ export default function SellerApply() {
 
             <div
               className={`rounded-lg p-3 flex items-center justify-between gap-3 ${
-                isDark ? "bg-[#00ffff]/10" : "bg-[#00b3b3]/10"
+                isDark ? "bg-[#5BA3F5]/10" : "bg-[#1B2A4A]/10"
               }`}
             >
               <div>
@@ -773,7 +773,7 @@ export default function SellerApply() {
                 type="checkbox"
                 checked={accepted}
                 onChange={(e) => setAccepted(e.target.checked)}
-                className="mt-1 w-4 h-4 accent-[#00b3b3]"
+                className="mt-1 w-4 h-4 accent-[#1B2A4A]"
                 data-testid="checkbox-accept"
               />
               <span className={`text-sm ${subtleText}`}>
@@ -812,7 +812,7 @@ export default function SellerApply() {
             <button
               onClick={nextStep}
               className={`flex-1 py-3 rounded-full font-bold ${
-                isDark ? "bg-[#00ffff] text-black" : "bg-[#00b3b3] text-white"
+                isDark ? "bg-[#5BA3F5] text-black" : "bg-[#1B2A4A] text-white"
               }`}
               data-testid="button-next-step"
             >
@@ -822,7 +822,7 @@ export default function SellerApply() {
             <button
               onClick={submit}
               className={`flex-1 py-3 rounded-full font-bold ${
-                isDark ? "bg-[#00ffff] text-black" : "bg-[#00b3b3] text-white"
+                isDark ? "bg-[#5BA3F5] text-black" : "bg-[#1B2A4A] text-white"
               }`}
               data-testid="button-submit-application"
             >
@@ -870,7 +870,7 @@ function Header({ isDark, title }: { isDark: boolean; title: string }) {
   return (
     <div
       className={`pt-12 pb-4 px-4 z-10 sticky top-0 ${
-        isDark ? "bg-[#050505]" : "bg-[#fbeed3]"
+        isDark ? "bg-[#0F1525]" : "bg-[#fbeed3]"
       }`}
     >
       <div className="flex items-center gap-2">
@@ -900,8 +900,8 @@ function Stepper({ step, isDark }: { step: number; isDark: boolean }) {
               className={`h-1 rounded-full transition-colors ${
                 active
                   ? isDark
-                    ? "bg-[#00ffff]"
-                    : "bg-[#00b3b3]"
+                    ? "bg-[#5BA3F5]"
+                    : "bg-[#1B2A4A]"
                   : isDark
                     ? "bg-white/10"
                     : "bg-stone-300"
@@ -911,8 +911,8 @@ function Stepper({ step, isDark }: { step: number; isDark: boolean }) {
               className={`text-[9px] mt-1 font-bold uppercase tracking-wider text-center ${
                 active
                   ? isDark
-                    ? "text-[#00ffff]"
-                    : "text-[#00b3b3]"
+                    ? "text-[#5BA3F5]"
+                    : "text-[#1B2A4A]"
                   : isDark
                     ? "text-white/30"
                     : "text-stone-400"

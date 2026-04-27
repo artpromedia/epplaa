@@ -50,7 +50,7 @@ export default function SellerGoLive() {
     ? "bg-white/5 border-white/10"
     : "bg-white border-stone-400/35";
   const subtleText = isDark ? "text-white/50" : "text-stone-500";
-  const inputClass = `w-full px-3 py-2 rounded-lg border text-sm outline-none focus:ring-2 focus:ring-[#00ffff]/30 ${
+  const inputClass = `w-full px-3 py-2 rounded-lg border text-sm outline-none focus:ring-2 focus:ring-[#5BA3F5]/30 ${
     isDark
       ? "bg-black/40 border-white/10 text-white placeholder:text-white/30"
       : "bg-white border-stone-300 text-stone-900 placeholder:text-stone-400"
@@ -115,7 +115,7 @@ export default function SellerGoLive() {
     <div className="flex flex-col h-full w-full">
       <div
         className={`pt-12 pb-4 px-4 z-10 sticky top-0 ${
-          isDark ? "bg-[#050505]" : "bg-[#fbeed3]"
+          isDark ? "bg-[#0F1525]" : "bg-[#fbeed3]"
         }`}
       >
         <div className="flex items-center justify-between gap-3">
@@ -178,7 +178,7 @@ export default function SellerGoLive() {
               <Link
                 href="/seller/listings"
                 className={`inline-block px-4 py-2 rounded-full font-bold text-sm ${
-                  isDark ? "bg-[#00ffff] text-black" : "bg-[#00b3b3] text-white"
+                  isDark ? "bg-[#5BA3F5] text-black" : "bg-[#1B2A4A] text-white"
                 }`}
               >
                 Add a listing
@@ -195,8 +195,8 @@ export default function SellerGoLive() {
                     className={`w-full flex items-center justify-between p-3 rounded-lg border text-left transition-colors ${
                       selected
                         ? isDark
-                          ? "bg-[#ff00ff]/10 border-[#ff00ff]/30"
-                          : "bg-[#d900d9]/10 border-[#d900d9]/30"
+                          ? "bg-[#FF8855]/10 border-[#FF8855]/30"
+                          : "bg-[#E6502E]/10 border-[#E6502E]/30"
                         : isDark
                           ? "bg-black/40 border-white/10 hover:bg-white/5"
                           : "bg-white border-stone-300 hover:bg-stone-50"
@@ -207,7 +207,7 @@ export default function SellerGoLive() {
                       <p className="font-medium truncate">{l.title}</p>
                       <p
                         className={`text-sm font-bold ${
-                          isDark ? "text-[#00ffff]" : "text-[#00b3b3]"
+                          isDark ? "text-[#5BA3F5]" : "text-[#1B2A4A]"
                         }`}
                       >
                         {formatPrice(l.priceMinor, country)}
@@ -217,8 +217,8 @@ export default function SellerGoLive() {
                       className={`text-[10px] font-bold px-2 py-1 rounded ${
                         selected
                           ? isDark
-                            ? "bg-[#ff00ff] text-white"
-                            : "bg-[#d900d9] text-white"
+                            ? "bg-[#FF8855] text-white"
+                            : "bg-[#E6502E] text-white"
                           : isDark
                             ? "bg-white/10 text-white/50"
                             : "bg-stone-200 text-stone-500"
@@ -238,8 +238,8 @@ export default function SellerGoLive() {
           disabled={activeListings.length === 0}
           className={`w-full flex items-center justify-center gap-2 py-4 rounded-full font-bold text-base ${
             isDark
-              ? "bg-gradient-to-r from-[#ff00ff] to-[#00ffff] text-black disabled:from-white/10 disabled:to-white/10 disabled:text-white/30"
-              : "bg-gradient-to-r from-[#d900d9] to-[#00b3b3] text-white disabled:from-stone-200 disabled:to-stone-200 disabled:text-stone-400"
+              ? "bg-gradient-to-r from-[#FF8855] to-[#5BA3F5] text-black disabled:from-white/10 disabled:to-white/10 disabled:text-white/30"
+              : "bg-gradient-to-r from-[#E6502E] to-[#1B2A4A] text-white disabled:from-stone-200 disabled:to-stone-200 disabled:text-stone-400"
           }`}
           data-testid="button-start-broadcast"
         >
@@ -272,12 +272,12 @@ function LiveBroadcastView({
 
   return (
     <div className="absolute inset-0 bg-gradient-to-br from-[#1a0033] via-black to-[#001a1a] text-white overflow-hidden">
-      <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top,rgba(255,0,255,0.25),transparent_60%),radial-gradient(ellipse_at_bottom,rgba(0,255,255,0.2),transparent_55%)]" />
+      <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top,rgba(255,136,85,0.25),transparent_60%),radial-gradient(ellipse_at_bottom,rgba(91,163,245,0.2),transparent_55%)]" />
 
       <div className="relative h-full flex flex-col">
         <div className="pt-12 pb-3 px-4 flex items-start justify-between">
           <div className="flex items-center gap-2 min-w-0">
-            <span className="bg-[#ff00ff] text-white text-[10px] font-bold px-2 py-1 rounded">
+            <span className="bg-[#FF8855] text-white text-[10px] font-bold px-2 py-1 rounded">
               ● LIVE
             </span>
             <span className="text-sm font-bold truncate">@{storeHandle}</span>
@@ -296,7 +296,7 @@ function LiveBroadcastView({
 
         <div className="flex-1 flex items-center justify-center px-6">
           <div className="text-center">
-            <Radio className="w-16 h-16 mx-auto mb-4 text-[#00ffff] animate-pulse" />
+            <Radio className="w-16 h-16 mx-auto mb-4 text-[#5BA3F5] animate-pulse" />
             <p className="font-bold text-lg mb-1">You're broadcasting</p>
             <p className="text-sm text-white/60 max-w-xs">
               In production, your camera feed shows here. Buyers chat, react,
@@ -307,16 +307,16 @@ function LiveBroadcastView({
 
         {headline && (
           <div className="absolute right-3 bottom-32 max-w-[200px] bg-black/60 backdrop-blur rounded-lg p-3 border border-white/15">
-            <p className="text-[10px] font-bold uppercase tracking-wider text-[#00ffff] mb-1">
+            <p className="text-[10px] font-bold uppercase tracking-wider text-[#5BA3F5] mb-1">
               Pinned now
             </p>
             <p className="text-sm font-bold leading-tight mb-1 line-clamp-2">
               {headline.title}
             </p>
-            <p className="text-base font-bold text-[#00ffff]">
+            <p className="text-base font-bold text-[#5BA3F5]">
               {formatPrice(headline.priceMinor, country)}
             </p>
-            <button className="mt-2 w-full py-1.5 bg-[#ff00ff] text-white text-xs font-bold rounded-full">
+            <button className="mt-2 w-full py-1.5 bg-[#FF8855] text-white text-xs font-bold rounded-full">
               Buy now
             </button>
           </div>
@@ -362,7 +362,7 @@ function NotApprovedState({ isDark }: { isDark: boolean }) {
     <div className="flex flex-col h-full w-full">
       <div
         className={`pt-12 pb-4 px-4 z-10 sticky top-0 ${
-          isDark ? "bg-[#050505]" : "bg-[#fbeed3]"
+          isDark ? "bg-[#0F1525]" : "bg-[#fbeed3]"
         }`}
       >
         <h1 className="text-xl font-bold">Go Live</h1>
@@ -370,7 +370,7 @@ function NotApprovedState({ isDark }: { isDark: boolean }) {
       <div className="px-6 py-12 text-center space-y-4">
         <Radio
           className={`w-10 h-10 mx-auto ${
-            isDark ? "text-[#ff00ff]" : "text-[#d900d9]"
+            isDark ? "text-[#FF8855]" : "text-[#E6502E]"
           }`}
         />
         <p className="font-bold text-lg">Live broadcasting is for sellers</p>
@@ -385,7 +385,7 @@ function NotApprovedState({ isDark }: { isDark: boolean }) {
         <Link
           href="/seller/apply"
           className={`inline-block px-6 py-3 rounded-full font-bold ${
-            isDark ? "bg-[#00ffff] text-black" : "bg-[#00b3b3] text-white"
+            isDark ? "bg-[#5BA3F5] text-black" : "bg-[#1B2A4A] text-white"
           }`}
           data-testid="button-apply-from-go-live"
         >
@@ -395,7 +395,7 @@ function NotApprovedState({ isDark }: { isDark: boolean }) {
           <Link
             href="/seller/tiers"
             className={`text-sm font-bold ${
-              isDark ? "text-[#00ffff]" : "text-[#00b3b3]"
+              isDark ? "text-[#5BA3F5]" : "text-[#1B2A4A]"
             }`}
           >
             See seller tiers →

@@ -78,40 +78,41 @@
   --elevate-1: rgba(0,0,0, .03);
   --elevate-2: rgba(0,0,0, .08);
 
-  --background: 40 76% 91%;
+  /* Lagos Sunset — light mode: warm cream + navy + coral */
+  --background: 40 76% 91%;        /* warm cream #fbeed3 */
   --foreground: 24 10% 10%;
-  --border: 24 10% 80%; /* rough equivalent for stone-400 */
-  --card: 45 100% 92%;
+  --border: 24 10% 80%;
+  --card: 45 100% 92%;             /* lighter cream #fff5d8 */
   --card-foreground: 24 10% 10%;
   --card-border: 24 10% 80%;
   --sidebar: 45 100% 92%;
   --sidebar-foreground: 24 10% 10%;
   --sidebar-border: 24 10% 80%;
-  --sidebar-primary: 180 100% 35%;
+  --sidebar-primary: 219 46% 20%;  /* Epplaa navy #1B2A4A */
   --sidebar-primary-foreground: 0 0% 100%;
-  --sidebar-accent: 300 100% 43%;
+  --sidebar-accent: 11 78% 54%;    /* sunset coral #E6502E */
   --sidebar-accent-foreground: 0 0% 100%;
-  --sidebar-ring: 180 100% 35%;
+  --sidebar-ring: 219 46% 20%;
   --popover: 45 100% 92%;
   --popover-foreground: 24 10% 10%;
   --popover-border: 24 10% 80%;
-  --primary: 180 100% 35%;
+  --primary: 219 46% 20%;          /* Epplaa navy #1B2A4A */
   --primary-foreground: 0 0% 100%;
-  --secondary: 300 100% 43%;
+  --secondary: 11 78% 54%;         /* sunset coral #E6502E */
   --secondary-foreground: 0 0% 100%;
   --muted: 24 10% 85%;
   --muted-foreground: 24 10% 40%;
-  --accent: 180 100% 35%;
+  --accent: 219 46% 20%;
   --accent-foreground: 0 0% 100%;
-  --destructive: 0 84% 60%;
+  --destructive: 0 75% 55%;
   --destructive-foreground: 0 0% 100%;
   --input: 24 10% 80%;
-  --ring: 180 100% 35%;
-  --chart-1: 180 100% 35%;
-  --chart-2: 300 100% 43%;
-  --chart-3: 200 100% 40%;
-  --chart-4: 30 100% 50%;
-  --chart-5: 0 100% 60%;
+  --ring: 219 46% 20%;
+  --chart-1: 219 46% 20%;          /* navy */
+  --chart-2: 11 78% 54%;           /* coral */
+  --chart-3: 212 89% 66%;          /* sky */
+  --chart-4: 35 100% 55%;          /* warm gold */
+  --chart-5: 0 75% 55%;            /* red */
 
   --app-font-sans: 'Inter', sans-serif;
   --app-font-serif: Georgia, serif;
@@ -169,40 +170,41 @@
   --elevate-1: rgba(255,255,255, .04);
   --elevate-2: rgba(255,255,255, .09);
 
-  --background: 0 0% 2%;
+  /* Lagos Sunset — dark mode: warm dark navy + sky + coral */
+  --background: 222 42% 10%;       /* warm dark navy #0F1525 */
   --foreground: 0 0% 100%;
-  --border: 0 0% 20%;
-  --card: 0 0% 7%;
+  --border: 222 25% 22%;
+  --card: 224 35% 14%;             /* warm dark surface #171C30 */
   --card-foreground: 0 0% 100%;
-  --card-border: 0 0% 20%;
-  --sidebar: 0 0% 5%;
+  --card-border: 222 25% 22%;
+  --sidebar: 224 35% 12%;
   --sidebar-foreground: 0 0% 100%;
-  --sidebar-border: 0 0% 20%;
-  --sidebar-primary: 180 100% 50%;
+  --sidebar-border: 222 25% 22%;
+  --sidebar-primary: 212 89% 66%;  /* sky #5BA3F5 */
   --sidebar-primary-foreground: 0 0% 0%;
-  --sidebar-accent: 300 100% 50%;
+  --sidebar-accent: 15 100% 67%;   /* warm coral #FF8855 */
   --sidebar-accent-foreground: 0 0% 0%;
-  --sidebar-ring: 180 100% 50%;
-  --popover: 0 0% 7%;
+  --sidebar-ring: 212 89% 66%;
+  --popover: 224 35% 14%;
   --popover-foreground: 0 0% 100%;
-  --popover-border: 0 0% 20%;
-  --primary: 180 100% 50%;
+  --popover-border: 222 25% 22%;
+  --primary: 212 89% 66%;          /* sky #5BA3F5 */
   --primary-foreground: 0 0% 0%;
-  --secondary: 300 100% 50%;
+  --secondary: 15 100% 67%;        /* warm coral #FF8855 */
   --secondary-foreground: 0 0% 0%;
-  --muted: 0 0% 15%;
-  --muted-foreground: 0 0% 60%;
-  --accent: 180 100% 50%;
+  --muted: 222 25% 18%;
+  --muted-foreground: 222 15% 65%;
+  --accent: 212 89% 66%;
   --accent-foreground: 0 0% 0%;
-  --destructive: 0 84% 60%;
+  --destructive: 0 75% 55%;
   --destructive-foreground: 0 0% 100%;
-  --input: 0 0% 25%;
-  --ring: 180 100% 50%;
-  --chart-1: 180 100% 50%;
-  --chart-2: 300 100% 50%;
-  --chart-3: 200 100% 50%;
-  --chart-4: 30 100% 50%;
-  --chart-5: 0 100% 60%;
+  --input: 222 22% 28%;
+  --ring: 212 89% 66%;
+  --chart-1: 212 89% 66%;          /* sky */
+  --chart-2: 15 100% 67%;          /* coral */
+  --chart-3: 200 89% 60%;
+  --chart-4: 35 100% 60%;          /* warm gold */
+  --chart-5: 0 75% 55%;
 
   --shadow-2xs: 0px 2px 0px 0px hsl(202.8169 89.1213% 53.1373% / 0.00);
   --shadow-xs: 0px 2px 0px 0px hsl(202.8169 89.1213% 53.1373% / 0.00);

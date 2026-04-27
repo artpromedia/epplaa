@@ -93,7 +93,7 @@ export default function PaymentMethods() {
     ? "bg-white/5 border-white/10"
     : "bg-white border-stone-400/35";
   const subtleText = isDark ? "text-white/50" : "text-stone-500";
-  const inputClass = `w-full px-3 py-2 rounded-lg border text-sm outline-none focus:ring-2 focus:ring-[#00ffff]/30 ${
+  const inputClass = `w-full px-3 py-2 rounded-lg border text-sm outline-none focus:ring-2 focus:ring-[#5BA3F5]/30 ${
     isDark
       ? "bg-black/40 border-white/10 text-white placeholder:text-white/30"
       : "bg-white border-stone-300 text-stone-900 placeholder:text-stone-400"
@@ -223,8 +223,8 @@ export default function PaymentMethods() {
             onClick={() => setShowForm(true)}
             className={`w-full flex items-center justify-center gap-2 py-3 rounded-full font-bold ${
               isDark
-                ? "bg-[#00ffff] text-black"
-                : "bg-[#00b3b3] text-white"
+                ? "bg-[#5BA3F5] text-black"
+                : "bg-[#1B2A4A] text-white"
             }`}
             data-testid="button-add-payment"
           >
@@ -248,8 +248,8 @@ export default function PaymentMethods() {
                       className={`flex items-center gap-3 p-3 rounded-lg border text-left transition-colors ${
                         active
                           ? isDark
-                            ? "bg-[#00ffff]/10 border-[#00ffff]/30"
-                            : "bg-[#00b3b3]/10 border-[#00b3b3]/30"
+                            ? "bg-[#5BA3F5]/10 border-[#5BA3F5]/30"
+                            : "bg-[#1B2A4A]/10 border-[#1B2A4A]/30"
                           : isDark
                             ? "bg-black/40 border-white/10 hover:bg-white/5"
                             : "bg-white border-stone-300 hover:bg-stone-50"
@@ -260,8 +260,8 @@ export default function PaymentMethods() {
                         className={`w-5 h-5 ${
                           active
                             ? isDark
-                              ? "text-[#00ffff]"
-                              : "text-[#00b3b3]"
+                              ? "text-[#5BA3F5]"
+                              : "text-[#1B2A4A]"
                             : isDark
                               ? "text-white/70"
                               : "text-stone-600"
@@ -271,7 +271,7 @@ export default function PaymentMethods() {
                       {active && (
                         <Check
                           className={`w-4 h-4 ml-auto ${
-                            isDark ? "text-[#00ffff]" : "text-[#00b3b3]"
+                            isDark ? "text-[#5BA3F5]" : "text-[#1B2A4A]"
                           }`}
                         />
                       )}
@@ -318,8 +318,8 @@ export default function PaymentMethods() {
                 onClick={save}
                 className={`flex-1 py-2 rounded-full font-bold ${
                   isDark
-                    ? "bg-[#00ffff] text-black"
-                    : "bg-[#00b3b3] text-white"
+                    ? "bg-[#5BA3F5] text-black"
+                    : "bg-[#1B2A4A] text-white"
                 }`}
                 data-testid="button-save-payment"
               >

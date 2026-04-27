@@ -16,7 +16,7 @@ export default function LiveShopping() {
   const pinnedProduct = SEED_PRODUCTS.find(p => p.id === stream.currentProductId);
 
   return (
-    <div className={`w-full h-full relative overflow-hidden font-sans select-none ${isDark ? 'bg-[#050505] text-white' : 'bg-[#fbeed3] text-stone-900'}`}>
+    <div className={`w-full h-full relative overflow-hidden font-sans select-none ${isDark ? 'bg-[#0F1525] text-white' : 'bg-[#fbeed3] text-stone-900'}`}>
       {/* Video Background */}
       <div className="absolute inset-0">
         <img 
@@ -31,12 +31,12 @@ export default function LiveShopping() {
       {/* Top Header */}
       <div className="absolute top-12 left-4 right-4 flex items-center justify-between z-10">
         <div className={`flex items-center backdrop-blur-md rounded-full p-1 pr-3 border ${isDark ? 'bg-black/40 border-white/10' : 'bg-[#fff5d8]/75 border-stone-400/55'}`}>
-          <img src={stream.hostAvatar} className="h-8 w-8 rounded-full border border-[#ff00ff]" alt={stream.hostName} />
+          <img src={stream.hostAvatar} className="h-8 w-8 rounded-full border border-[#FF8855]" alt={stream.hostName} />
           <div className="ml-2 flex flex-col">
             <span className="text-xs font-bold leading-tight">{stream.hostName}</span>
             <span className={`text-[10px] leading-tight ${isDark ? 'text-white/70' : 'text-stone-700'}`}>{stream.viewerCount} watching</span>
           </div>
-          <button className="ml-3 h-6 rounded-full bg-[#00ffff] text-black hover:bg-[#00cccc] text-xs px-3 font-bold">
+          <button className="ml-3 h-6 rounded-full bg-[#5BA3F5] text-black hover:bg-[#3D7BC4] text-xs px-3 font-bold">
             Follow
           </button>
         </div>
@@ -44,7 +44,7 @@ export default function LiveShopping() {
         <div className="flex gap-2">
           <ThemeToggle variant="overlay" />
           <div className={`backdrop-blur-md h-10 w-10 rounded-full flex items-center justify-center border ${isDark ? 'bg-black/40 border-white/10' : 'bg-[#fff5d8]/75 border-stone-400/55'}`}>
-            <span className={`text-xs font-bold ${isDark ? 'text-[#ff00ff]' : 'text-[#d900d9]'}`}>LIVE</span>
+            <span className={`text-xs font-bold ${isDark ? 'text-[#FF8855]' : 'text-[#E6502E]'}`}>LIVE</span>
           </div>
           <Link href="/" className={`backdrop-blur-md h-10 w-10 rounded-full flex items-center justify-center border ${isDark ? 'bg-black/40 border-white/10 text-white' : 'bg-[#fff5d8]/75 border-stone-400/55 text-stone-900'}`}>
             <X className="h-5 w-5" />
@@ -77,15 +77,15 @@ export default function LiveShopping() {
         <div className="flex gap-3 items-end">
           {/* Pinned Product Card */}
           {pinnedProduct && (
-            <Link href={`/product/${pinnedProduct.id}`} className={`flex-1 backdrop-blur-xl border rounded-2xl p-3 flex gap-3 relative overflow-hidden block ${isDark ? 'bg-black/60 border-[#ff00ff]/30 shadow-[0_0_20px_rgba(255,0,255,0.15)]' : 'bg-[#fff5d8]/85 border-[#d900d9]/30 shadow-md'}`}>
-              <div className={`absolute top-0 right-0 w-16 h-16 blur-xl rounded-full ${isDark ? 'bg-[#ff00ff]/20' : 'bg-[#d900d9]/10'}`}></div>
+            <Link href={`/product/${pinnedProduct.id}`} className={`flex-1 backdrop-blur-xl border rounded-2xl p-3 flex gap-3 relative overflow-hidden block ${isDark ? 'bg-black/60 border-[#FF8855]/30 shadow-[0_0_20px_rgba(255,136,85,0.15)]' : 'bg-[#fff5d8]/85 border-[#E6502E]/30 shadow-md'}`}>
+              <div className={`absolute top-0 right-0 w-16 h-16 blur-xl rounded-full ${isDark ? 'bg-[#FF8855]/20' : 'bg-[#E6502E]/10'}`}></div>
               <img src={pinnedProduct.images[0]} alt="Product" className={`w-16 h-16 rounded-xl object-cover border ${isDark ? 'border-white/10' : 'border-stone-400/35'}`} />
               <div className="flex-1 flex flex-col justify-between z-10">
                 <div>
                   <p className="text-xs font-bold leading-tight line-clamp-2">{pinnedProduct.title}</p>
-                  <p className={`text-sm font-black mt-1 ${isDark ? 'text-[#00ffff]' : 'text-[#00b3b3]'}`}>{formatPrice(pinnedProduct.priceMinor, country)}</p>
+                  <p className={`text-sm font-black mt-1 ${isDark ? 'text-[#5BA3F5]' : 'text-[#1B2A4A]'}`}>{formatPrice(pinnedProduct.priceMinor, country)}</p>
                 </div>
-                <button className={`h-7 w-full mt-2 text-white text-xs font-bold rounded-lg ${isDark ? 'bg-[#ff00ff] hover:bg-[#cc00cc] shadow-[0_0_10px_rgba(255,0,255,0.4)]' : 'bg-[#d900d9] hover:bg-[#b300b3] shadow-[0_4px_10px_rgba(217,0,217,0.3)]'}`}>
+                <button className={`h-7 w-full mt-2 text-white text-xs font-bold rounded-lg ${isDark ? 'bg-[#FF8855] hover:bg-[#FF6B35] shadow-[0_0_10px_rgba(255,136,85,0.4)]' : 'bg-[#E6502E] hover:bg-[#C4441E] shadow-[0_4px_10px_rgba(230,80,46,0.3)]'}`}>
                   Buy now
                 </button>
               </div>
@@ -97,7 +97,7 @@ export default function LiveShopping() {
           <div className="flex flex-col gap-4">
             <div className="flex flex-col items-center gap-1">
               <button className={`h-12 w-12 rounded-full backdrop-blur-md border flex items-center justify-center hover:scale-110 transition-transform ${isDark ? 'bg-black/40 border-white/10 text-white hover:bg-white/20' : 'bg-[#fff5d8]/75 border-stone-400/55 text-stone-900 hover:bg-stone-300/40'}`}>
-                <Heart className={`h-6 w-6 ${isDark ? 'text-[#ff00ff] fill-[#ff00ff]' : 'text-[#d900d9] fill-[#d900d9]'}`} />
+                <Heart className={`h-6 w-6 ${isDark ? 'text-[#FF8855] fill-[#FF8855]' : 'text-[#E6502E] fill-[#E6502E]'}`} />
               </button>
               <span className={`text-[10px] font-bold ${isDark ? 'text-white' : 'text-stone-800'}`}>12.8K</span>
             </div>
@@ -114,10 +114,10 @@ export default function LiveShopping() {
               <span className={`text-[10px] font-bold ${isDark ? 'text-white' : 'text-stone-800'}`}>Share</span>
             </div>
             <div className="flex flex-col items-center gap-1">
-              <button className={`h-12 w-12 rounded-full backdrop-blur-md border flex items-center justify-center hover:scale-110 transition-transform ${isDark ? 'bg-[#ff00ff]/20 border-[#ff00ff]/50 text-[#ff00ff] hover:bg-[#ff00ff]/40 shadow-[0_0_15px_rgba(255,0,255,0.3)]' : 'bg-[#d900d9]/10 border-[#d900d9]/30 text-[#d900d9] hover:bg-[#d900d9]/20 shadow-sm'}`}>
+              <button className={`h-12 w-12 rounded-full backdrop-blur-md border flex items-center justify-center hover:scale-110 transition-transform ${isDark ? 'bg-[#FF8855]/20 border-[#FF8855]/50 text-[#FF8855] hover:bg-[#FF8855]/40 shadow-[0_0_15px_rgba(255,136,85,0.3)]' : 'bg-[#E6502E]/10 border-[#E6502E]/30 text-[#E6502E] hover:bg-[#E6502E]/20 shadow-sm'}`}>
                 <Gift className="h-6 w-6" />
               </button>
-              <span className={`text-[10px] font-bold ${isDark ? 'text-[#ff00ff]' : 'text-[#d900d9]'}`}>Gift</span>
+              <span className={`text-[10px] font-bold ${isDark ? 'text-[#FF8855]' : 'text-[#E6502E]'}`}>Gift</span>
             </div>
           </div>
         </div>

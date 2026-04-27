@@ -43,7 +43,7 @@ export default function Addresses() {
     ? "bg-white/5 border-white/10"
     : "bg-white border-stone-400/35";
   const subtleText = isDark ? "text-white/50" : "text-stone-500";
-  const inputClass = `w-full px-3 py-2 rounded-lg border text-sm outline-none focus:ring-2 focus:ring-[#00ffff]/30 ${
+  const inputClass = `w-full px-3 py-2 rounded-lg border text-sm outline-none focus:ring-2 focus:ring-[#5BA3F5]/30 ${
     isDark
       ? "bg-black/40 border-white/10 text-white placeholder:text-white/30"
       : "bg-white border-stone-300 text-stone-900 placeholder:text-stone-400"
@@ -150,8 +150,8 @@ export default function Addresses() {
                         <span
                           className={`text-[10px] font-bold px-2 py-0.5 rounded ${
                             isDark
-                              ? "bg-[#00ffff]/15 text-[#00ffff]"
-                              : "bg-[#00b3b3]/15 text-[#00b3b3]"
+                              ? "bg-[#5BA3F5]/15 text-[#5BA3F5]"
+                              : "bg-[#1B2A4A]/15 text-[#1B2A4A]"
                           }`}
                         >
                           DEFAULT
@@ -198,7 +198,7 @@ export default function Addresses() {
                   <button
                     onClick={() => setDefault(a.id)}
                     className={`mt-3 inline-flex items-center gap-1 text-xs font-medium ${
-                      isDark ? "text-[#00ffff]" : "text-[#00b3b3]"
+                      isDark ? "text-[#5BA3F5]" : "text-[#1B2A4A]"
                     }`}
                     data-testid={`set-default-${a.id}`}
                   >
@@ -214,7 +214,7 @@ export default function Addresses() {
           <button
             onClick={startNew}
             className={`w-full flex items-center justify-center gap-2 py-3 rounded-full font-bold ${
-              isDark ? "bg-[#00ffff] text-black" : "bg-[#00b3b3] text-white"
+              isDark ? "bg-[#5BA3F5] text-black" : "bg-[#1B2A4A] text-white"
             }`}
             data-testid="button-add-address"
           >
@@ -306,7 +306,7 @@ export default function Addresses() {
               <button
                 onClick={save}
                 className={`flex-1 py-2 rounded-full font-bold ${
-                  isDark ? "bg-[#00ffff] text-black" : "bg-[#00b3b3] text-white"
+                  isDark ? "bg-[#5BA3F5] text-black" : "bg-[#1B2A4A] text-white"
                 }`}
                 data-testid="button-save-address"
               >

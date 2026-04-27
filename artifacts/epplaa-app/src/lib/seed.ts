@@ -134,9 +134,9 @@ export const SEED_PRODUCTS = [
 
 export const SEED_COMMENTS = [
   { username: "Tunde", avatar: "/images/lagos-avatar-1.png", text: "How much for the blue one?", color: "text-stone-500", darkColor: "text-white/50" },
-  { username: "Chioma_99", avatarFallback: "C", fallbackBg: "bg-[#00b3b3]/20", darkFallbackBg: "bg-[#00ffff]/20", fallbackColor: "text-[#00b3b3]", darkFallbackColor: "text-[#00ffff]", text: "Ship to Surulere?", color: "text-[#00b3b3]", darkColor: "text-[#00ffff]" },
-  { username: "Femi", avatarFallback: "F", fallbackBg: "bg-[#00b3b3]/20", darkFallbackBg: "bg-[#00ffff]/20", fallbackColor: "text-[#00b3b3]", darkFallbackColor: "text-[#00ffff]", text: "Na which size you wear?", color: "text-stone-500", darkColor: "text-white/50" },
-  { username: "Olu", avatarFallback: "O", fallbackBg: "bg-stone-300/45", darkFallbackBg: "bg-white/20", fallbackColor: "text-stone-900", darkFallbackColor: "text-white", text: "I need this sharp sharp", color: "text-[#d900d9]", darkColor: "text-[#ff00ff]" },
+  { username: "Chioma_99", avatarFallback: "C", fallbackBg: "bg-[#1B2A4A]/20", darkFallbackBg: "bg-[#5BA3F5]/20", fallbackColor: "text-[#1B2A4A]", darkFallbackColor: "text-[#5BA3F5]", text: "Ship to Surulere?", color: "text-[#1B2A4A]", darkColor: "text-[#5BA3F5]" },
+  { username: "Femi", avatarFallback: "F", fallbackBg: "bg-[#1B2A4A]/20", darkFallbackBg: "bg-[#5BA3F5]/20", fallbackColor: "text-[#1B2A4A]", darkFallbackColor: "text-[#5BA3F5]", text: "Na which size you wear?", color: "text-stone-500", darkColor: "text-white/50" },
+  { username: "Olu", avatarFallback: "O", fallbackBg: "bg-stone-300/45", darkFallbackBg: "bg-white/20", fallbackColor: "text-stone-900", darkFallbackColor: "text-white", text: "I need this sharp sharp", color: "text-[#E6502E]", darkColor: "text-[#FF8855]" },
   { username: "Amaka", avatar: "/images/lagos-avatar-2.png", text: "Is the material stretchy?", color: "text-stone-500", darkColor: "text-white/50" },
-  { username: "Bayo_Trades", avatarFallback: "B", fallbackBg: "bg-[#d900d9]/20", darkFallbackBg: "bg-[#ff00ff]/20", fallbackColor: "text-[#d900d9]", darkFallbackColor: "text-[#ff00ff]", text: "Will you drop the price?", color: "text-[#00b3b3]", darkColor: "text-[#00ffff]" },
+  { username: "Bayo_Trades", avatarFallback: "B", fallbackBg: "bg-[#E6502E]/20", darkFallbackBg: "bg-[#FF8855]/20", fallbackColor: "text-[#E6502E]", darkFallbackColor: "text-[#FF8855]", text: "Will you drop the price?", color: "text-[#1B2A4A]", darkColor: "text-[#5BA3F5]" },
 ];

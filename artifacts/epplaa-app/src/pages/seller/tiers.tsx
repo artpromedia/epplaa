@@ -46,8 +46,8 @@ export default function SellerTiers() {
               className={`rounded-2xl border p-5 ${cardClass} ${
                 isCurrent
                   ? isDark
-                    ? "ring-1 ring-[#00ffff]/40"
-                    : "ring-1 ring-[#00b3b3]/40"
+                    ? "ring-1 ring-[#5BA3F5]/40"
+                    : "ring-1 ring-[#1B2A4A]/40"
                   : ""
               }`}
               data-testid={`tier-card-${id}`}
@@ -56,7 +56,7 @@ export default function SellerTiers() {
                 <div className="flex items-center gap-2">
                   <Icon
                     className={`w-5 h-5 ${
-                      isDark ? "text-[#00ffff]" : "text-[#00b3b3]"
+                      isDark ? "text-[#5BA3F5]" : "text-[#1B2A4A]"
                     }`}
                   />
                   <h3 className="text-lg font-bold">{def.label}</h3>
@@ -88,7 +88,7 @@ export default function SellerTiers() {
                       >
                         <Check
                           className={`w-4 h-4 mt-0.5 shrink-0 ${
-                            isDark ? "text-[#00ffff]" : "text-[#00b3b3]"
+                            isDark ? "text-[#5BA3F5]" : "text-[#1B2A4A]"
                           }`}
                         />
                         <span>{p}</span>
