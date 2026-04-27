@@ -1,12 +1,22 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Link } from "wouter";
-import { MessageSquare, Package, ShoppingBag, ChevronRight } from "lucide-react";
+import {
+  MessageSquare,
+  Package,
+  ShoppingBag,
+  ChevronRight,
+  Sparkles,
+  Bell,
+  Radio,
+} from "lucide-react";
 import { useTheme } from "@/lib/theme-context";
 import { useCountry } from "@/lib/country-context";
 import { useOrders } from "@/lib/orders-context";
+import { useFollows } from "@/lib/follows-context";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { formatOrderPrice } from "@/lib/format";
 import { statusColorClass, relativeDate } from "./orders";
+import { generateDropAlerts } from "@/lib/drop-alerts";
 
 const STATUS_LABEL = {
   placed: "Placed",
@@ -21,8 +31,17 @@ export default function Inbox() {
   const isDark = resolvedTheme === "dark";
   const { country } = useCountry();
   const { orders } = useOrders();
-  const [tab, setTab] = useState<"messages" | "orders">(
-    orders.length > 0 ? "orders" : "messages",
+  const { followedSellers } = useFollows();
+  const drops = useMemo(
+    () => generateDropAlerts(followedSellers),
+    [followedSellers],
+  );
+  const [tab, setTab] = useState<"drops" | "orders" | "messages">(
+    drops.length > 0
+      ? "drops"
+      : orders.length > 0
+        ? "orders"
+        : "messages",
   );
 
   const subtle = isDark ? "text-white/55" : "text-stone-500";
@@ -41,55 +60,146 @@ export default function Inbox() {
           <ThemeToggle />
         </div>
         <div className="flex gap-4">
-          <button
-            onClick={() => setTab("messages")}
-            data-testid="tab-messages"
-            className={`pb-2 border-b-2 font-bold ${
-              tab === "messages"
-                ? isDark
-                  ? "border-[#5BA3F5] text-white"
-                  : "border-[#1B2A4A] text-stone-900"
-                : `border-transparent ${
-                    isDark
-                      ? "text-white/50 hover:text-white"
-                      : "text-stone-500 hover:text-stone-900"
-                  }`
-            }`}
-          >
-            Messages
-          </button>
-          <button
+          <TabButton
+            label="Drops"
+            count={drops.length}
+            active={tab === "drops"}
+            onClick={() => setTab("drops")}
+            isDark={isDark}
+            testId="tab-drops"
+          />
+          <TabButton
+            label="Orders"
+            count={orders.length}
+            active={tab === "orders"}
             onClick={() => setTab("orders")}
-            data-testid="tab-orders"
-            className={`pb-2 border-b-2 font-bold flex items-center gap-1.5 ${
-              tab === "orders"
-                ? isDark
-                  ? "border-[#5BA3F5] text-white"
-                  : "border-[#1B2A4A] text-stone-900"
-                : `border-transparent ${
-                    isDark
-                      ? "text-white/50 hover:text-white"
-                      : "text-stone-500 hover:text-stone-900"
-                  }`
-            }`}
-          >
-            Orders
-            {orders.length > 0 && (
-              <span
-                className={`min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-black flex items-center justify-center ${
-                  isDark
-                    ? "bg-[#FF8855] text-black"
-                    : "bg-[#E6502E] text-white"
-                }`}
-              >
-                {orders.length}
-              </span>
-            )}
-          </button>
+            isDark={isDark}
+            testId="tab-orders"
+          />
+          <TabButton
+            label="Messages"
+            count={0}
+            active={tab === "messages"}
+            onClick={() => setTab("messages")}
+            isDark={isDark}
+            testId="tab-messages"
+          />
         </div>
       </div>
 
-      {tab === "messages" ? (
+      {tab === "drops" ? (
+        drops.length === 0 ? (
+          <div className="flex-1 flex flex-col items-center justify-center p-8 text-center">
+            <div
+              className={`w-20 h-20 rounded-full flex items-center justify-center mb-4 ${
+                isDark
+                  ? "bg-white/5 text-white/30"
+                  : "bg-stone-300/35 text-stone-400"
+              }`}
+            >
+              <Bell className="w-10 h-10" />
+            </div>
+            <h2 className="text-lg font-bold mb-2">No drop alerts yet</h2>
+            <p className={`text-sm ${subtle}`}>
+              Follow your favorite sellers from any product page to get notified
+              when they drop something new.
+            </p>
+            <Link
+              href="/discover"
+              data-testid="link-discover-from-drops"
+              className={`mt-6 px-6 py-2 rounded-full font-bold text-sm ${
+                isDark
+                  ? "bg-[#5BA3F5] text-black hover:bg-[#3D7BC4]"
+                  : "bg-[#1B2A4A] text-white hover:bg-[#0F1E3A]"
+              }`}
+            >
+              Discover sellers
+            </Link>
+          </div>
+        ) : (
+          <div className="flex-1 overflow-y-auto px-4 py-4 space-y-3">
+            {drops.map((d) => {
+              const isLive = d.kind === "live";
+              return (
+                <Link
+                  key={d.id}
+                  href={d.href}
+                  data-testid={`drop-${d.id}`}
+                  className={`flex gap-3 p-3 rounded-xl border transition-colors ${
+                    isDark
+                      ? "bg-white/5 border-white/10 hover:bg-white/10"
+                      : "bg-white border-stone-400/35 hover:bg-stone-50"
+                  }`}
+                >
+                  <div className="w-12 h-12 rounded-full overflow-hidden bg-stone-200 shrink-0 relative">
+                    {d.hostAvatar ? (
+                      <img
+                        src={d.hostAvatar}
+                        alt={d.sellerName}
+                        className="w-full h-full object-cover"
+                      />
+                    ) : (
+                      <div
+                        className={`w-full h-full flex items-center justify-center text-sm font-bold ${
+                          isDark
+                            ? "bg-[#5BA3F5]/20 text-[#5BA3F5]"
+                            : "bg-[#1B2A4A]/15 text-[#1B2A4A]"
+                        }`}
+                      >
+                        {d.sellerName.slice(0, 1)}
+                      </div>
+                    )}
+                    {isLive && (
+                      <div
+                        className={`absolute -bottom-0.5 left-1/2 -translate-x-1/2 px-1 rounded text-[7px] font-black uppercase tracking-wider text-white ${
+                          isDark ? "bg-[#FF8855]" : "bg-[#E6502E]"
+                        } animate-pulse`}
+                      >
+                        LIVE
+                      </div>
+                    )}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-1 mb-0.5">
+                      {isLive ? (
+                        <Radio
+                          className={`w-3 h-3 ${
+                            isDark ? "text-[#FF8855]" : "text-[#E6502E]"
+                          }`}
+                        />
+                      ) : (
+                        <Sparkles
+                          className={`w-3 h-3 ${
+                            isDark ? "text-[#FF8855]" : "text-[#E6502E]"
+                          }`}
+                        />
+                      )}
+                      <p
+                        className={`text-[11px] font-bold uppercase tracking-wider ${
+                          isDark ? "text-[#FF8855]" : "text-[#E6502E]"
+                        }`}
+                      >
+                        {d.title}
+                      </p>
+                    </div>
+                    <p className="text-sm font-bold leading-snug line-clamp-2">
+                      {d.detail}
+                    </p>
+                    <p className={`text-xs mt-1 ${subtle}`}>
+                      {relativeDate(d.createdAtIso)}
+                    </p>
+                  </div>
+                  <ChevronRight
+                    className={`w-4 h-4 self-center shrink-0 ${
+                      isDark ? "text-white/30" : "text-stone-400"
+                    }`}
+                  />
+                </Link>
+              );
+            })}
+          </div>
+        )
+      ) : tab === "messages" ? (
         <div className="flex-1 flex flex-col items-center justify-center p-8 text-center">
           <div
             className={`w-20 h-20 rounded-full flex items-center justify-center mb-4 ${
@@ -202,5 +312,50 @@ export default function Inbox() {
         </div>
       )}
     </div>
+  );
+}
+
+function TabButton({
+  label,
+  count,
+  active,
+  onClick,
+  isDark,
+  testId,
+}: {
+  label: string;
+  count: number;
+  active: boolean;
+  onClick: () => void;
+  isDark: boolean;
+  testId: string;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      data-testid={testId}
+      className={`pb-2 border-b-2 font-bold flex items-center gap-1.5 ${
+        active
+          ? isDark
+            ? "border-[#5BA3F5] text-white"
+            : "border-[#1B2A4A] text-stone-900"
+          : `border-transparent ${
+              isDark
+                ? "text-white/50 hover:text-white"
+                : "text-stone-500 hover:text-stone-900"
+            }`
+      }`}
+    >
+      {label}
+      {count > 0 && (
+        <span
+          className={`min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-black flex items-center justify-center ${
+            isDark ? "bg-[#FF8855] text-black" : "bg-[#E6502E] text-white"
+          }`}
+        >
+          {count}
+        </span>
+      )}
+    </button>
   );
 }

@@ -7,6 +7,8 @@ import {
   Sparkles,
   ArrowLeftRight,
   LayoutGrid,
+  Heart,
+  Wallet,
 } from "lucide-react";
 import { Link } from "wouter";
 import { useTheme } from "@/lib/theme-context";
@@ -360,6 +362,29 @@ export default function Profile() {
             <div
               className={`rounded-xl border overflow-hidden ${cardBorder}`}
             >
+              <Link
+                href="/wishlist"
+                className={`w-full flex items-center justify-between p-4 border-b ${
+                  isDark
+                    ? "border-white/10 hover:bg-white/5"
+                    : "border-stone-200 hover:bg-stone-50"
+                }`}
+                data-testid="link-wishlist"
+              >
+                <div className="flex items-center gap-3">
+                  <Heart
+                    className={`w-5 h-5 ${
+                      isDark ? "text-white/70" : "text-stone-500"
+                    }`}
+                  />
+                  <span className="font-medium">Wishlist</span>
+                </div>
+                <ChevronRight
+                  className={`w-4 h-4 ${
+                    isDark ? "text-white/30" : "text-stone-400"
+                  }`}
+                />
+              </Link>
               <Link
                 href="/account/payment-methods"
                 className={`w-full flex items-center justify-between p-4 border-b ${

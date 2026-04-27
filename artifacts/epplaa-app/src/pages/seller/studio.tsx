@@ -9,6 +9,7 @@ import {
   Sparkles,
   Receipt,
   Crown,
+  Wallet,
 } from "lucide-react";
 import { useTheme } from "@/lib/theme-context";
 import { useCountry } from "@/lib/country-context";
@@ -266,6 +267,15 @@ export default function SellerStudio() {
               hint=""
               onClick={() => navigate("/seller/listings")}
               testId="action-manage-listings"
+              border
+            />
+            <ActionRow
+              isDark={isDark}
+              icon={<Wallet className="w-5 h-5" />}
+              label="Earnings & payouts"
+              hint="View balance and request payouts"
+              onClick={() => navigate("/seller/earnings")}
+              testId="action-earnings"
               border
             />
             <ActionRow

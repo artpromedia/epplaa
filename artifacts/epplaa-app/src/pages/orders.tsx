@@ -1,8 +1,9 @@
-import { Link } from "wouter";
-import { Package, Clock, ShoppingBag, ChevronRight } from "lucide-react";
+import { Link, useLocation } from "wouter";
+import { Package, Clock, ShoppingBag, ChevronRight, Star } from "lucide-react";
 import { useTheme } from "@/lib/theme-context";
 import { useCountry } from "@/lib/country-context";
 import { useOrders, OrderStatus } from "@/lib/orders-context";
+import { useReviews } from "@/lib/reviews-context";
 import { formatOrderPrice } from "@/lib/format";
 import { PageHeader } from "@/components/page-header";
 
@@ -19,6 +20,8 @@ export default function Orders() {
   const isDark = resolvedTheme === "dark";
   const { country } = useCountry();
   const { orders } = useOrders();
+  const { reviews } = useReviews();
+  const [, setLocation] = useLocation();
 
   const subtle = isDark ? "text-white/55" : "text-stone-500";
 
@@ -70,6 +73,13 @@ export default function Orders() {
             o.fulfillment.optionId.includes("speedaf") ||
             o.fulfillment.optionId.includes("g4s");
           const statusColor = statusColorClass(o.status, isDark);
+          const reviewedItemIds = new Set(
+            reviews.filter((r) => r.orderId === o.id).map((r) => r.productId),
+          );
+          const allReviewed =
+            o.items.length > 0 &&
+            o.items.every((it) => reviewedItemIds.has(it.productId));
+          const showRateCta = o.status === "delivered";
           return (
             <Link
               key={o.id}
@@ -119,6 +129,29 @@ export default function Orders() {
                   }`}
                 />
               </div>
+              {showRateCta && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    setLocation(`/orders/${o.id}/rate`);
+                  }}
+                  data-testid={`rate-cta-${o.id}`}
+                  className={`w-full mt-3 px-3 py-2 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 ${
+                    allReviewed
+                      ? isDark
+                        ? "bg-emerald-500/10 text-emerald-300"
+                        : "bg-emerald-50 text-emerald-700"
+                      : isDark
+                        ? "bg-[#FF8855]/15 text-[#FF8855] hover:bg-[#FF8855]/20"
+                        : "bg-[#E6502E]/10 text-[#E6502E] hover:bg-[#E6502E]/15"
+                  }`}
+                >
+                  <Star className={`w-3.5 h-3.5 ${allReviewed ? "" : "fill-current"}`} />
+                  {allReviewed ? "Reviewed · tap to update" : "Rate this order"}
+                </button>
+              )}
             </Link>
           );
         })}

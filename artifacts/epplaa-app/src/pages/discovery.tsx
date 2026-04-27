@@ -18,13 +18,18 @@ export default function Discovery() {
       {/* Header */}
       <div className={`pt-12 pb-4 px-4 z-10 sticky top-0 ${isDark ? 'bg-gradient-to-b from-[#000000] to-transparent' : 'bg-gradient-to-b from-white to-transparent'}`}>
         <div className="flex items-center gap-3 mb-4">
-          <div className="relative flex-1">
+          <Link
+            href="/search"
+            data-testid="link-open-search"
+            className={`relative flex-1 block`}
+          >
             <Search className={`absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 ${isDark ? 'text-white/50' : 'text-stone-400'}`} />
-            <input 
-              placeholder={`Search Lagos Night Market...`} 
-              className={`w-full pl-10 h-10 rounded-full text-sm outline-none ${isDark ? 'bg-white/5 border border-white/10 focus-visible:ring-1 focus-visible:ring-[#FF8855] placeholder:text-white/40' : 'bg-stone-300/35 border border-stone-400/55 focus-visible:ring-1 focus-visible:ring-[#E6502E] placeholder:text-stone-400 text-stone-900'}`}
-            />
-          </div>
+            <div
+              className={`w-full pl-10 h-10 rounded-full text-sm flex items-center ${isDark ? 'bg-white/5 border border-white/10 text-white/50' : 'bg-stone-300/35 border border-stone-400/55 text-stone-500'}`}
+            >
+              Search products, sellers, brands...
+            </div>
+          </Link>
           <ThemeToggle />
         </div>
         

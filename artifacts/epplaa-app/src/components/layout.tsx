@@ -29,12 +29,14 @@ export function Layout({ children }: { children: React.ReactNode }) {
   // page-header back arrow).
   const isCheckoutFlow =
     location === "/cart" || location.startsWith("/checkout");
-  const hideTabNav = isLiveRoute || isCheckoutFlow;
+  const isRateFlow = /^\/orders\/[^/]+\/rate$/.test(location);
+  const hideTabNav = isLiveRoute || isCheckoutFlow || isRateFlow;
 
   // Hide floating cart on routes where it would be redundant or get in the way.
   const hideFloatingCart =
     inSellerMode ||
     isCheckoutFlow ||
+    isRateFlow ||
     location.startsWith("/product/") || // product detail has its own CTA
     isLiveRoute;
 

@@ -8,10 +8,12 @@ import {
   ShieldCheck,
   CheckCircle2,
   X,
+  Star,
 } from "lucide-react";
 import { useTheme } from "@/lib/theme-context";
 import { useCountry } from "@/lib/country-context";
 import { useOrders } from "@/lib/orders-context";
+import { useReviews } from "@/lib/reviews-context";
 import { formatOrderPrice } from "@/lib/format";
 import { PageHeader } from "@/components/page-header";
 import { useToast } from "@/hooks/use-toast";
@@ -23,6 +25,7 @@ export default function OrderDetail() {
   const isDark = resolvedTheme === "dark";
   const { country } = useCountry();
   const { getById, cancel } = useOrders();
+  const { reviews } = useReviews();
   const { toast } = useToast();
   const order = getById(orderId);
 
@@ -280,6 +283,33 @@ export default function OrderDetail() {
             )}
           </ul>
         </div>
+
+        {order.status === "delivered" && (() => {
+          const reviewedIds = new Set(
+            reviews.filter((r) => r.orderId === order.id).map((r) => r.productId),
+          );
+          const allReviewed =
+            order.items.length > 0 &&
+            order.items.every((it) => reviewedIds.has(it.productId));
+          return (
+            <Link
+              href={`/orders/${order.id}/rate`}
+              data-testid="link-rate-order"
+              className={`w-full h-12 rounded-xl font-bold flex items-center justify-center gap-2 ${
+                allReviewed
+                  ? isDark
+                    ? "bg-emerald-500/15 text-emerald-300 hover:bg-emerald-500/20"
+                    : "bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
+                  : isDark
+                    ? "bg-gradient-to-r from-[#FF8855] to-[#FF6B35] text-white"
+                    : "bg-gradient-to-r from-[#E6502E] to-[#C4441E] text-white"
+              }`}
+            >
+              <Star className={`w-4 h-4 ${allReviewed ? "" : "fill-current"}`} />
+              {allReviewed ? "Reviewed · update review" : "Rate this order"}
+            </Link>
+          );
+        })()}
 
         {canCancel && (
           <button

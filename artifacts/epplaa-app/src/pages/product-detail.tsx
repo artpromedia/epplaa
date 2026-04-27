@@ -1,10 +1,14 @@
-import { useState } from "react";
-import { ChevronLeft, Share2, Heart, Star, MapPin, Truck, Package, ShieldCheck } from "lucide-react";
-import { Link, useParams, useLocation } from "wouter";
+import { useEffect, useMemo, useState } from "react";
+import { ChevronLeft, Share2, Heart, Star, MapPin, Truck, Package, ShieldCheck, UserPlus, UserCheck } from "lucide-react";
+import { useParams, useLocation } from "wouter";
 import { useTheme } from "@/lib/theme-context";
 import { SEED_PRODUCTS } from "@/lib/seed";
 import { useCountry } from "@/lib/country-context";
 import { useCart } from "@/lib/cart-context";
+import { useWishlist } from "@/lib/wishlist-context";
+import { useFollows } from "@/lib/follows-context";
+import { useReviews } from "@/lib/reviews-context";
+import { useRecentlyViewed } from "@/lib/recently-viewed";
 import { formatPrice } from "@/lib/format";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { useToast } from "@/hooks/use-toast";
@@ -16,9 +20,22 @@ export default function ProductDetail() {
   const isDark = resolvedTheme === "dark";
   const { country } = useCountry();
   const { add } = useCart();
+  const { isWishlisted, toggle: toggleWishlist } = useWishlist();
+  const { isFollowing, toggle: toggleFollow } = useFollows();
+  const { getForProduct, averageForProduct } = useReviews();
+  const { track } = useRecentlyViewed();
   const { toast } = useToast();
 
   const product = SEED_PRODUCTS.find(p => p.id === productId) || SEED_PRODUCTS[0];
+  const saved = isWishlisted(product.id);
+  const following = isFollowing(product.sellerName);
+  const productReviews = useMemo(() => getForProduct(product.id), [getForProduct, product.id]);
+  const liveAverage = averageForProduct(product.id, product.rating);
+  const totalRatingCount = productReviews.length || product.soldCount;
+
+  useEffect(() => {
+    track(product.id);
+  }, [product.id, track]);
 
   const [selectedVariants, setSelectedVariants] = useState<Record<string, string>>(
     () => Object.fromEntries(product.variants.map(v => [v.name, v.options[0]]))
@@ -51,11 +68,33 @@ export default function ProductDetail() {
         </button>
         <div className="flex gap-2">
           <ThemeToggle variant="overlay" />
-          <button className={`w-10 h-10 rounded-full backdrop-blur border flex items-center justify-center transition-colors ${isDark ? 'bg-black/40 border-white/10 hover:bg-black/60 text-white' : 'bg-[#fff5d8]/75 border-stone-400/55 hover:bg-[#fff5d8]/85 text-stone-900'}`}>
+          <button
+            onClick={() => {
+              if (navigator.share) {
+                navigator.share({ title: product.title, url: window.location.href }).catch(() => {});
+              } else {
+                navigator.clipboard?.writeText(window.location.href);
+                toast({ title: "Link copied" });
+              }
+            }}
+            data-testid="button-share-product"
+            className={`w-10 h-10 rounded-full backdrop-blur border flex items-center justify-center transition-colors ${isDark ? 'bg-black/40 border-white/10 hover:bg-black/60 text-white' : 'bg-[#fff5d8]/75 border-stone-400/55 hover:bg-[#fff5d8]/85 text-stone-900'}`}
+          >
             <Share2 className="h-5 w-5" />
           </button>
-          <button className={`w-10 h-10 rounded-full backdrop-blur border flex items-center justify-center transition-colors ${isDark ? 'bg-black/40 border-white/10 hover:bg-black/60 text-white' : 'bg-[#fff5d8]/75 border-stone-400/55 hover:bg-[#fff5d8]/85 text-stone-900'}`}>
-            <Heart className="h-5 w-5" />
+          <button
+            onClick={() => {
+              const nowSaved = toggleWishlist(product.id);
+              toast({ title: nowSaved ? "Saved to wishlist" : "Removed from wishlist" });
+            }}
+            data-testid="button-wishlist-product"
+            className={`w-10 h-10 rounded-full backdrop-blur border flex items-center justify-center transition-colors ${
+              saved
+                ? 'bg-[#E6502E] text-white border-transparent'
+                : isDark ? 'bg-black/40 border-white/10 hover:bg-black/60 text-white' : 'bg-[#fff5d8]/75 border-stone-400/55 hover:bg-[#fff5d8]/85 text-stone-900'
+            }`}
+          >
+            <Heart className={`h-5 w-5 ${saved ? 'fill-current' : ''}`} />
           </button>
         </div>
       </div>
@@ -93,10 +132,14 @@ export default function ProductDetail() {
           <h1 className="text-lg font-bold mt-2 leading-tight">{product.title}</h1>
           
           <div className={`flex items-center gap-3 mt-3 text-xs ${isDark ? 'text-white/60' : 'text-stone-500'}`}>
-            <div className="flex items-center gap-1">
+            <div className="flex items-center gap-1" data-testid="product-rating-summary">
               <Star className={`w-3 h-3 fill-current ${isDark ? 'text-[#FF8855]' : 'text-[#E6502E]'}`} />
-              <span className={`font-bold ${isDark ? 'text-white' : 'text-stone-800'}`}>{product.rating}</span>
-              <span>({product.soldCount} sold)</span>
+              <span className={`font-bold ${isDark ? 'text-white' : 'text-stone-800'}`}>{liveAverage.toFixed(1)}</span>
+              <span>
+                {productReviews.length > 0
+                  ? `(${productReviews.length} review${productReviews.length === 1 ? "" : "s"})`
+                  : `(${product.soldCount} sold)`}
+              </span>
             </div>
             <span>•</span>
             <div className={`flex items-center gap-1 ${isDark ? 'text-[#5BA3F5]' : 'text-[#1B2A4A]'}`}>
@@ -152,9 +195,73 @@ export default function ProductDetail() {
               <p className={`text-xs ${isDark ? 'text-white/50' : 'text-stone-500'}`}>98% positive</p>
             </div>
           </div>
-          <button className={`h-8 px-3 rounded-md text-xs font-bold border bg-transparent transition-colors ${isDark ? 'border-[#5BA3F5] text-[#5BA3F5] hover:bg-[#5BA3F5]/10' : 'border-[#1B2A4A] text-[#1B2A4A] hover:bg-[#1B2A4A]/10'}`}>
-            View Shop
+          <button
+            onClick={() => {
+              const nowFollowing = toggleFollow(product.sellerName);
+              toast({
+                title: nowFollowing ? `Following ${product.sellerName}` : `Unfollowed ${product.sellerName}`,
+                description: nowFollowing ? "You'll get drop alerts in your inbox." : undefined,
+              });
+            }}
+            data-testid="button-follow-seller"
+            className={`h-8 px-3 rounded-md text-xs font-bold border transition-colors flex items-center gap-1.5 ${
+              following
+                ? isDark
+                  ? 'bg-[#5BA3F5]/15 border-[#5BA3F5]/40 text-[#5BA3F5]'
+                  : 'bg-[#1B2A4A]/10 border-[#1B2A4A]/40 text-[#1B2A4A]'
+                : isDark
+                  ? 'border-[#5BA3F5] text-[#5BA3F5] hover:bg-[#5BA3F5]/10 bg-transparent'
+                  : 'border-[#1B2A4A] text-[#1B2A4A] hover:bg-[#1B2A4A]/10 bg-transparent'
+            }`}
+          >
+            {following ? <UserCheck className="w-3 h-3" /> : <UserPlus className="w-3 h-3" />}
+            {following ? "Following" : "Follow"}
           </button>
+        </div>
+
+        {/* Reviews */}
+        <div className={`px-4 py-4 mt-2 border-y ${isDark ? 'bg-white/5 border-white/10' : 'bg-stone-300/35 border-stone-400/35'}`} data-testid="reviews-section">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-sm font-bold">Reviews</h3>
+            <div className="flex items-center gap-1">
+              <Star className={`w-3.5 h-3.5 fill-current ${isDark ? 'text-[#FF8855]' : 'text-[#E6502E]'}`} />
+              <span className="text-sm font-bold">{liveAverage.toFixed(1)}</span>
+              <span className={`text-xs ${isDark ? 'text-white/55' : 'text-stone-500'}`}>· {totalRatingCount}</span>
+            </div>
+          </div>
+          {productReviews.length === 0 ? (
+            <p className={`text-xs ${isDark ? 'text-white/55' : 'text-stone-500'}`}>
+              No reviews yet. Be the first after your order is delivered.
+            </p>
+          ) : (
+            <div className="space-y-3">
+              {productReviews.slice(0, 3).map((r) => (
+                <div key={r.id} data-testid={`review-${r.id}`} className={`p-3 rounded-lg ${isDark ? 'bg-black/30' : 'bg-white'}`}>
+                  <div className="flex items-center gap-2 mb-1">
+                    {Array.from({ length: 5 }).map((_, i) => (
+                      <Star
+                        key={i}
+                        className={`w-3 h-3 ${
+                          i < r.rating
+                            ? isDark ? 'text-[#FF8855] fill-current' : 'text-[#E6502E] fill-current'
+                            : isDark ? 'text-white/20' : 'text-stone-300'
+                        }`}
+                      />
+                    ))}
+                    <span className={`text-[11px] ${isDark ? 'text-white/40' : 'text-stone-400'}`}>
+                      {new Date(r.createdAtIso).toLocaleDateString()}
+                    </span>
+                  </div>
+                  {r.text && <p className="text-xs leading-relaxed">{r.text}</p>}
+                </div>
+              ))}
+              {productReviews.length > 3 && (
+                <p className={`text-xs text-center ${isDark ? 'text-white/55' : 'text-stone-500'}`}>
+                  +{productReviews.length - 3} more
+                </p>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Delivery Options */}
