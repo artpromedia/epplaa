@@ -52,58 +52,128 @@ function rowToOrder(r: typeof schema.ordersTable.$inferSelect) {
   };
 }
 
-// POST /orders/quote — server-computed totals (VAT eligibility per seller).
-// The checkout review UI calls this so the displayed VAT matches what
-// /orders will charge (only VAT-registered sellers' lines are taxable).
+/**
+ * Server-side totals computation. Item prices are ALWAYS resolved from the
+ * products table — client-supplied priceMinor is ignored to prevent
+ * tampering. Returns the canonical line snapshot, subtotal, vat, total, and
+ * vatRateBp. Used by both /orders/quote and POST /orders so the displayed
+ * quote and the charged total are guaranteed identical.
+ */
+type ClientItemInput = { productId?: string; qty?: number };
+type ResolvedLine = {
+  productId: string;
+  qty: number;
+  priceMinor: number;
+  sellerUserId: string | null;
+  vatEligible: boolean;
+};
+async function resolveOrderTotals(opts: {
+  items: ClientItemInput[];
+  countryCode: string;
+  shipping: number;
+  discount: number;
+  shippingDiscount: number;
+}): Promise<{
+  lines: ResolvedLine[];
+  subtotal: number;
+  vatEligibleSubtotal: number;
+  vatRateBp: number;
+  vatMinor: number;
+  total: number;
+}> {
+  const cleanItems = opts.items
+    .map((it) => ({
+      productId: String(it.productId ?? "").trim(),
+      qty: Math.max(0, Math.floor(Number(it.qty ?? 0))),
+    }))
+    .filter((it) => it.productId && it.qty > 0);
+  const productIds = Array.from(new Set(cleanItems.map((it) => it.productId)));
+  const productRows = productIds.length
+    ? await db
+        .select({
+          id: schema.productsTable.id,
+          priceMinor: schema.productsTable.priceMinor,
+          sellerUserId: schema.productsTable.sellerUserId,
+        })
+        .from(schema.productsTable)
+        .where(inArray(schema.productsTable.id, productIds))
+    : [];
+  const productMap = new Map(productRows.map((p) => [p.id, p]));
+  const sellerIds = Array.from(
+    new Set(productRows.map((p) => p.sellerUserId).filter((s): s is string => !!s)),
+  );
+  const sellerRows = sellerIds.length
+    ? await db
+        .select({
+          userId: schema.sellersTable.userId,
+          vatRegistered: schema.sellersTable.vatRegistered,
+        })
+        .from(schema.sellersTable)
+        .where(inArray(schema.sellersTable.userId, sellerIds))
+    : [];
+  const vatRegistered = new Set(
+    sellerRows.filter((s) => s.vatRegistered).map((s) => s.userId),
+  );
+  const vatRateBp = await getVatRateBp(opts.countryCode);
+
+  const lines: ResolvedLine[] = [];
+  let subtotal = 0;
+  let vatEligibleSubtotal = 0;
+  for (const it of cleanItems) {
+    const p = productMap.get(it.productId);
+    if (!p) continue; // unknown product — drop silently (do not let client fabricate lines)
+    const lineSubtotal = p.priceMinor * it.qty;
+    subtotal += lineSubtotal;
+    const isVatEligible = !!p.sellerUserId && vatRegistered.has(p.sellerUserId);
+    if (isVatEligible) vatEligibleSubtotal += lineSubtotal;
+    lines.push({
+      productId: p.id,
+      qty: it.qty,
+      priceMinor: p.priceMinor,
+      sellerUserId: p.sellerUserId,
+      vatEligible: isVatEligible,
+    });
+  }
+  const vatShare = subtotal > 0 ? vatEligibleSubtotal / subtotal : 0;
+  const vatTaxable = Math.max(
+    0,
+    vatEligibleSubtotal + (opts.shipping - opts.discount - opts.shippingDiscount) * vatShare,
+  );
+  const vatMinor = computeVatMinor(Math.round(vatTaxable), vatRateBp);
+  const taxable = Math.max(
+    0,
+    subtotal + opts.shipping - opts.discount - opts.shippingDiscount,
+  );
+  return {
+    lines,
+    subtotal,
+    vatEligibleSubtotal,
+    vatRateBp,
+    vatMinor,
+    total: taxable + vatMinor,
+  };
+}
+
 router.post("/orders/quote", async (req, res) => {
   const userId = requireUserId(req, res);
   if (!userId) return;
   const body = req.body as Record<string, unknown>;
   const countryCode = String(body.countryCode ?? "NG");
   const totalsRaw = (body.totalsMinor as Record<string, number> | undefined) ?? {};
-  const subtotal = Number(totalsRaw.subtotal ?? 0);
-  const shipping = Number(totalsRaw.shipping ?? 0);
-  const discount = Number(totalsRaw.discount ?? 0);
-  const shippingDiscount = Number(totalsRaw.shippingDiscount ?? 0);
-  const items = (body.items as Array<{ productId?: string; priceMinor?: number; qty?: number }> | undefined) ?? [];
-
-  const vatRateBp = await getVatRateBp(countryCode);
-  let vatEligibleSubtotal = 0;
-  if (vatRateBp > 0) {
-    const productIds = Array.from(new Set(items.map((it) => String(it.productId ?? "")).filter(Boolean)));
-    if (productIds.length > 0) {
-      const productRows = await db
-        .select({ id: schema.productsTable.id, sellerUserId: schema.productsTable.sellerUserId })
-        .from(schema.productsTable)
-        .where(inArray(schema.productsTable.id, productIds));
-      const productSellerMap = new Map(productRows.map((p) => [p.id, p.sellerUserId]));
-      const sellerIds = Array.from(new Set(productRows.map((p) => p.sellerUserId).filter((s): s is string => !!s)));
-      let vatRegistered = new Set<string>();
-      if (sellerIds.length > 0) {
-        const sellerRows = await db
-          .select({ userId: schema.sellersTable.userId, vatRegistered: schema.sellersTable.vatRegistered })
-          .from(schema.sellersTable)
-          .where(inArray(schema.sellersTable.userId, sellerIds));
-        vatRegistered = new Set(sellerRows.filter((s) => s.vatRegistered).map((s) => s.userId));
-      }
-      for (const it of items) {
-        const sellerId = productSellerMap.get(String(it.productId ?? "")) ?? null;
-        if (sellerId && vatRegistered.has(sellerId)) {
-          vatEligibleSubtotal += Number(it.priceMinor ?? 0) * Number(it.qty ?? 0);
-        }
-      }
-    }
-  }
-  const vatShare = subtotal > 0 ? vatEligibleSubtotal / subtotal : 0;
-  const vatTaxable = Math.max(0, vatEligibleSubtotal + (shipping - discount - shippingDiscount) * vatShare);
-  const vatMinor = computeVatMinor(Math.round(vatTaxable), vatRateBp);
-  const taxable = Math.max(0, subtotal + shipping - discount - shippingDiscount);
+  const items = (body.items as ClientItemInput[] | undefined) ?? [];
+  const computed = await resolveOrderTotals({
+    items,
+    countryCode,
+    shipping: Math.max(0, Number(totalsRaw.shipping ?? 0)),
+    discount: Math.max(0, Number(totalsRaw.discount ?? 0)),
+    shippingDiscount: Math.max(0, Number(totalsRaw.shippingDiscount ?? 0)),
+  });
   res.json({
     countryCode,
-    vatRateBp,
-    vatMinor,
-    vatEligibleSubtotalMinor: vatEligibleSubtotal,
-    totalMinor: taxable + vatMinor,
+    vatRateBp: computed.vatRateBp,
+    vatMinor: computed.vatMinor,
+    vatEligibleSubtotalMinor: computed.vatEligibleSubtotal,
+    totalMinor: computed.total,
   });
 });
 
@@ -163,58 +233,37 @@ router.post("/orders", async (req, res) => {
     return;
   }
 
-  // Re-compute VAT server-side (don't trust client totals).
+  // Resolve totals + line snapshot server-side. Client-supplied priceMinor
+  // and subtotal/total are NEVER trusted — only productId + qty are honored.
   const totalsRaw = (body.totalsMinor as Record<string, number> | undefined) ?? {};
-  const subtotal = Number(totalsRaw.subtotal ?? 0);
-  const shipping = Number(totalsRaw.shipping ?? 0);
-  const discount = Number(totalsRaw.discount ?? 0);
-  const shippingDiscount = Number(totalsRaw.shippingDiscount ?? 0);
-  const vatRateBp = await getVatRateBp(countryCode);
-
-  // VAT applies only to line items sold by VAT-registered sellers.
-  // Look up the seller for each item, check their `vatRegistered` flag, and
-  // build the VAT-eligible subtotal. Shipping / discounts are apportioned
-  // pro-rata to the VAT-eligible share so VAT reflects only the registered
-  // portion of the order.
-  const items = (body.items as Array<{ productId?: string; priceMinor?: number; qty?: number }> | undefined) ?? [];
-  const productIds = Array.from(new Set(items.map((it) => String(it.productId ?? "")).filter(Boolean)));
-  let vatEligibleSubtotal = 0;
-  if (productIds.length > 0 && vatRateBp > 0) {
-    const productRows = await db
-      .select({ id: schema.productsTable.id, sellerUserId: schema.productsTable.sellerUserId })
-      .from(schema.productsTable)
-      .where(inArray(schema.productsTable.id, productIds));
-    const productSellerMap = new Map<string, string | null>(
-      productRows.map((p) => [p.id, p.sellerUserId]),
-    );
-    const sellerIds = Array.from(
-      new Set(productRows.map((p) => p.sellerUserId).filter((s): s is string => !!s)),
-    );
-    let vatRegisteredSellers = new Set<string>();
-    if (sellerIds.length > 0) {
-      const sellerRows = await db
-        .select({ userId: schema.sellersTable.userId, vatRegistered: schema.sellersTable.vatRegistered })
-        .from(schema.sellersTable)
-        .where(inArray(schema.sellersTable.userId, sellerIds));
-      vatRegisteredSellers = new Set(
-        sellerRows.filter((s) => s.vatRegistered).map((s) => s.userId),
-      );
-    }
-    for (const it of items) {
-      const sellerId = productSellerMap.get(String(it.productId ?? ""));
-      if (sellerId && vatRegisteredSellers.has(sellerId)) {
-        vatEligibleSubtotal += Number(it.priceMinor ?? 0) * Number(it.qty ?? 0);
-      }
-    }
+  const shipping = Math.max(0, Number(totalsRaw.shipping ?? 0));
+  const discount = Math.max(0, Number(totalsRaw.discount ?? 0));
+  const shippingDiscount = Math.max(0, Number(totalsRaw.shippingDiscount ?? 0));
+  const computed = await resolveOrderTotals({
+    items: (body.items as ClientItemInput[] | undefined) ?? [],
+    countryCode,
+    shipping,
+    discount,
+    shippingDiscount,
+  });
+  if (computed.lines.length === 0) {
+    res.status(400).json({ error: "no_valid_items" });
+    return;
   }
-  const vatShare = subtotal > 0 ? vatEligibleSubtotal / subtotal : 0;
-  const vatTaxable = Math.max(
-    0,
-    vatEligibleSubtotal + (shipping - discount - shippingDiscount) * vatShare,
-  );
-  const vatMinor = computeVatMinor(Math.round(vatTaxable), vatRateBp);
-  const taxable = Math.max(0, subtotal + shipping - discount - shippingDiscount);
-  const total = taxable + vatMinor;
+  const subtotal = computed.subtotal;
+  const vatMinor = computed.vatMinor;
+  const total = computed.total;
+  const vatRateBp = computed.vatRateBp;
+
+  // Persist the server-resolved snapshot. Downstream split/payout math
+  // (finalizeOrderAfterPayment) reads order.items[*].priceMinor — that
+  // must come from the products table, never from the request body.
+  const itemsSnapshot = computed.lines.map((l) => ({
+    productId: l.productId,
+    qty: l.qty,
+    priceMinor: l.priceMinor,
+    sellerUserId: l.sellerUserId,
+  }));
 
   const totalsMinor = {
     subtotal,
@@ -234,7 +283,7 @@ router.post("/orders", async (req, res) => {
       status: "pending_payment",
       countryCode,
       currencyCode,
-      items: (body.items as unknown[] | undefined) ?? [],
+      items: itemsSnapshot,
       fulfillment,
       payment,
       notificationPrefs: (body.notificationPrefs as Record<string, unknown> | undefined) ?? {},
