@@ -702,7 +702,7 @@ export default function SellerApply() {
               <input
                 value={payoutBank}
                 onChange={(e) => setPayoutBank(e.target.value)}
-                placeholder={bankPlaceholderForCountry(country.code)}
+                placeholder={country.bankAccount.bankNameExamples}
                 className={inputClass}
                 data-testid="input-payout-bank"
               />
@@ -833,23 +833,6 @@ export default function SellerApply() {
       </div>
     </div>
   );
-}
-
-function bankPlaceholderForCountry(code: string): string {
-  switch (code) {
-    case "NG":
-      return "GTBank, Access, Kuda...";
-    case "GH":
-      return "GCB, Ecobank, Stanbic...";
-    case "KE":
-      return "KCB, Equity, NCBA...";
-    case "ZA":
-      return "FNB, Standard Bank, Capitec...";
-    case "CI":
-      return "Ecobank, SGBCI, Société Générale...";
-    default:
-      return "Your bank";
-  }
 }
 
 function titleCase(s: string) {
