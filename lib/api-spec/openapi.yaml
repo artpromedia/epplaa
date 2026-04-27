@@ -241,6 +241,17 @@ paths:
         "400": { description: Bad request }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "502": { description: Payment gateway initialization failed }
+  /orders/quote:
+    post:
+      operationId: quoteOrder
+      tags: [orders]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/PlaceOrderBody" } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/OrderQuote" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
   /orders/{orderId}:
     get:
       operationId: getOrder
@@ -1276,6 +1287,16 @@ components:
     PlaceOrderBody:
       type: object
       additionalProperties: true
+
+    OrderQuote:
+      type: object
+      required: [countryCode, vatRateBp, vatMinor, vatEligibleSubtotalMinor, totalMinor]
+      properties:
+        countryCode: { type: string }
+        vatRateBp: { type: integer }
+        vatMinor: { type: integer }
+        vatEligibleSubtotalMinor: { type: integer }
+        totalMinor: { type: integer }
 
     PaymentIntent:
       type: object

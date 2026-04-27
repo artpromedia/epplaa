@@ -52,6 +52,61 @@ function rowToOrder(r: typeof schema.ordersTable.$inferSelect) {
   };
 }
 
+// POST /orders/quote — server-computed totals (VAT eligibility per seller).
+// The checkout review UI calls this so the displayed VAT matches what
+// /orders will charge (only VAT-registered sellers' lines are taxable).
+router.post("/orders/quote", async (req, res) => {
+  const userId = requireUserId(req, res);
+  if (!userId) return;
+  const body = req.body as Record<string, unknown>;
+  const countryCode = String(body.countryCode ?? "NG");
+  const totalsRaw = (body.totalsMinor as Record<string, number> | undefined) ?? {};
+  const subtotal = Number(totalsRaw.subtotal ?? 0);
+  const shipping = Number(totalsRaw.shipping ?? 0);
+  const discount = Number(totalsRaw.discount ?? 0);
+  const shippingDiscount = Number(totalsRaw.shippingDiscount ?? 0);
+  const items = (body.items as Array<{ productId?: string; priceMinor?: number; qty?: number }> | undefined) ?? [];
+
+  const vatRateBp = await getVatRateBp(countryCode);
+  let vatEligibleSubtotal = 0;
+  if (vatRateBp > 0) {
+    const productIds = Array.from(new Set(items.map((it) => String(it.productId ?? "")).filter(Boolean)));
+    if (productIds.length > 0) {
+      const productRows = await db
+        .select({ id: schema.productsTable.id, sellerUserId: schema.productsTable.sellerUserId })
+        .from(schema.productsTable)
+        .where(inArray(schema.productsTable.id, productIds));
+      const productSellerMap = new Map(productRows.map((p) => [p.id, p.sellerUserId]));
+      const sellerIds = Array.from(new Set(productRows.map((p) => p.sellerUserId).filter((s): s is string => !!s)));
+      let vatRegistered = new Set<string>();
+      if (sellerIds.length > 0) {
+        const sellerRows = await db
+          .select({ userId: schema.sellersTable.userId, vatRegistered: schema.sellersTable.vatRegistered })
+          .from(schema.sellersTable)
+          .where(inArray(schema.sellersTable.userId, sellerIds));
+        vatRegistered = new Set(sellerRows.filter((s) => s.vatRegistered).map((s) => s.userId));
+      }
+      for (const it of items) {
+        const sellerId = productSellerMap.get(String(it.productId ?? "")) ?? null;
+        if (sellerId && vatRegistered.has(sellerId)) {
+          vatEligibleSubtotal += Number(it.priceMinor ?? 0) * Number(it.qty ?? 0);
+        }
+      }
+    }
+  }
+  const vatShare = subtotal > 0 ? vatEligibleSubtotal / subtotal : 0;
+  const vatTaxable = Math.max(0, vatEligibleSubtotal + (shipping - discount - shippingDiscount) * vatShare);
+  const vatMinor = computeVatMinor(Math.round(vatTaxable), vatRateBp);
+  const taxable = Math.max(0, subtotal + shipping - discount - shippingDiscount);
+  res.json({
+    countryCode,
+    vatRateBp,
+    vatMinor,
+    vatEligibleSubtotalMinor: vatEligibleSubtotal,
+    totalMinor: taxable + vatMinor,
+  });
+});
+
 router.get("/orders", async (req, res) => {
   const userId = requireUserId(req, res);
   if (!userId) return;

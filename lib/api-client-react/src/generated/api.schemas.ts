@@ -218,6 +218,14 @@ export interface PlaceOrderBody {
   [key: string]: unknown;
 }
 
+export interface OrderQuote {
+  countryCode: string;
+  vatRateBp: number;
+  vatMinor: number;
+  vatEligibleSubtotalMinor: number;
+  totalMinor: number;
+}
+
 export interface PaymentIntent {
   id: string;
   purpose: string;

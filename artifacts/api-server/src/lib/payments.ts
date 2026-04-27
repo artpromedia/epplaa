@@ -191,35 +191,10 @@ function sanitizeResponse(value: unknown): unknown {
   }
 }
 
-/*
- * SPLIT DESIGN — DELIBERATELY LEDGER-BASED, NOT GATEWAY-LEVEL.
- *
- * Paystack and Flutterwave both support gateway-level "Transfer Splits" /
- * subaccount routing that disburse funds to seller subaccounts at charge
- * time. We do NOT use that capability here. The marketplace charges the
- * full order amount into the platform's settlement account and records
- * the split as scheduled `payouts` rows (commission + seller share +
- * optional manufacturer share) that flow out via the gateway transfer
- * APIs in `processDuePayouts`.
- *
- * Why ledger-based:
- *   1. T+1 (digital) / T+7 (COD) hold periods are required so we can
- *      claw funds back on a refund or chargeback. Gateway-level splits
- *      disburse at charge time and would defeat the hold.
- *   2. Refund clawback (`compensateForRefund`) needs the platform to be
- *      the funds custodian during the hold window, otherwise we'd be
- *      asking a seller's subaccount to give money back.
- *   3. Manufacturer attribution (Flutterwave secondary leg) is computed
- *      per-line at charge time and changes per order; gateway split codes
- *      are static.
- *   4. VAT (NG 7.5%, VAT-registered sellers only) requires per-line
- *      seller eligibility, not per-account splits.
- *
- * The "Transfer Splits" requirement on the task brief is satisfied by the
- * scheduled-payout pipeline below: every order is split into its component
- * payouts when it is placed, and each component is settled to the right
- * counterparty by the gateway once the hold window closes.
- */
+// Splits are ledger-based: the platform charges full and disburses via
+// scheduled `payouts` rows after the T+1/T+7 hold so we can claw back on
+// refund. Gateway transfer-split codes are not used because they would
+// disburse at charge time and defeat the hold + refund-clawback policy.
 export async function createPaymentIntent(input: CreateIntentInput): Promise<CreateIntentResult> {
   const reference = newPaymentReference();
   const intentId = newPaymentIntentId();

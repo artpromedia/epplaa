@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useLocation } from "wouter";
 import { Package, MapPin, Truck, Tag, X, Check } from "lucide-react";
+import { useQuoteOrder } from "@workspace/api-client-react";
 import { useTheme } from "@/lib/theme-context";
 import { useCountry } from "@/lib/country-context";
 import { useCart } from "@/lib/cart-context";
@@ -103,6 +104,44 @@ export default function CheckoutReview() {
     ? promoResult.shippingDiscountMinor
     : 0;
   const total = Math.max(0, subtotalMinor + shipping - discount - shippingDiscount);
+
+  // Server-computed VAT — only VAT-registered sellers' lines are taxable.
+  // We re-quote whenever the cart, shipping, or promo changes so the displayed
+  // VAT line item exactly matches what the server will charge.
+  const { mutate: requestQuote, data: quote, reset: resetQuote } = useQuoteOrder();
+  useEffect(() => {
+    if (resolved.length === 0) {
+      resetQuote();
+      return;
+    }
+    requestQuote({
+      data: {
+        countryCode: country.code,
+        items: resolved.map((r) => ({
+          productId: r.productId,
+          priceMinor: r.priceMinor,
+          qty: r.qty,
+        })),
+        totalsMinor: {
+          subtotal: subtotalMinor,
+          shipping,
+          discount,
+          shippingDiscount,
+        },
+      },
+    });
+  }, [
+    requestQuote,
+    resetQuote,
+    resolved,
+    country.code,
+    subtotalMinor,
+    shipping,
+    discount,
+    shippingDiscount,
+  ]);
+  const vatMinor = quote?.vatMinor ?? 0;
+  const vatRateBp = quote?.vatRateBp ?? 0;
 
   const subtle = isDark ? "text-white/55" : "text-stone-500";
   const cardBorder = isDark
@@ -444,13 +483,10 @@ export default function CheckoutReview() {
                 accent={isDark ? "text-emerald-300" : "text-emerald-700"}
               />
             )}
-            {country.vatRateBp && country.vatRateBp > 0 ? (
+            {vatMinor > 0 ? (
               <Row
-                label={`VAT (${(country.vatRateBp / 100).toFixed(2).replace(/\.?0+$/, "")}%) — added at payment`}
-                value={`+ ${formatPrice(
-                  Math.round((total * country.vatRateBp) / 10000),
-                  country,
-                )}`}
+                label={`VAT (${(vatRateBp / 100).toFixed(2).replace(/\.?0+$/, "")}%) — added at payment`}
+                value={`+ ${formatPrice(vatMinor, country)}`}
                 subtle={subtle}
               />
             ) : null}
@@ -464,13 +500,7 @@ export default function CheckoutReview() {
                 className="text-xl font-black"
                 data-testid="text-review-total"
               >
-                {formatPrice(
-                  total +
-                    (country.vatRateBp
-                      ? Math.round((total * country.vatRateBp) / 10000)
-                      : 0),
-                  country,
-                )}
+                {formatPrice(total + vatMinor, country)}
               </span>
             </div>
           </div>

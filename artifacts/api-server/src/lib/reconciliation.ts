@@ -164,13 +164,8 @@ export async function recoverStuckRefundLocks(
       }
 
       if (latestAttempt.status === "processed") {
-        /*
-         * Sweep order: clawback runs every time (idempotent via
-         * deterministic audit-id + onConflictDoNothing) so a prior
-         * partial finalize where order.status was set but clawback
-         * was missed is healed here. Order/intent updates are no-ops
-         * if already 'refunded'.
-         */
+        // Clawback runs every time (idempotent via deterministic audit
+        // id + onConflictDoNothing) to heal partial finalizes.
         const clawback = await clawbackPayoutsForRefund(
           order.id,
           latestAttempt.reason ?? "recovery_sweep_refund",

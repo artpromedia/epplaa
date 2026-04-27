@@ -197,14 +197,8 @@ router.post("/orders/:orderId/refund", async (req, res) => {
       errorMessage: result.errorMessage,
     });
 
-    /*
-     * Persist gateway reference / error immediately, but keep the
-     * audit row's status='pending' for the sync-processed path. The
-     * row is flipped to 'processed' below, AFTER clawback + status
-     * updates have committed, so a crash mid-finalize leaves the
-     * webhook + recovery-sweep retry paths able to re-finalize
-     * (both gate on status='pending').
-     */
+    // Persist gateway reference/error now, but keep status='pending'
+    // until clawback + status flips commit (set at end of branch).
     await db
       .update(schema.refundAttemptsTable)
       .set({
@@ -216,15 +210,9 @@ router.post("/orders/:orderId/refund", async (req, res) => {
       .where(eq(schema.refundAttemptsTable.id, refundId));
 
     if (result.ok && result.status === "processed") {
-      /*
-       * Order/intent flip happens AFTER clawback so that a clawback
-       * failure leaves order.status != 'refunded'. The recovery sweep
-       * (which only runs on non-refunded orders) and the webhook
-       * (which only runs while the latest attempt is still pending —
-       * we have not flipped it to processed yet either) can both
-       * re-finalize cleanly. The clawback insert itself is idempotent
-       * via deterministic id + onConflictDoNothing.
-       */
+      // Clawback first, then status flips, then mark audit row processed.
+      // A crash mid-finalize keeps the row 'pending' so retries (webhook
+      // or recovery sweep) re-finalize via the idempotent clawback path.
       const clawback = await clawbackPayoutsForRefund(order.id, reason);
       await db
         .update(schema.ordersTable)

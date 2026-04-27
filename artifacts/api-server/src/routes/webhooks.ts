@@ -116,17 +116,8 @@ async function handleWebhook(
   try {
     const isRefundEvent = (verified.eventType ?? "").toLowerCase().includes("refund");
     if (isRefundEvent && verified.reference) {
-      /*
-       * Refund webhook (Paystack `refund.processed`/`refund.failed`,
-       * Flutterwave equivalents). The event reference is the original
-       * charge reference, so look up the order and its most recent
-       * pending refund_attempts row, then finalize:
-       *   - success → flip attempt to 'processed', mark order/intent
-       *     refunded, run payout clawback. Lock stays held under the
-       *     status='refunded' guard.
-       *   - failed → flip attempt to 'failed', release the CAS lock so
-       *     the buyer can retry.
-       */
+      // Refund webhook: locate order by original charge reference, then
+      // finalize the matching pending refund_attempts row.
       const [order] = await db
         .select()
         .from(schema.ordersTable)
@@ -141,13 +132,8 @@ async function handleWebhook(
           .limit(1);
         if (attempt && attempt.status === "pending") {
           if (verified.status === "success") {
-            /*
-             * Order: clawback FIRST, then order/intent flip, then
-             * mark the audit row processed last. This ordering means
-             * a partial failure leaves attempt.status === "pending"
-             * so a webhook replay or recovery sweep can re-finalize
-             * cleanly. clawbackPayoutsForRefund is idempotent.
-             */
+            // Clawback first, status flips after, audit row last so
+            // partial failures keep the attempt 'pending' for retry.
             const clawback = await clawbackPayoutsForRefund(
               order.id,
               attempt.reason ?? "webhook_refund",

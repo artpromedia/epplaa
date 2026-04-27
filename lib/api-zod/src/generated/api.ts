@@ -287,6 +287,16 @@ export const ListOrdersResponse = zod.array(ListOrdersResponseItem);
 
 export const PlaceOrderBody = zod.record(zod.string(), zod.unknown());
 
+export const QuoteOrderBody = zod.record(zod.string(), zod.unknown());
+
+export const QuoteOrderResponse = zod.object({
+  countryCode: zod.string(),
+  vatRateBp: zod.number(),
+  vatMinor: zod.number(),
+  vatEligibleSubtotalMinor: zod.number(),
+  totalMinor: zod.number(),
+});
+
 export const GetOrderParams = zod.object({
   orderId: zod.coerce.string(),
 });

@@ -46,6 +46,7 @@ import type {
   NotificationPrefs,
   Onboarding,
   Order,
+  OrderQuote,
   PaymentIntent,
   Payout,
   PlaceOrderBody,
@@ -1669,6 +1670,86 @@ export const usePlaceOrder = <
   TContext
 > => {
   return useMutation(getPlaceOrderMutationOptions(options));
+};
+
+export const getQuoteOrderUrl = () => {
+  return `/api/orders/quote`;
+};
+
+export const quoteOrder = async (
+  placeOrderBody: PlaceOrderBody,
+  options?: RequestInit,
+): Promise<OrderQuote> => {
+  return customFetch<OrderQuote>(getQuoteOrderUrl(), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(placeOrderBody),
+  });
+};
+
+export const getQuoteOrderMutationOptions = <
+  TError = ErrorType<UnauthorizedResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof quoteOrder>>,
+    TError,
+    { data: BodyType<PlaceOrderBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof quoteOrder>>,
+  TError,
+  { data: BodyType<PlaceOrderBody> },
+  TContext
+> => {
+  const mutationKey = ["quoteOrder"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof quoteOrder>>,
+    { data: BodyType<PlaceOrderBody> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return quoteOrder(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type QuoteOrderMutationResult = NonNullable<
+  Awaited<ReturnType<typeof quoteOrder>>
+>;
+export type QuoteOrderMutationBody = BodyType<PlaceOrderBody>;
+export type QuoteOrderMutationError = ErrorType<UnauthorizedResponse>;
+
+export const useQuoteOrder = <
+  TError = ErrorType<UnauthorizedResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof quoteOrder>>,
+    TError,
+    { data: BodyType<PlaceOrderBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof quoteOrder>>,
+  TError,
+  { data: BodyType<PlaceOrderBody> },
+  TContext
+> => {
+  return useMutation(getQuoteOrderMutationOptions(options));
 };
 
 export const getGetOrderUrl = (orderId: string) => {
