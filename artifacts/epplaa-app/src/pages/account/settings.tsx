@@ -34,6 +34,12 @@ const EPPLAA_KEYS = [
   "epplaa-notifications",
   "epplaa-country",
   "epplaa-theme",
+  "epplaa-seller-status",
+  "epplaa-seller-tier",
+  "epplaa-app-mode",
+  "epplaa-seller-application",
+  "epplaa-seller-stats",
+  "epplaa-seller-listings",
 ];
 
 export default function Settings() {
