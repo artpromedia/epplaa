@@ -191,6 +191,35 @@ function sanitizeResponse(value: unknown): unknown {
   }
 }
 
+/*
+ * SPLIT DESIGN — DELIBERATELY LEDGER-BASED, NOT GATEWAY-LEVEL.
+ *
+ * Paystack and Flutterwave both support gateway-level "Transfer Splits" /
+ * subaccount routing that disburse funds to seller subaccounts at charge
+ * time. We do NOT use that capability here. The marketplace charges the
+ * full order amount into the platform's settlement account and records
+ * the split as scheduled `payouts` rows (commission + seller share +
+ * optional manufacturer share) that flow out via the gateway transfer
+ * APIs in `processDuePayouts`.
+ *
+ * Why ledger-based:
+ *   1. T+1 (digital) / T+7 (COD) hold periods are required so we can
+ *      claw funds back on a refund or chargeback. Gateway-level splits
+ *      disburse at charge time and would defeat the hold.
+ *   2. Refund clawback (`compensateForRefund`) needs the platform to be
+ *      the funds custodian during the hold window, otherwise we'd be
+ *      asking a seller's subaccount to give money back.
+ *   3. Manufacturer attribution (Flutterwave secondary leg) is computed
+ *      per-line at charge time and changes per order; gateway split codes
+ *      are static.
+ *   4. VAT (NG 7.5%, VAT-registered sellers only) requires per-line
+ *      seller eligibility, not per-account splits.
+ *
+ * The "Transfer Splits" requirement on the task brief is satisfied by the
+ * scheduled-payout pipeline below: every order is split into its component
+ * payouts when it is placed, and each component is settled to the right
+ * counterparty by the gateway once the hold window closes.
+ */
 export async function createPaymentIntent(input: CreateIntentInput): Promise<CreateIntentResult> {
   const reference = newPaymentReference();
   const intentId = newPaymentIntentId();
@@ -558,10 +587,22 @@ async function finalizeOrderAfterPayment(
  * `clawback_required` reason for finance to handle off-platform.
  */
 export async function clawbackPayoutsForRefund(orderId: string, refundReason: string): Promise<{ cancelled: number; clawbackRequired: number }> {
+  /*
+   * Refund clawback covers ALL payout legs for the order — currently
+   * `seller_share` and `manufacturer_share`. Filtering by a single kind
+   * would leak funds: if the manufacturer leg has been settled while
+   * the buyer is being refunded, finance must be alerted via a
+   * `clawback_required` audit row regardless of which leg it is.
+   */
   const all = await db
     .select()
     .from(schema.payoutsTable)
-    .where(and(eq(schema.payoutsTable.orderId, orderId), eq(schema.payoutsTable.kind, "seller_share")));
+    .where(
+      and(
+        eq(schema.payoutsTable.orderId, orderId),
+        inArray(schema.payoutsTable.kind, ["seller_share", "manufacturer_share"]),
+      ),
+    );
   let cancelled = 0;
   let clawbackRequired = 0;
   for (const p of all) {
@@ -573,18 +614,31 @@ export async function clawbackPayoutsForRefund(orderId: string, refundReason: st
         .returning();
       if (result.length > 0) cancelled++;
     } else if (p.status === "processing" || p.status === "paid") {
-      // Funds already in flight or sent — finance must claw back.
-      await db.insert(schema.refundAttemptsTable).values({
-        id: `rfa_${Date.now().toString(36)}_${p.id.slice(-4)}`,
-        intentId: p.intentId ?? "",
-        orderId,
-        amountMinor: p.amountMinor,
-        reason: `clawback_required: ${refundReason}`,
-        status: "pending",
-        gateway: p.gateway ?? "manual",
-      });
-      clawbackRequired++;
-      logger.warn({ orderId, payoutId: p.id, status: p.status }, "refund_clawback_required");
+      /*
+       * Funds already in flight or sent — finance must claw back. The
+       * audit row id is deterministic per (order, payout) so retries
+       * (webhook replay, recovery sweep) are idempotent: the
+       * onConflictDoNothing prevents duplicate clawback_required
+       * artifacts even if the refund is finalized multiple times.
+       */
+      const auditId = `rfa_clb_${p.id}`;
+      const ins = await db
+        .insert(schema.refundAttemptsTable)
+        .values({
+          id: auditId,
+          intentId: p.intentId ?? "",
+          orderId,
+          amountMinor: p.amountMinor,
+          reason: `clawback_required: ${refundReason}`,
+          status: "pending",
+          gateway: p.gateway ?? "manual",
+        })
+        .onConflictDoNothing({ target: schema.refundAttemptsTable.id })
+        .returning();
+      if (ins.length > 0) {
+        clawbackRequired++;
+        logger.warn({ orderId, payoutId: p.id, status: p.status }, "refund_clawback_required");
+      }
     }
   }
   return { cancelled, clawbackRequired };

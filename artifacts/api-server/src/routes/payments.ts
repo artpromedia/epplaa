@@ -1,5 +1,5 @@
 import { Router, type IRouter, type Request, type Response } from "express";
-import { eq, and, desc } from "drizzle-orm";
+import { eq, and, desc, ne, sql } from "drizzle-orm";
 import type { GatewayName } from "@workspace/payments";
 import { DevMockGateway } from "@workspace/payments";
 import { db, schema } from "../lib/db";
@@ -102,6 +102,10 @@ router.post("/orders/:orderId/refund", async (req, res) => {
     res.status(400).json({ error: "already_refunded" });
     return;
   }
+  if (order.status === "cancelled") {
+    res.status(400).json({ error: "order_cancelled" });
+    return;
+  }
   const ageDays = (Date.now() - order.paidAt.getTime()) / (24 * 3600 * 1000);
   if (ageDays > 14) {
     res.status(400).json({ error: "refund_window_expired" });
@@ -109,6 +113,30 @@ router.post("/orders/:orderId/refund", async (req, res) => {
   }
   if (order.status === "delivered") {
     res.status(400).json({ error: "use_returns_flow" });
+    return;
+  }
+
+  /*
+   * CAS refund lock — acquire `refundStartedAt` atomically. Two concurrent
+   * POST /orders/:orderId/refund requests will both pass the SELECT-then-
+   * check above; only one can flip `refund_started_at` from NULL → now()
+   * here, and the loser gets HTTP 409. This prevents double gateway
+   * charges on the same order.
+   */
+  const lockResult = await db
+    .update(schema.ordersTable)
+    .set({ refundStartedAt: new Date() })
+    .where(
+      and(
+        eq(schema.ordersTable.id, order.id),
+        sql`${schema.ordersTable.refundStartedAt} IS NULL`,
+        ne(schema.ordersTable.status, "refunded"),
+        ne(schema.ordersTable.status, "cancelled"),
+      ),
+    )
+    .returning({ id: schema.ordersTable.id });
+  if (lockResult.length === 0) {
+    res.status(409).json({ error: "refund_in_progress" });
     return;
   }
 
@@ -120,67 +148,174 @@ router.post("/orders/:orderId/refund", async (req, res) => {
   const refundAmount = Number(totals.total ?? 0);
 
   const refundId = newRefundId();
-  await db.insert(schema.refundAttemptsTable).values({
-    id: refundId,
-    intentId: order.paymentIntentId,
-    orderId: order.id,
-    amountMinor: refundAmount,
-    reason,
-    status: "pending",
-    gateway: gatewayName,
-  });
-
-  const result = await gw.refund({
-    reference: order.gatewayReference,
-    amountMinor: refundAmount,
-    reason,
-  });
-
-  await logAttempt({
-    intentId: order.paymentIntentId,
-    gateway: gatewayName,
-    kind: "refund",
-    status: result.ok ? "ok" : "error",
-    gatewayReference: result.refundReference,
-    errorMessage: result.errorMessage,
-  });
-
-  await db
-    .update(schema.refundAttemptsTable)
-    .set({
-      status: result.ok ? (result.status === "processed" ? "processed" : "pending") : "failed",
-      gatewayReference: result.refundReference || null,
-      errorMessage: result.errorMessage ?? null,
-      resolvedAt: result.ok && result.status === "processed" ? new Date() : null,
-    })
-    .where(eq(schema.refundAttemptsTable.id, refundId));
-
-  if (result.ok) {
-    await db
-      .update(schema.ordersTable)
-      .set({ status: "refunded" })
-      .where(eq(schema.ordersTable.id, order.id));
-    await db
-      .update(schema.paymentIntentsTable)
-      .set({ status: "refunded" })
-      .where(eq(schema.paymentIntentsTable.id, order.paymentIntentId));
-    // Clawback any pending payouts and flag in-flight ones for finance.
-    const clawback = await clawbackPayoutsForRefund(order.id, reason);
-    logger.info(
-      { orderId: order.id, refundId, ...clawback },
-      "refund_completed_with_clawback",
-    );
-    res.json({
-      ok: true,
-      refundId,
-      refundReference: result.refundReference,
-      payoutsCancelled: clawback.cancelled,
-      payoutsRequiringClawback: clawback.clawbackRequired,
+  /*
+   * Lock-release policy:
+   *
+   *   - `gatewayCalled` flips true the instant we are about to invoke
+   *     gw.refund(...). Once the gateway has been contacted, the
+   *     authoritative source of truth for the refund is the gateway
+   *     itself — even if the gateway request throws, we cannot know
+   *     whether it processed (network blip on the response leg). To
+   *     prevent any chance of a double charge we KEEP the CAS lock
+   *     held in that case and surface a 500 so finance/ops can
+   *     reconcile via the gateway's lookup API. The buyer cannot
+   *     retry until the lock is cleared by the reconciliation worker
+   *     or manual intervention.
+   *
+   *   - We only release the lock automatically when we are certain
+   *     no money has moved, i.e. the audit insert failed before
+   *     gw.refund(...) ran, or the gateway returned a clean
+   *     `result.ok === false` (transport/business failure that the
+   *     gateway acknowledges as not-charged).
+   */
+  let gatewayCalled = false;
+  let releaseLock = false;
+  try {
+    await db.insert(schema.refundAttemptsTable).values({
+      id: refundId,
+      intentId: order.paymentIntentId,
+      orderId: order.id,
+      amountMinor: refundAmount,
+      reason,
+      status: "pending",
+      gateway: gatewayName,
     });
+
+    gatewayCalled = true;
+    const result = await gw.refund({
+      reference: order.gatewayReference,
+      amountMinor: refundAmount,
+      reason,
+    });
+
+    await logAttempt({
+      intentId: order.paymentIntentId,
+      gateway: gatewayName,
+      kind: "refund",
+      status: result.ok ? "ok" : "error",
+      gatewayReference: result.refundReference,
+      errorMessage: result.errorMessage,
+    });
+
+    /*
+     * Persist gateway reference / error immediately, but keep the
+     * audit row's status='pending' for the sync-processed path. The
+     * row is flipped to 'processed' below, AFTER clawback + status
+     * updates have committed, so a crash mid-finalize leaves the
+     * webhook + recovery-sweep retry paths able to re-finalize
+     * (both gate on status='pending').
+     */
+    await db
+      .update(schema.refundAttemptsTable)
+      .set({
+        status: result.ok ? "pending" : "failed",
+        gatewayReference: result.refundReference || null,
+        errorMessage: result.errorMessage ?? null,
+        resolvedAt: result.ok ? null : new Date(),
+      })
+      .where(eq(schema.refundAttemptsTable.id, refundId));
+
+    if (result.ok && result.status === "processed") {
+      /*
+       * Order/intent flip happens AFTER clawback so that a clawback
+       * failure leaves order.status != 'refunded'. The recovery sweep
+       * (which only runs on non-refunded orders) and the webhook
+       * (which only runs while the latest attempt is still pending —
+       * we have not flipped it to processed yet either) can both
+       * re-finalize cleanly. The clawback insert itself is idempotent
+       * via deterministic id + onConflictDoNothing.
+       */
+      const clawback = await clawbackPayoutsForRefund(order.id, reason);
+      await db
+        .update(schema.ordersTable)
+        .set({ status: "refunded" })
+        .where(eq(schema.ordersTable.id, order.id));
+      await db
+        .update(schema.paymentIntentsTable)
+        .set({ status: "refunded" })
+        .where(eq(schema.paymentIntentsTable.id, order.paymentIntentId));
+      // Mark the audit row processed last so retries see it pending
+      // until clawback + status-flip have both committed.
+      await db
+        .update(schema.refundAttemptsTable)
+        .set({ status: "processed", resolvedAt: new Date() })
+        .where(eq(schema.refundAttemptsTable.id, refundId));
+      logger.info(
+        { orderId: order.id, refundId, ...clawback },
+        "refund_completed_with_clawback",
+      );
+      res.json({
+        ok: true,
+        status: "processed",
+        refundId,
+        refundReference: result.refundReference,
+        payoutsCancelled: clawback.cancelled,
+        payoutsRequiringClawback: clawback.clawbackRequired,
+      });
+      // Lock stays held forever via the now-`refunded` status guard
+      // (the CAS WHERE clause excludes status='refunded'). No release.
+      return;
+    } else if (result.ok && result.status === "pending") {
+      /*
+       * Async refund: the gateway accepted the request but settlement
+       * is asynchronous. Do NOT mark the order refunded yet — the
+       * refund webhook (or the recovery sweep, when the audit row is
+       * eventually flipped to 'processed') will finalize. Keep the
+       * CAS lock held to prevent a second refund attempt while the
+       * first is still in flight on the gateway side.
+       */
+      logger.info(
+        { orderId: order.id, refundId, refundReference: result.refundReference },
+        "refund_accepted_pending_async_settlement",
+      );
+      res.status(202).json({
+        ok: true,
+        status: "pending",
+        refundId,
+        refundReference: result.refundReference,
+      });
+      return;
+    } else {
+      // Gateway acknowledged failure: no money moved. Safe to release
+      // the lock so the buyer can retry.
+      releaseLock = true;
+      res.status(502).json({ error: "refund_failed", detail: result.errorMessage ?? "gateway_error" });
+      return;
+    }
+  } catch (err) {
+    logger.error(
+      { orderId: order.id, refundId, gatewayCalled, err },
+      "refund_unexpected_error",
+    );
+    // Only release the lock if the failure happened BEFORE we contacted
+    // the gateway. After gateway contact, the outcome is unknown and
+    // releasing the lock could enable a double charge.
+    if (!gatewayCalled) {
+      releaseLock = true;
+    } else {
+      logger.warn(
+        { orderId: order.id, refundId },
+        "refund_lock_held_pending_reconciliation",
+      );
+    }
+    if (!res.headersSent) {
+      res.status(500).json({ error: "refund_internal_error" });
+    }
     return;
-  } else {
-    res.status(502).json({ error: "refund_failed", detail: result.errorMessage ?? "gateway_error" });
-    return;
+  } finally {
+    if (releaseLock) {
+      try {
+        await db
+          .update(schema.ordersTable)
+          .set({ refundStartedAt: null })
+          .where(eq(schema.ordersTable.id, order.id));
+      } catch (releaseErr) {
+        logger.error(
+          { orderId: order.id, refundId, err: releaseErr },
+          "refund_lock_release_failed",
+        );
+      }
+    }
   }
 });
 

@@ -39,6 +39,15 @@ export const ordersTable = pgTable("orders", {
   holdUntil: timestamp("hold_until", { withTimezone: true }),
   /** When funds were released to the seller as a payout. */
   settledAt: timestamp("settled_at", { withTimezone: true }),
+  /**
+   * Concurrency guard for buyer self-serve refunds. Set via a CAS update
+   * (`SET refund_started_at = now() WHERE id = ? AND refund_started_at IS NULL`)
+   * before calling the gateway, so two simultaneous refund POSTs cannot
+   * both fire `gw.refund(...)` for the same order. Cleared back to NULL
+   * only if the gateway call fails before any side-effects, leaving the
+   * row available for retry.
+   */
+  refundStartedAt: timestamp("refund_started_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 

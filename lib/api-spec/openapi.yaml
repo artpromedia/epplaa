@@ -1266,6 +1266,12 @@ components:
           additionalProperties: true
         pickupOtp: { type: ["string", "null"] }
         etaLabel: { type: string }
+        gateway: { type: ["string", "null"] }
+        gatewayReference: { type: ["string", "null"] }
+        paymentIntentId: { type: ["string", "null"] }
+        paidAtIso: { type: ["string", "null"] }
+        holdUntilIso: { type: ["string", "null"] }
+        settledAtIso: { type: ["string", "null"] }
         createdAtIso: { type: string }
     PlaceOrderBody:
       type: object

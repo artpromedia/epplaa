@@ -10,6 +10,7 @@ import {
   X,
   Star,
   RotateCcw,
+  Undo2,
 } from "lucide-react";
 import { useTheme } from "@/lib/theme-context";
 import { useCountry } from "@/lib/country-context";
@@ -21,6 +22,8 @@ import { isImport, buildCustomsTimeline } from "@/lib/landed-cost";
 import { formatOrderPrice } from "@/lib/format";
 import { PageHeader } from "@/components/page-header";
 import { useToast } from "@/hooks/use-toast";
+import { useRefundOrder } from "@workspace/api-client-react";
+import { useQueryClient } from "@tanstack/react-query";
 import { statusColorClass, relativeDate } from "./orders";
 
 export default function OrderDetail() {
@@ -62,6 +65,21 @@ export default function OrderDetail() {
   const Icon = isPickup ? (order.fulfillment.optionId.includes("box") ? Package : MapPin) : Truck;
 
   const canCancel = order.status === "placed" || order.status === "ready_for_pickup" || order.status === "out_for_delivery";
+  /*
+   * Self-serve refund through the original payment gateway. Mirrors the
+   * eligibility rules in `POST /orders/:orderId/refund`: the order must be
+   * paid, not yet delivered (delivered orders use the returns flow), not
+   * already refunded/cancelled, and within 14 days of payment.
+   */
+  const refundWindowOpen = !!order.paidAtIso
+    && (Date.now() - new Date(order.paidAtIso).getTime()) / (24 * 3600 * 1000) <= 14;
+  const canRefund = !!order.paidAtIso
+    && refundWindowOpen
+    && order.status !== "delivered"
+    && order.status !== "refunded"
+    && order.status !== "cancelled";
+  const refundMut = useRefundOrder();
+  const qc = useQueryClient();
 
   return (
     <div className="flex flex-col h-full w-full">
@@ -408,6 +426,54 @@ export default function OrderDetail() {
               </Link>
             );
           })()}
+
+        {/*
+         * Self-serve refund: paid orders within 14 days of payment that have
+         * not yet been delivered. Delivered orders use the returns flow.
+         * Mirrors the eligibility checks in the backend route.
+         */}
+        {canRefund && (
+          <button
+            onClick={async () => {
+              if (refundMut.isPending) return;
+              const ok = window.confirm(
+                "Request a full refund through your original payment method? This cancels the order.",
+              );
+              if (!ok) return;
+              try {
+                await refundMut.mutateAsync({
+                  orderId: order.id,
+                  data: { reason: "buyer_requested_refund" },
+                });
+                await qc.invalidateQueries({ queryKey: ["/api/orders"] });
+                toast({
+                  title: "Refund requested",
+                  description:
+                    "Your payment provider will return the funds. This can take a few minutes to a few days depending on your bank.",
+                });
+              } catch (err) {
+                const msg = (err as { detail?: string; error?: string })?.detail
+                  ?? (err as { error?: string })?.error
+                  ?? "Please try again or contact support.";
+                toast({
+                  title: "Could not start refund",
+                  description: msg,
+                  variant: "destructive",
+                });
+              }
+            }}
+            disabled={refundMut.isPending}
+            className={`w-full h-12 rounded-xl border font-bold flex items-center justify-center gap-2 disabled:opacity-50 ${
+              isDark
+                ? "border-white/15 text-white/80 hover:bg-white/5"
+                : "border-stone-300 text-stone-800 hover:bg-stone-50"
+            }`}
+            data-testid="button-request-refund"
+          >
+            <Undo2 className="w-4 h-4" />
+            {refundMut.isPending ? "Processing refund…" : "Request refund"}
+          </button>
+        )}
 
         {canCancel && (
           <button

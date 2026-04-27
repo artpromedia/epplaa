@@ -275,6 +275,12 @@ export const ListOrdersResponseItem = zod.object({
   promo: zod.record(zod.string(), zod.unknown()).optional(),
   pickupOtp: zod.string().nullish(),
   etaLabel: zod.string(),
+  gateway: zod.string().nullish(),
+  gatewayReference: zod.string().nullish(),
+  paymentIntentId: zod.string().nullish(),
+  paidAtIso: zod.string().nullish(),
+  holdUntilIso: zod.string().nullish(),
+  settledAtIso: zod.string().nullish(),
   createdAtIso: zod.string(),
 });
 export const ListOrdersResponse = zod.array(ListOrdersResponseItem);
@@ -299,6 +305,12 @@ export const GetOrderResponse = zod.object({
   promo: zod.record(zod.string(), zod.unknown()).optional(),
   pickupOtp: zod.string().nullish(),
   etaLabel: zod.string(),
+  gateway: zod.string().nullish(),
+  gatewayReference: zod.string().nullish(),
+  paymentIntentId: zod.string().nullish(),
+  paidAtIso: zod.string().nullish(),
+  holdUntilIso: zod.string().nullish(),
+  settledAtIso: zod.string().nullish(),
   createdAtIso: zod.string(),
 });
 
@@ -320,6 +332,12 @@ export const CancelOrderResponse = zod.object({
   promo: zod.record(zod.string(), zod.unknown()).optional(),
   pickupOtp: zod.string().nullish(),
   etaLabel: zod.string(),
+  gateway: zod.string().nullish(),
+  gatewayReference: zod.string().nullish(),
+  paymentIntentId: zod.string().nullish(),
+  paidAtIso: zod.string().nullish(),
+  holdUntilIso: zod.string().nullish(),
+  settledAtIso: zod.string().nullish(),
   createdAtIso: zod.string(),
 });
 

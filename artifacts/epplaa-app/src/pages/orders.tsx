@@ -8,11 +8,13 @@ import { formatOrderPrice } from "@/lib/format";
 import { PageHeader } from "@/components/page-header";
 
 const STATUS_LABEL: Record<OrderStatus, string> = {
+  pending_payment: "Pending payment",
   placed: "Placed",
   ready_for_pickup: "Ready for pickup",
   out_for_delivery: "Out for delivery",
   delivered: "Delivered",
   cancelled: "Cancelled",
+  refunded: "Refunded",
 };
 
 export default function Orders() {

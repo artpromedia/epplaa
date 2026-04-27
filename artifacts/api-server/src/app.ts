@@ -7,7 +7,7 @@ import webhooksRouter from "./routes/webhooks";
 import { logger } from "./lib/logger";
 import { CLERK_PROXY_PATH, clerkProxyMiddleware } from "./middlewares/clerkProxyMiddleware";
 import { seedDatabaseIfEmpty } from "./lib/seed";
-import { runDailyReconciliation } from "./lib/reconciliation";
+import { runDailyReconciliation, recoverStuckRefundLocks } from "./lib/reconciliation";
 import { processDuePayouts } from "./lib/payments";
 
 const app: Express = express();
@@ -76,6 +76,24 @@ function startScheduledJobs(): void {
       );
     }, HOUR_MS);
   }, 60_000);
+  /*
+   * Refund-lock recovery: every 10 minutes, finalize or release any
+   * order whose `refund_started_at` lock has been held longer than the
+   * default 30-min stale window. This auto-heals partial-failure cases
+   * where the refund route crashed after contacting the gateway and
+   * intentionally left the lock held to prevent double charges.
+   */
+  const REFUND_RECOVERY_INTERVAL_MS = 10 * 60 * 1000;
+  setTimeout(() => {
+    void recoverStuckRefundLocks().catch((err) =>
+      logger.error({ err: (err as Error).message }, "refund_lock_recovery_failed"),
+    );
+    setInterval(() => {
+      void recoverStuckRefundLocks().catch((err) =>
+        logger.error({ err: (err as Error).message }, "refund_lock_recovery_failed"),
+      );
+    }, REFUND_RECOVERY_INTERVAL_MS);
+  }, 90_000);
 }
 
 if (process.env.NODE_ENV !== "test") {

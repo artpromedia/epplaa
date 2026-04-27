@@ -9,11 +9,13 @@ import { useQueryClient } from "@tanstack/react-query";
 import { CountryCode } from "./countries";
 
 export type OrderStatus =
+  | "pending_payment"
   | "placed"
   | "ready_for_pickup"
   | "out_for_delivery"
   | "delivered"
-  | "cancelled";
+  | "cancelled"
+  | "refunded";
 
 export interface OrderItem {
   productId: string;
@@ -80,6 +82,7 @@ export interface Order {
   };
   pickupOTP?: string;
   etaLabel: string;
+  paidAtIso?: string | null;
 }
 
 export interface PlacedOrder extends Order {
@@ -120,6 +123,7 @@ function fromApi(o: ApiOrder): Order {
     promo: o.promo as unknown as Order["promo"] | undefined,
     pickupOTP: o.pickupOtp ?? undefined,
     etaLabel: o.etaLabel,
+    paidAtIso: o.paidAtIso ?? null,
   };
 }
 

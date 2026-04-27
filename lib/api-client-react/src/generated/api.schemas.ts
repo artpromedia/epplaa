@@ -199,6 +199,18 @@ export interface Order {
   /** @nullable */
   pickupOtp?: string | null;
   etaLabel: string;
+  /** @nullable */
+  gateway?: string | null;
+  /** @nullable */
+  gatewayReference?: string | null;
+  /** @nullable */
+  paymentIntentId?: string | null;
+  /** @nullable */
+  paidAtIso?: string | null;
+  /** @nullable */
+  holdUntilIso?: string | null;
+  /** @nullable */
+  settledAtIso?: string | null;
   createdAtIso: string;
 }
 

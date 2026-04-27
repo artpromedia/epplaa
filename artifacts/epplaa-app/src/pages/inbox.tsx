@@ -19,11 +19,13 @@ import { statusColorClass, relativeDate } from "./orders";
 import { generateDropAlerts } from "@/lib/drop-alerts";
 
 const STATUS_LABEL = {
+  pending_payment: "Pending payment",
   placed: "Placed",
   ready_for_pickup: "Ready for pickup",
   out_for_delivery: "Out for delivery",
   delivered: "Delivered",
   cancelled: "Cancelled",
+  refunded: "Refunded",
 } as const;
 
 export default function Inbox() {
