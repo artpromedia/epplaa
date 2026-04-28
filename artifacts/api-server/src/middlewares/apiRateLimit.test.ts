@@ -16,7 +16,7 @@ vi.mock("../lib/sentry", () => ({
   initSentryServer: () => {},
 }));
 
-import { __test__, getRateLimitStoreKind } from "./apiRateLimit";
+import { __test__, getRateLimitStoreKind, pingRateLimitRedis } from "./apiRateLimit";
 
 beforeEach(() => {
   sentryCalls.exceptions.length = 0;
@@ -231,6 +231,54 @@ describe("RedisFailureWatcher Sentry forwarding", () => {
     // crossed by a single new failure.
     watcher.record("rate_limit_redis_bump_failed", new Error("x"), t0 + 61_000);
     expect(sentryCalls.messages).toHaveLength(0);
+  });
+});
+
+describe("RedisStore.ping (used by /readyz)", () => {
+  it("resolves when redis responds with PONG", async () => {
+    const r = new RedisMock();
+    const s = new __test__.RedisStore(r as never);
+    await expect(s.ping(1000)).resolves.toBeUndefined();
+    await r.quit();
+  });
+
+  it("rejects with the underlying error when ping throws", async () => {
+    const fake = {
+      defineCommand: () => {},
+      ping: async () => {
+        throw new Error("ECONNREFUSED");
+      },
+    };
+    const s = new __test__.RedisStore(fake as never);
+    await expect(s.ping(1000)).rejects.toThrow("ECONNREFUSED");
+  });
+
+  it("rejects with a timeout error when ping never resolves", async () => {
+    const fake = {
+      defineCommand: () => {},
+      ping: () => new Promise<string>(() => {}),
+    };
+    const s = new __test__.RedisStore(fake as never);
+    await expect(s.ping(50)).rejects.toThrow(/redis_ping_timeout_after_50ms/);
+  });
+
+  it("rejects when redis returns an unexpected response", async () => {
+    const fake = {
+      defineCommand: () => {},
+      ping: async () => "not-pong",
+    };
+    const s = new __test__.RedisStore(fake as never);
+    await expect(s.ping(1000)).rejects.toThrow(/unexpected_ping_response/);
+  });
+});
+
+describe("pingRateLimitRedis (module-level helper)", () => {
+  it("returns null when the active store is in-memory", async () => {
+    // The default test environment leaves RATE_LIMIT_STORE unset, so the
+    // module-level singleton resolved to InMemoryStore at import time.
+    // The helper must report `null` so /readyz skips the redis check.
+    expect(__test__.store).toBeInstanceOf(__test__.InMemoryStore);
+    await expect(pingRateLimitRedis(100)).resolves.toBeNull();
   });
 });
 

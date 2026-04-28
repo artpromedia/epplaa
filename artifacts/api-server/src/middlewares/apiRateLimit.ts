@@ -209,6 +209,34 @@ class RedisStore implements BucketStore {
     });
     this.redis = redis as RateLimitRedis;
   }
+  /**
+   * Issues a `PING` against the underlying Redis client with a hard
+   * timeout. Used by the `/readyz` probe so the load balancer can drain
+   * a replica whose backing Redis is unreachable instead of letting it
+   * keep degrading-open silently. We don't reuse `enableReadyCheck`
+   * here because that only fires once at connect time — we want a live
+   * round-trip per probe call.
+   */
+  async ping(timeoutMs: number): Promise<void> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const result = await Promise.race([
+        this.redis.ping(),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(
+            () => reject(new Error(`redis_ping_timeout_after_${timeoutMs}ms`)),
+            timeoutMs,
+          );
+          timer.unref?.();
+        }),
+      ]);
+      if (result !== "PONG") {
+        throw new Error(`unexpected_ping_response:${String(result)}`);
+      }
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
   async bump(key: string, now: number, windowMs: number, max: number): Promise<BumpResult> {
     // Unique member to avoid ZADD score collisions when two hits land on
     // the same millisecond. Process pid + monotonic counter is enough —
@@ -394,6 +422,38 @@ export function apiRateLimit(opts: ApiRateLimitOptions = {}): RequestHandler {
  */
 export function getRateLimitStoreKind(): "memory" | "redis" {
   return store.kind;
+}
+
+/**
+ * Lightweight Redis liveness probe used by `/readyz`. Returns:
+ *   - `null` when the rate-limit store is in-memory (no Redis to probe).
+ *   - `{ ok: true }` when a `PING` round-trips successfully.
+ *   - `{ ok: false, error }` when the ping fails or times out — the
+ *     readyz handler surfaces this so on-call can debug without shell.
+ *
+ * The default timeout is intentionally short (2s) because readiness
+ * probes are called frequently by the platform load balancer. Override
+ * via `READYZ_REDIS_TIMEOUT_MS` if your network has higher RTT. The
+ * env var is sanitised: a missing, non-numeric, zero, or negative
+ * value falls back to the 2000ms default rather than producing a NaN
+ * timer (which would fire immediately and break every probe).
+ */
+function readyzRedisTimeoutMs(): number {
+  const raw = process.env.READYZ_REDIS_TIMEOUT_MS;
+  const n = raw === undefined ? NaN : Number(raw);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 2000;
+}
+
+export async function pingRateLimitRedis(
+  timeoutMs: number = readyzRedisTimeoutMs(),
+): Promise<{ ok: true } | { ok: false; error: string } | null> {
+  if (!(store instanceof RedisStore)) return null;
+  try {
+    await store.ping(timeoutMs);
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: (err as Error).message };
+  }
 }
 
 export const __test__ = {

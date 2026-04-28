@@ -32,20 +32,52 @@ While this alert is firing the Redis store is degrading **open** —
 requests are allowed through with no rate limit. Treat it as urgent
 because the api is effectively unprotected from abuse.
 
-## Step 1 — Verify the bucket store kind on a running replica
+## Step 1 — Hit `/readyz` first
 
-The `/healthz` endpoint reports the backend the live replica is using:
+The `/readyz` endpoint is the primary verification step. It returns
+**200** only when this replica's backing dependencies (DB and, when
+configured, Redis) are reachable. It returns **503** with a JSON body
+listing which dependency failed when something is broken — the
+platform load balancer drains 503-returning replicas automatically,
+so a replica whose Redis has gone unreachable will fall out of
+rotation without human intervention.
+
+```sh
+curl -s "$REPL_API_URL/api/readyz" | jq .
+# Healthy:
+#   { "status": "ready",
+#     "checks": { "db": "ok", "redis": "ok" },
+#     "rateLimitStore": "redis" }
+#
+# Unhealthy (503):
+#   { "status": "not_ready",
+#     "checks": { "db": "ok", "redis": "failed" },
+#     "failures": { "redis": "redis_ping_timeout_after_2000ms" },
+#     "rateLimitStore": "redis" }
+```
+
+Hit `/readyz` against each replica until you have seen all of them
+respond. Any replica returning 503 with `redis: "failed"` is
+degrading open on rate-limit decisions — every request that lands
+there is unrate-limited until either the replica is drained or Redis
+recovers. The `failures.redis` string is the underlying Redis error
+(or a `redis_ping_timeout_after_*ms` marker when the ping exceeded
+`READYZ_REDIS_TIMEOUT_MS`, default 2s).
+
+`/healthz` remains the **liveness** probe — it is intentionally cheap
+and always returns 200 with `{ status, rateLimitStore }` so the
+platform doesn't restart replicas during transient Redis blips. Use
+it to confirm the configured rate-limit backend kind on a replica:
 
 ```sh
 curl -s "$REPL_API_URL/api/healthz" | jq .
 # { "status": "ok", "rateLimitStore": "redis" }
 ```
 
-For each replica behind the load balancer, hit `/healthz` until you
-have seen all of them respond. Any replica reporting `"memory"` while
-the rest report `"redis"` is misconfigured — its `RATE_LIMIT_STORE`
-env var was not set, so it has its own per-process bucket and is
-trivially bypassable by sending traffic only to that replica.
+Any replica reporting `"memory"` while the rest report `"redis"` is
+misconfigured — its `RATE_LIMIT_STORE` env var was not set, so it has
+its own per-process bucket and is trivially bypassable by sending
+traffic only to that replica.
 
 If you have container shell access:
 
@@ -56,7 +88,10 @@ echo "RATE_LIMIT_STORE=$RATE_LIMIT_STORE  REDIS_URL=${REDIS_URL:0:24}…"
 (`REDIS_URL` is truncated so credentials never end up in chat or
 ticket bodies.)
 
-## Step 2 — Confirm Redis reachability
+## Step 2 — Confirm Redis reachability directly
+
+If `/readyz` reports `redis: "failed"`, confirm with `redis-cli` from
+a host that can reach the same Redis endpoint:
 
 ```sh
 redis-cli -u "$REDIS_URL" PING
