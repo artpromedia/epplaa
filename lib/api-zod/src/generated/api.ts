@@ -365,7 +365,6 @@ export const ListStreamMessagesResponse = zod.object({
     zod.object({
       id: zod.string(),
       streamId: zod.string(),
-      userId: zod.string(),
       username: zod.string(),
       text: zod.string(),
       role: zod.enum(["host", "viewer", "mod"]),

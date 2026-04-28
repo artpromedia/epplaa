@@ -726,7 +726,6 @@ export const StreamChatMessageRole = {
 export interface StreamChatMessage {
   id: string;
   streamId: string;
-  userId: string;
   username: string;
   text: string;
   role: StreamChatMessageRole;

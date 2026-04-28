@@ -8,6 +8,7 @@ import {
   chatSendAtomic,
   isHost,
   softDeleteMessage,
+  toPublicChatMessage,
 } from "./chat";
 import { enqueueReaction, REACTION_BUCKET_MS, startReactionFlusher } from "./reactions";
 import { recordAudit } from "./audit";
@@ -127,8 +128,9 @@ export function bootstrapSocketServer(httpServer: HttpServer): SocketServer {
             }
             return;
           }
-          ns.to(`stream:${streamId}`).emit("chat:message", result.message);
-          ack?.({ ok: true, message: result.message });
+          const pub = toPublicChatMessage(result.message);
+          ns.to(`stream:${streamId}`).emit("chat:message", pub);
+          ack?.({ ok: true, message: pub });
         } catch (err) {
           logger.error({ err: (err as Error).message }, "chat_send_failed");
           ack?.({ ok: false, reason: "internal" });

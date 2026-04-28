@@ -10,7 +10,7 @@ import { persistReplayForEndedStream } from "../lib/replayPersist";
 import { enqueueNotification } from "../lib/notifications";
 import { recordAudit } from "../lib/audit";
 import { logger } from "../lib/logger";
-import { isHost, listRecentMessages, chatSendAtomic, softDeleteMessage } from "../lib/chat";
+import { isHost, listRecentMessages, chatSendAtomic, softDeleteMessage, toPublicChatMessage } from "../lib/chat";
 import { recordReaction, recentReactions } from "../lib/reactions";
 import { getSocketServer } from "../lib/socket";
 
@@ -277,7 +277,7 @@ router.post("/streams/:streamId/mod-config", async (req, res) => {
 router.get("/streams/:streamId/messages", async (req, res) => {
   const limit = Math.max(1, Math.min(200, Number(req.query.limit ?? 50)));
   const messages = await listRecentMessages(req.params.streamId, limit);
-  res.json({ messages });
+  res.json({ messages: messages.map(toPublicChatMessage) });
 });
 
 // Username is resolved server-side; client-supplied display names are
@@ -312,9 +312,10 @@ router.post("/streams/:streamId/messages", async (req, res) => {
     res.status(404).json({ error: result.reason });
     return;
   }
+  const pub = toPublicChatMessage(result.message);
   const io = getSocketServer();
-  io?.of("/streams").to(`stream:${req.params.streamId}`).emit("chat:message", result.message);
-  res.status(201).json(result.message);
+  io?.of("/streams").to(`stream:${req.params.streamId}`).emit("chat:message", pub);
+  res.status(201).json(pub);
 });
 
 router.delete("/streams/:streamId/messages/:messageId", async (req, res) => {

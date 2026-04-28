@@ -171,6 +171,26 @@ export interface PersistedChatMessage {
   createdAtIso: string;
 }
 
+export interface PublicChatMessage {
+  id: string;
+  streamId: string;
+  username: string;
+  text: string;
+  role: string;
+  createdAtIso: string;
+}
+
+export function toPublicChatMessage(m: PersistedChatMessage): PublicChatMessage {
+  return {
+    id: m.id,
+    streamId: m.streamId,
+    username: m.username,
+    text: m.text,
+    role: m.role,
+    createdAtIso: m.createdAtIso,
+  };
+}
+
 export async function persistChatMessage(input: {
   streamId: string;
   userId: string;

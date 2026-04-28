@@ -2356,11 +2356,10 @@ components:
         endedAtIso: { type: string, nullable: true }
     StreamChatMessage:
       type: object
-      required: [id, streamId, userId, username, text, role, createdAtIso]
+      required: [id, streamId, username, text, role, createdAtIso]
       properties:
         id: { type: string }
         streamId: { type: string }
-        userId: { type: string }
         username: { type: string }
         text: { type: string }
         role: { type: string, enum: [host, viewer, mod] }
