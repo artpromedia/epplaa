@@ -64,6 +64,7 @@ import type {
   PromoApplyBody,
   PromoApplyResult,
   PushTokenBody,
+  PushTokenRegistered,
   ReconciliationRun,
   ReferralHub,
   RefundOrderBody,
@@ -641,8 +642,8 @@ export const getRegisterPushTokenUrl = () => {
 export const registerPushToken = async (
   pushTokenBody: PushTokenBody,
   options?: RequestInit,
-): Promise<Ok> => {
-  return customFetch<Ok>(getRegisterPushTokenUrl(), {
+): Promise<PushTokenRegistered> => {
+  return customFetch<PushTokenRegistered>(getRegisterPushTokenUrl(), {
     ...options,
     method: "POST",
     headers: { "Content-Type": "application/json", ...options?.headers },

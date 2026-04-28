@@ -105,7 +105,7 @@ paths:
         required: true
         content: { application/json: { schema: { $ref: "#/components/schemas/PushTokenBody" } } }
       responses:
-        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Ok" } } } }
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/PushTokenRegistered" } } } }
         "401": { $ref: "#/components/responses/Unauthorized" }
     delete:
       operationId: deletePushToken
@@ -1649,6 +1649,7 @@ components:
       required: [ok]
       properties:
         ok: { type: boolean }
+        otpId: { type: string }
         devCode: { type: string }
         expiresInSec: { type: integer }
     OtpVerifyBody:
@@ -1681,6 +1682,12 @@ components:
         p256dh: { type: string }
         auth: { type: string }
         userAgent: { type: string }
+    PushTokenRegistered:
+      type: object
+      required: [ok]
+      properties:
+        ok: { type: boolean }
+        id: { type: string }
     VapidPublicKey:
       type: object
       required: [publicKey]

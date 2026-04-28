@@ -477,6 +477,7 @@ export interface OtpStartBody {
 
 export interface OtpStartResponse {
   ok: boolean;
+  otpId?: string;
   devCode?: string;
   expiresInSec?: number;
 }
@@ -513,6 +514,11 @@ export interface PushTokenBody {
   p256dh?: string;
   auth?: string;
   userAgent?: string;
+}
+
+export interface PushTokenRegistered {
+  ok: boolean;
+  id?: string;
 }
 
 export interface VapidPublicKey {

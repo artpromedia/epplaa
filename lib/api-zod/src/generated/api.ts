@@ -67,6 +67,7 @@ export const StartOtpBody = zod.object({
 
 export const StartOtpResponse = zod.object({
   ok: zod.boolean(),
+  otpId: zod.string().optional(),
   devCode: zod.string().optional(),
   expiresInSec: zod.number().optional(),
 });
@@ -103,6 +104,7 @@ export const RegisterPushTokenBody = zod.object({
 
 export const RegisterPushTokenResponse = zod.object({
   ok: zod.boolean(),
+  id: zod.string().optional(),
 });
 
 export const DeletePushTokenQueryParams = zod.object({
