@@ -24,9 +24,15 @@ interface VerificationPayload {
 }
 
 function signingKey(): string {
-  // SESSION_SECRET is always present (system-managed). Falling back to a
-  // dev-only constant keeps stub mode working in CI without leaking secrets.
-  return process.env.SESSION_SECRET ?? "epplaa-dev-fulfillment-secret";
+  // Address-verification tokens are a security-critical control: a forged
+  // token lets a buyer bypass OkHi entirely. Refuse to operate without a
+  // real SESSION_SECRET so a misconfigured deployment fails closed
+  // instead of signing tokens with a guessable constant.
+  const s = process.env.SESSION_SECRET;
+  if (!s || s.length < 16) {
+    throw new Error("SESSION_SECRET is required (>=16 chars) to issue/verify address tokens");
+  }
+  return s;
 }
 
 function b64urlEncode(buf: Buffer): string {

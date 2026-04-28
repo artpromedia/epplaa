@@ -6,6 +6,7 @@ import { cartFingerprint, verifyQuoteToken } from "../lib/fulfillment/quoteToken
 import { requireUserId } from "../lib/auth";
 import { newOrderId, newOtp } from "../lib/ids";
 import { createPaymentIntent } from "../lib/payments";
+import { dispatchShipmentForOrder } from "../lib/fulfillment/dispatch";
 import { computeVatMinor, getVatRateBp } from "../lib/vat";
 import { logger } from "../lib/logger";
 import { enqueueNotification } from "../lib/notifications";
@@ -534,6 +535,14 @@ router.post("/orders", async (req, res) => {
         orderId: id,
       },
     }).catch(() => undefined);
+    // Pay-on-collection orders are auto-confirmed at order placement —
+    // they bypass the gateway webhook that normally triggers
+    // finalizeOrderAfterPayment, so we kick the dispatch pipeline here.
+    // This ensures a shipment row + (for Box) a reservation tied to the
+    // order's pickup OTP are created consistently with prepaid orders.
+    await dispatchShipmentForOrder(id).catch((err) =>
+      logger.error({ err: (err as Error).message, orderId: id }, "cod_dispatch_failed"),
+    );
   }
   res.status(201).json({
     ...order,
