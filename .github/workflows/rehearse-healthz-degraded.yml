@@ -79,6 +79,32 @@ name: Rehearse stuck-degraded page (staging, weekly)
 #                                                 rehearsal project. Used to
 #                                                 poll the events API for
 #                                                 the verification step.
+#
+# Optional chat heads-up (Slack incoming webhook or Teams workflow webhook).
+# When unset, the notify steps no-op silently — same degrade-safe pattern as
+# the Sentry config above. When set, the workflow posts a "starting" message
+# before injecting the synthetic streak so anyone tailing staging /healthz or
+# the Sentry org-level dashboards at 04:17 UTC Sunday can recognise the blip
+# as the rehearsal (not a real outage), and a "passed/failed" message after
+# cleanup so a silent end-to-end break in the chat path also becomes visible.
+#
+#   secrets.HEALTHZ_REHEARSAL_NOTIFY_WEBHOOK    — Incoming webhook URL. The
+#                                                 workflow POSTs `{"text": ...}`
+#                                                 which works for both Slack
+#                                                 incoming webhooks and Teams
+#                                                 Workflows webhook triggers.
+#                                                 Stored as a secret because
+#                                                 the URL is itself the
+#                                                 credential.
+#   vars.HEALTHZ_REHEARSAL_NOTIFY_CHANNEL       — Cosmetic channel label
+#                                                 (e.g. `#ops`) included in
+#                                                 the message body so the
+#                                                 destination is obvious in
+#                                                 the workflow logs and the
+#                                                 chat post itself. Defaults
+#                                                 to `#ops`. The actual
+#                                                 routing is determined by
+#                                                 the webhook URL.
 
 on:
   schedule:
@@ -121,6 +147,10 @@ jobs:
       # Sentry for events from THIS run only — without it we'd see
       # last week's rehearsal events and falsely pass.
       RUN_ID_TAG: ${{ github.run_id }}-${{ github.run_attempt }}
+      # Optional chat heads-up. NOTIFY_WEBHOOK is empty when the
+      # secret is unset, in which case the notify steps no-op.
+      NOTIFY_WEBHOOK: ${{ secrets.HEALTHZ_REHEARSAL_NOTIFY_WEBHOOK }}
+      NOTIFY_CHANNEL: ${{ vars.HEALTHZ_REHEARSAL_NOTIFY_CHANNEL || '#ops' }}
 
     steps:
       - uses: actions/checkout@v4
@@ -154,6 +184,33 @@ jobs:
             exit 1
           fi
           echo "ok"
+
+      - name: Notify chat that rehearsal is starting
+        id: notify_start
+        # No-op when the webhook isn't configured — same degrade-safe
+        # pattern as the rest of the rehearsal config. `continue-on-
+        # error` ensures a broken chat path can't block the rehearsal
+        # itself; the warning is surfaced both in the step log and in
+        # the run summary so the chat-path break stays visible.
+        if: ${{ env.NOTIFY_WEBHOOK != '' }}
+        continue-on-error: true
+        run: |
+          set +e
+          run_url="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          text=$(printf '%s\n%s\n%s' \
+            ":satellite_antenna: *Healthz stuck-degraded rehearsal STARTING* on staging (${NOTIFY_CHANNEL}, run \`${RUN_ID_TAG}\`)." \
+            "If you see a synthetic stuck-degraded blip on staging \`/healthz\` or fatal-level events in the \`alerts-rehearsal\` Sentry project in the next ~5 minutes, that's expected — this is the weekly rehearsal, not a real outage." \
+            "Workflow run: ${run_url}")
+          payload=$(jq -nc --arg text "$text" '{text: $text}')
+          code=$(curl -sS -o /tmp/notify_resp -w '%{http_code}' \
+            -X POST -H 'Content-Type: application/json' \
+            --data "$payload" "$NOTIFY_WEBHOOK" || echo "000")
+          body=$(cat /tmp/notify_resp 2>/dev/null || true)
+          if [ "$code" != "200" ] && [ "$code" != "204" ]; then
+            echo "::warning::notify webhook returned HTTP $code (body: $body) — proceeding with rehearsal anyway, but the chat-path heads-up did not reach ${NOTIFY_CHANNEL}"
+            exit 1
+          fi
+          echo "starting heads-up posted to ${NOTIFY_CHANNEL} (HTTP $code)"
 
       - name: Inject synthetic stuck-degraded streak into staging
         id: inject
@@ -378,6 +435,53 @@ jobs:
             exit 1
           fi
 
+      - name: Notify chat with rehearsal result
+        id: notify_result
+        # Mirrors `Notify chat that rehearsal is starting` — same
+        # degrade-safe gating, same continue-on-error so a broken chat
+        # path doesn't bury the actual rehearsal outcome. Runs on
+        # `always()` so on-call gets a closing message even if an
+        # earlier step (inject / probe / verify / clear) failed,
+        # which is precisely the case where they need it most.
+        if: ${{ always() && env.NOTIFY_WEBHOOK != '' }}
+        continue-on-error: true
+        env:
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          set +e
+          run_url="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          case "$JOB_STATUS" in
+            success)
+              emoji=":white_check_mark:"
+              verb="PASSED"
+              detail="Synthetic streak injected, probe paged, Sentry verified, staging cleaned up. No real-world action needed."
+              ;;
+            cancelled)
+              emoji=":warning:"
+              verb="CANCELLED"
+              detail="The rehearsal job was cancelled mid-run. Confirm staging is no longer in a synthetic stuck-degraded state — see the runbook's *Interpreting a failed rehearsal run* table."
+              ;;
+            *)
+              emoji=":x:"
+              verb="FAILED (status=${JOB_STATUS})"
+              detail="Walk the failing step in the workflow run; the runbook's *Interpreting a failed rehearsal run* table maps each step to a likely cause. If the cleanup step itself failed, staging is still in a synthetic stuck-degraded state and the per-minute probe will start paging on-call for real until you POST \`/api/_rehearsal/clear-stuck-degraded\` manually."
+              ;;
+          esac
+          text=$(printf '%s\n%s\n%s' \
+            "${emoji} *Healthz stuck-degraded rehearsal ${verb}* on staging (${NOTIFY_CHANNEL}, run \`${RUN_ID_TAG}\`)." \
+            "${detail}" \
+            "Workflow run: ${run_url}")
+          payload=$(jq -nc --arg text "$text" '{text: $text}')
+          code=$(curl -sS -o /tmp/notify_resp -w '%{http_code}' \
+            -X POST -H 'Content-Type: application/json' \
+            --data "$payload" "$NOTIFY_WEBHOOK" || echo "000")
+          body=$(cat /tmp/notify_resp 2>/dev/null || true)
+          if [ "$code" != "200" ] && [ "$code" != "204" ]; then
+            echo "::warning::notify webhook returned HTTP $code (body: $body) — rehearsal result NOT posted to ${NOTIFY_CHANNEL}; check webhook URL rotation"
+            exit 1
+          fi
+          echo "result heads-up posted to ${NOTIFY_CHANNEL} (HTTP $code, status=${JOB_STATUS})"
+
       - name: Summarise rehearsal in run summary
         if: ${{ always() }}
         env:
@@ -388,10 +492,12 @@ jobs:
           {
             echo "## Healthz stuck-degraded rehearsal"
             echo ""
+            echo "- Notify (start) status: ${{ steps.notify_start.outcome || 'skipped' }}"
             echo "- Inject status: ${{ steps.inject.outcome }}"
             echo "- Probe status: ${{ steps.probe.outcome }}"
             echo "- Sentry forward status: ${{ steps.forward.outcome }}"
             echo "- Sentry verify status: ${{ steps.verify.outcome }}"
+            echo "- Notify (result) status: ${{ steps.notify_result.outcome || 'skipped' }}"
             echo "- Run-id tag: $RUN_ID_TAG"
             # Surface the matched Sentry IDs (when verify reached the
             # assertion phase) so on-call can jump straight to the
