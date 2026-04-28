@@ -304,7 +304,7 @@ export default function Privacy() {
                       {r.status}
                     </span>
                   </div>
-                  {r.kind === "erase" && r.status === "scheduled" && (
+                  {r.kind === "erase" && (r.status === "scheduled" || r.status === "pending") && (
                     <button
                       onClick={() =>
                         safe(

@@ -745,6 +745,9 @@ export async function processDuePayouts(): Promise<{ processed: number; failed: 
     .from(schema.payoutsTable)
     .where(eq(schema.payoutsTable.status, "blocked"));
   for (const payout of blocked) {
+    // Manufacturer + wallet payouts never go through the seller gate
+    // and shouldn't be polled here. Skip defensively.
+    if (payout.kind === "wallet_withdrawal" || payout.kind === "manufacturer_share") continue;
     const seller = await loadSellerForUser(payout.userId);
     const sellerKycTier = (seller as { kycTier?: number } | null)?.kycTier ?? 1;
     const required = payout.requiredKycTier ?? 1;
@@ -785,11 +788,18 @@ export async function processDuePayouts(): Promise<{ processed: number; failed: 
   // between scheduling and disbursement (sanctions hit, tier downgrade,
   // verification revoked). For each just-claimed payout, re-verify and
   // park anything that no longer passes — bouncing it back to `blocked`
-  // so the next sweep can release it once cleared. Wallet withdrawals
-  // belong to non-seller users and are exempt from the seller gate.
+  // so the next sweep can release it once cleared.
+  //
+  // Wallet withdrawals belong to non-seller users and are exempt.
+  // Manufacturer-share payouts run on the cross-border rail; manufacturer
+  // KYC + sanctions are owned by a separate onboarding flow that doesn't
+  // populate `sellers.kycTier` or write `sanctions_screenings` rows. If
+  // we let the seller gate run on these we'd reblock every manufacturer
+  // payout indefinitely. They already wait on a 7-day hold and finance
+  // reviews them before settlement.
   const stillDue: typeof due = [];
   for (const payout of due) {
-    if (payout.kind === "wallet_withdrawal") {
+    if (payout.kind === "wallet_withdrawal" || payout.kind === "manufacturer_share") {
       stillDue.push(payout);
       continue;
     }
