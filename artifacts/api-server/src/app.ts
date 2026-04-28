@@ -12,7 +12,7 @@ import { runDailyReconciliation, recoverStuckRefundLocks } from "./lib/reconcili
 import { processDuePayouts } from "./lib/payments";
 import { drainOutbox } from "./lib/notifications";
 import { autoReturnExpiredBoxReservations } from "./routes/box";
-import { auditMutations } from "./lib/audit";
+import { auditMutations, initAuditChain } from "./lib/audit";
 import { processDueNdprRequests, requireProcessingNotRestricted } from "./lib/ndpr";
 import { quarterlyResweep } from "./lib/sanctions";
 import { runRetentionSweep } from "./lib/retention";
@@ -191,6 +191,12 @@ function startScheduledJobs(): void {
 }
 
 if (process.env.NODE_ENV !== "test") {
+  // Eagerly install the append-only audit-table triggers so the DB-level
+  // immutability protection is in place before the first request rather
+  // than lazily on the first audit write.
+  void initAuditChain().catch((err) =>
+    logger.error({ err: (err as Error).message }, "audit_chain_init_failed"),
+  );
   startScheduledJobs();
 }
 

@@ -7875,7 +7875,7 @@ export const getApproveKycVerificationUrl = (id: string) => {
 
 export const approveKycVerification = async (
   id: string,
-  approveKycVerificationBody: ApproveKycVerificationBody,
+  approveKycVerificationBody?: ApproveKycVerificationBody,
   options?: RequestInit,
 ): Promise<Ok> => {
   return customFetch<Ok>(getApproveKycVerificationUrl(id), {

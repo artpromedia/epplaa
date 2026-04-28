@@ -1228,14 +1228,14 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [id, kind, status, mimeType, fileName]
+                required: [id, kind, status, contentType, filename]
                 properties:
                   id: { type: string }
                   kind: { type: string }
                   status: { type: string }
-                  mimeType: { type: string }
-                  fileName: { type: string }
-                  contentBase64: { type: ["string", "null"] }
+                  contentType: { type: string }
+                  filename: { type: string }
+                  blobBase64: { type: ["string", "null"] }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
   /kyc/start:
@@ -1314,14 +1314,13 @@ paths:
       tags: [admin]
       parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
       requestBody:
-        required: true
+        required: false
         content:
           application/json:
             schema:
               type: object
-              required: [tier]
               properties:
-                tier: { type: integer, enum: [1, 2, 3] }
+                note: { type: string }
       responses:
         "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Ok" } } } }
         "400": { $ref: "#/components/responses/BadRequest" }

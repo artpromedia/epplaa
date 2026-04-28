@@ -11,6 +11,7 @@ import {
   evaluateSellerThreshold,
   currentKycTier,
   listUserDocuments,
+  missingKindsForTier,
   type KycDocumentKind,
   type KycVerificationKind,
 } from "../lib/kyc";
@@ -330,6 +331,16 @@ router.post("/kyc/verifications/:id/submit", async (req, res) => {
       res.status(400).json({ error: "document_not_uploaded", documentId: id });
       return;
     }
+  }
+  // Hard tier-prerequisite gate before flipping to pending_review. Even
+  // if the user uploaded a single doc for a Tier 3 ticket, we refuse to
+  // surface the ticket to reviewers unless the full evidence pack is in
+  // place — otherwise an unsuspecting reviewer could promote the seller
+  // to Tier 3 on a CAC-only submission.
+  const missing = await missingKindsForTier(userId, v.targetTier, docIds);
+  if (missing.length > 0) {
+    res.status(400).json({ error: "missing_required_kinds", missing });
+    return;
   }
   await db
     .update(schema.kycVerificationsTable)

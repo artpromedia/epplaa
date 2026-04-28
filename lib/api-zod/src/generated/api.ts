@@ -1437,9 +1437,9 @@ export const GetKycDocumentResponse = zod.object({
   id: zod.string(),
   kind: zod.string(),
   status: zod.string(),
-  mimeType: zod.string(),
-  fileName: zod.string(),
-  contentBase64: zod.string().nullish(),
+  contentType: zod.string(),
+  filename: zod.string(),
+  blobBase64: zod.string().nullish(),
 });
 
 export const StartKycVerificationBody = zod.object({
@@ -1475,7 +1475,7 @@ export const ApproveKycVerificationParams = zod.object({
 });
 
 export const ApproveKycVerificationBody = zod.object({
-  tier: zod.union([zod.literal(1), zod.literal(2), zod.literal(3)]),
+  note: zod.string().optional(),
 });
 
 export const ApproveKycVerificationResponse = zod.object({

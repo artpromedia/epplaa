@@ -1051,10 +1051,10 @@ export type GetKycDocument200 = {
   id: string;
   kind: string;
   status: string;
-  mimeType: string;
-  fileName: string;
+  contentType: string;
+  filename: string;
   /** @nullable */
-  contentBase64?: string | null;
+  blobBase64?: string | null;
 };
 
 export type StartKycVerificationBodyTier =
@@ -1086,17 +1086,8 @@ export type SubmitKycVerification200 = {
   status: string;
 };
 
-export type ApproveKycVerificationBodyTier =
-  (typeof ApproveKycVerificationBodyTier)[keyof typeof ApproveKycVerificationBodyTier];
-
-export const ApproveKycVerificationBodyTier = {
-  NUMBER_1: 1,
-  NUMBER_2: 2,
-  NUMBER_3: 3,
-} as const;
-
 export type ApproveKycVerificationBody = {
-  tier: ApproveKycVerificationBodyTier;
+  note?: string;
 };
 
 export type RejectKycVerificationBody = {

@@ -1,5 +1,5 @@
 import { createHash, randomBytes, createCipheriv, createDecipheriv } from "node:crypto";
-import { eq, and, gte, sql } from "drizzle-orm";
+import { eq, and, gte, inArray, sql } from "drizzle-orm";
 import { db, schema } from "./db";
 import { logger } from "./logger";
 import { recordAudit } from "./audit";
@@ -150,6 +150,16 @@ export async function approveVerification(
   if (v.status !== "pending_review") {
     return { ok: false, reason: `bad_status:${v.status}` };
   }
+  // Defense in depth: re-check tier prerequisites at approval time.
+  // The submit gate already runs this, but a verification could in
+  // principle sit in pending_review while docs the user previously
+  // attached are deleted (status flipped to "deleted"). Re-running
+  // here ensures the reviewer is never the last line of defense.
+  const submittedDocIds = ((v.documentIds ?? []) as string[]) ?? [];
+  const stillMissing = await missingKindsForTier(v.userId, v.targetTier, submittedDocIds);
+  if (stillMissing.length > 0) {
+    return { ok: false, reason: `missing_required_kinds:${stillMissing.join(",")}` };
+  }
   await db
     .update(schema.kycVerificationsTable)
     .set({ status: "approved", reviewerNote: note, reviewedBy: reviewerId, reviewedAt: new Date() })
@@ -224,12 +234,65 @@ export async function listUserDocuments(userId: string): Promise<Array<{
     }));
 }
 
+/**
+ * Compliance gate: each tier requires a specific set of document KINDs to be
+ * uploaded. Tier 3 also inherits Tier 2's required kinds (a CAC + UBO without
+ * gov_id and bank_verification can't legally underwrite a payout).
+ *
+ * Returns the list of kinds the user is still missing for the given target
+ * tier, considering:
+ *   - all docs the user has already uploaded (any past verification)
+ *   - the docs about to be attached to the verification being submitted
+ *
+ * Reviewers MUST NOT be able to flip a verification to "approved" if this
+ * helper returns a non-empty array — promote a tier without the underlying
+ * evidence and we fail SCUML / NDPR Article 5(d) data-quality at audit.
+ */
+const TIER_REQUIRED_KINDS: Record<number, KycVerificationKind[]> = {
+  1: [],
+  2: ["gov_id", "bank_verification"],
+  3: ["gov_id", "bank_verification", "cac", "ubo"],
+};
+
+export async function missingKindsForTier(
+  userId: string,
+  targetTier: number,
+  extraDocIds: string[] = [],
+): Promise<KycVerificationKind[]> {
+  const required = TIER_REQUIRED_KINDS[targetTier] ?? [];
+  if (required.length === 0) return [];
+  const owned = await db
+    .select({ id: schema.kycDocumentsTable.id, kind: schema.kycDocumentsTable.kind, status: schema.kycDocumentsTable.status })
+    .from(schema.kycDocumentsTable)
+    .where(eq(schema.kycDocumentsTable.userId, userId));
+  const haveKinds = new Set<string>();
+  for (const d of owned) {
+    if (d.status === "deleted") continue;
+    // For prerequisite checks we accept any non-deleted doc the user owns —
+    // either uploaded or already part of an earlier approved verification.
+    haveKinds.add(d.kind);
+  }
+  // Include the docs in this submission even if they haven't been re-fetched.
+  if (extraDocIds.length > 0) {
+    const extras = await db
+      .select({ id: schema.kycDocumentsTable.id, kind: schema.kycDocumentsTable.kind, status: schema.kycDocumentsTable.status })
+      .from(schema.kycDocumentsTable)
+      .where(and(
+        eq(schema.kycDocumentsTable.userId, userId),
+        inArray(schema.kycDocumentsTable.id, extraDocIds),
+      ));
+    for (const d of extras) if (d.status !== "deleted") haveKinds.add(d.kind);
+  }
+  return required.filter((k) => !haveKinds.has(k));
+}
+
 export const KYC_CONSTANTS = {
   TIER2_THRESHOLD_MINOR,
   TIER3_THRESHOLD_MINOR,
   MAX_DOC_BYTES,
   ALLOWED_CONTENT_TYPES: Array.from(ALLOWED_CONTENT_TYPES),
   KIND_TARGET_TIER,
+  TIER_REQUIRED_KINDS,
 };
 
 logger.debug?.({ tier2: TIER2_THRESHOLD_MINOR, tier3: TIER3_THRESHOLD_MINOR }, "kyc_thresholds_loaded");

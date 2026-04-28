@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { desc } from "drizzle-orm";
+import { desc, sql } from "drizzle-orm";
 import type { Request, Response, NextFunction } from "express";
 import { db, schema } from "./db";
 import { logger } from "./logger";
@@ -43,10 +43,50 @@ export function scrubPii(value: unknown): unknown {
 let chainHead: string | null = null;
 let chainPromise: Promise<void> | null = null;
 
+/**
+ * Eager init for app boot: forces the chain-head load (and the append-only
+ * trigger install) up front, so the DB-level immutability protection is in
+ * place before the first request, not lazily on the first audit write.
+ */
+export async function initAuditChain(): Promise<void> {
+  await ensureChainHeadLoaded();
+}
+
 async function ensureChainHeadLoaded(): Promise<void> {
   if (chainHead !== null) return;
   if (chainPromise) return chainPromise;
   chainPromise = (async () => {
+    // Install append-only DB-level protection on first load. We block
+    // UPDATE and DELETE on `audit_events` at the trigger level, so even
+    // if a future code path accidentally calls .update() or .delete()
+    // against this table the database refuses. INSERT remains allowed
+    // (recordAudit appends rows). This is the immutability backstop that
+    // application-level conventions alone can't guarantee.
+    await db.execute(sql`
+      CREATE OR REPLACE FUNCTION audit_events_append_only()
+      RETURNS TRIGGER AS $func$
+      BEGIN
+        RAISE EXCEPTION 'audit_events is append-only (op=%)', TG_OP
+          USING ERRCODE = 'check_violation';
+      END;
+      $func$ LANGUAGE plpgsql;
+    `);
+    await db.execute(sql`
+      DROP TRIGGER IF EXISTS audit_events_no_update ON audit_events;
+    `);
+    await db.execute(sql`
+      CREATE TRIGGER audit_events_no_update
+      BEFORE UPDATE ON audit_events
+      FOR EACH ROW EXECUTE FUNCTION audit_events_append_only();
+    `);
+    await db.execute(sql`
+      DROP TRIGGER IF EXISTS audit_events_no_delete ON audit_events;
+    `);
+    await db.execute(sql`
+      CREATE TRIGGER audit_events_no_delete
+      BEFORE DELETE ON audit_events
+      FOR EACH ROW EXECUTE FUNCTION audit_events_append_only();
+    `);
     const [last] = await db
       .select()
       .from(schema.auditEventsTable)
@@ -77,6 +117,12 @@ export async function recordAudit(input: RecordAuditInput): Promise<void> {
     await ensureChainHeadLoaded();
     const scrubbedPayload = scrubPii(input.payload ?? {}) as Record<string, unknown>;
     const prevHash = chainHead ?? "";
+    // Canonical content deliberately omits a write-time timestamp.
+    // The chain itself orders rows (via prevHash + DB sequence), and
+    // including a recomputed timestamp would prevent verifyAuditChain
+    // from rebuilding the exact rowHash later. We bind the immutable
+    // facts (actor/action/entity/entityId/piiRead/payload) — that's
+    // what tamper detection has to cover.
     const content = canonicalJson({
       actor: input.actorId ?? null,
       action: input.action,
@@ -84,7 +130,6 @@ export async function recordAudit(input: RecordAuditInput): Promise<void> {
       entityId: input.entityId ?? "",
       piiRead: Boolean(input.piiRead),
       payload: scrubbedPayload,
-      ts: new Date().toISOString(),
     });
     const rowHash = createHash("sha256").update(prevHash).update("\n").update(content).digest("hex");
     await db.insert(schema.auditEventsTable).values({
@@ -126,14 +171,11 @@ export async function verifyAuditChain(fromSeq = 0): Promise<number | null> {
       entityId: row.entityId,
       piiRead: row.piiRead,
       payload: row.payload,
-      ts: row.createdAt.toISOString(),
     });
     const expected = createHash("sha256").update(prev).update("\n").update(content).digest("hex");
-    // Note: ts is a recomputed value from row.createdAt — for chain checks
-    // the original write captured ts at insert time, so we cannot fully
-    // reverify content; the prevHash linkage alone is sufficient to
-    // detect insertions/deletions, which is the security property we need.
-    void expected;
+    // Full content rebind: detects in-place mutations of payload/action/
+    // entity/entityId that would otherwise leave the prevHash chain intact.
+    if (expected !== row.rowHash) return row.seq;
     prev = row.rowHash;
   }
   return null;
