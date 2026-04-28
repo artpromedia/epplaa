@@ -8,6 +8,7 @@ import { Toaster as SonnerToaster } from "@/components/ui/sonner";
 import NotFound from "@/pages/not-found";
 import { ApiAuthBridge } from "@/lib/auth-bridge";
 import { PortalShell } from "@/components/portal-shell";
+import epplaaLogo from "@assets/epplaa-logo-color_1777409658028.png";
 
 import DashboardPage from "@/pages/dashboard";
 import ApplyPage from "@/pages/apply";
@@ -36,7 +37,13 @@ function SignInPage() {
     <div className="min-h-screen w-full flex items-center justify-center bg-muted px-4">
       <div className="w-full max-w-md">
         <div className="text-center mb-6">
-          <h1 className="text-xl font-semibold">Epplaa Manufacturers</h1>
+          <img
+            src={epplaaLogo}
+            alt="Epplaa"
+            className="h-10 w-auto mx-auto mb-3"
+            data-testid="img-brand-logo"
+          />
+          <p className="text-sm font-semibold text-foreground">Manufacturers Portal</p>
           <p className="text-xs text-muted-foreground mt-1">
             Sign in to manage your factory's onboarding, catalog, and orders.
           </p>
