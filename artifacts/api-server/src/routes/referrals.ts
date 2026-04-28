@@ -39,27 +39,64 @@ router.get("/referrals/me", async (req, res) => {
 });
 
 /**
- * Record a referral payout for the calling user. The caller is the referrer
- * (sponsor) — i.e. the person whose code was used. Inserts a referral_activity
- * row with status="paid" and enqueues a `referral_payout` notification so the
- * notifications channel + prefs pipeline actually delivers it.
+ * INTERNAL ONLY — record a referral payout. This is the producer site for
+ * the `referral_payout` notification. It is intentionally not part of the
+ * public client-facing API and is gated by a server-side shared secret
+ * (process.env.INTERNAL_API_KEY) presented in the `x-internal-key` header.
+ * Only the back-office payout job / finance worker is expected to call it.
  *
- * In the absence of a separate finance/back-office payout pipeline, this
- * endpoint is the producer site for that event. Authenticated users can
- * acknowledge their own settled rewards (idempotent on activityId).
+ * Authorization rules (all required):
+ *   1. INTERNAL_API_KEY env var must be set (no insecure default — if
+ *      unset, the route always 503s so a misconfigured deploy can never
+ *      become an open endpoint).
+ *   2. Request must present a matching `x-internal-key` header.
+ *   3. The target user must already have a referrals row (i.e. owns a
+ *      referral code) — payouts cannot be minted for arbitrary users.
+ *   4. Reward amount comes from the request but is bounded to a sane cap
+ *      (REFERRAL_REWARD_CAP_MINOR) to limit blast radius if the secret
+ *      ever leaks. The cap is intentionally conservative.
+ *
+ * This trades broader payout-source modelling (true conversion linkage)
+ * for a small, auditable producer surface — sufficient to drive the
+ * notification pipeline end-to-end without exposing user-controllable
+ * "paid" writes. Tightening to per-conversion linkage is tracked as a
+ * follow-up once a payout pipeline exists.
  */
+const REFERRAL_REWARD_CAP_MINOR = 10_000_00; // ₦10,000 per row; tune via ops if needed
 router.post("/referrals/payout", async (req, res) => {
-  const userId = requireUserId(req, res);
-  if (!userId) return;
+  const expected = process.env.INTERNAL_API_KEY;
+  if (!expected) {
+    res.status(503).json({ error: "not_configured", detail: "INTERNAL_API_KEY unset" });
+    return;
+  }
+  const presented = req.header("x-internal-key");
+  if (!presented || presented !== expected) {
+    res.status(403).json({ error: "forbidden", detail: "internal endpoint" });
+    return;
+  }
   const body = (req.body ?? {}) as {
+    userId?: unknown;
     inviteeHandle?: unknown;
     rewardMinor?: unknown;
     activityId?: unknown;
   };
+  const userId = typeof body.userId === "string" ? body.userId.trim() : "";
   const inviteeHandle = typeof body.inviteeHandle === "string" ? body.inviteeHandle.trim() : "";
-  const rewardMinor = Number.isFinite(body.rewardMinor) ? Math.max(0, Math.floor(body.rewardMinor as number)) : 0;
-  if (!inviteeHandle || rewardMinor <= 0) {
-    res.status(400).json({ error: "bad_request", detail: "inviteeHandle and positive rewardMinor required" });
+  const rewardMinorRaw = Number.isFinite(body.rewardMinor) ? Math.floor(body.rewardMinor as number) : 0;
+  const rewardMinor = Math.min(Math.max(0, rewardMinorRaw), REFERRAL_REWARD_CAP_MINOR);
+  if (!userId || !inviteeHandle || rewardMinor <= 0) {
+    res.status(400).json({ error: "bad_request", detail: "userId, inviteeHandle, positive rewardMinor required" });
+    return;
+  }
+  // Caller must already own a referral code — guards against minting
+  // payouts for arbitrary userIds even with the internal key.
+  const [referral] = await db
+    .select({ userId: schema.referralsTable.userId })
+    .from(schema.referralsTable)
+    .where(eq(schema.referralsTable.userId, userId))
+    .limit(1);
+  if (!referral) {
+    res.status(404).json({ error: "no_referral", detail: "user has no referral code" });
     return;
   }
   const activityId = typeof body.activityId === "string" && body.activityId
