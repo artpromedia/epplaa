@@ -1,5 +1,6 @@
 import { ConsoleChannel } from "./console";
 import { TermiiChannel } from "./termii";
+import { AfricasTalkingSmsChannel } from "./africastalking";
 import { FcmChannel, WebPushChannel } from "./push";
 import { EmailChannel } from "./email";
 import { logger } from "../logger";
@@ -88,10 +89,13 @@ class ChannelRegistry {
   private readonly email: NotificationChannel;
 
   constructor() {
-    // Each list contains real providers in priority order. Add a second
-    // gateway here (e.g. new TwilioChannel("sms")) and it is automatically
-    // wrapped in a FailoverChannel for intra-attempt switching.
-    this.sms = buildChannel("sms", [new TermiiChannel("sms")]);
+    // Real providers in priority order. Termii is primary across all
+    // 16 markets; Africa's Talking is the SMS secondary covering NG/KE/
+    // ZA/GH/UG/TZ/MW/RW/CI/CM/SN. WhatsApp currently has only Termii;
+    // a Twilio WA adapter can be appended here without caller changes.
+    // buildChannel() filters out unconfigured providers and only wraps
+    // in FailoverChannel when 2+ real providers are present.
+    this.sms = buildChannel("sms", [new TermiiChannel("sms"), new AfricasTalkingSmsChannel()]);
     this.whatsapp = buildChannel("whatsapp", [new TermiiChannel("whatsapp")]);
     this.fcm = new FcmChannel();
     this.webpush = new WebPushChannel();

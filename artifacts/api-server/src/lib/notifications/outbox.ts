@@ -91,6 +91,11 @@ export async function drainOutbox(): Promise<{ delivered: number; failed: number
   // still finishes well inside PROCESSING_LEASE_MS. We bump `nextAttemptAt`
   // to NOW so the lease-recovery query above can detect orphans (and so a
   // failed send rescheduled later won't re-fire instantly).
+  //
+  // Deterministic FIFO ordering: oldest due rows first (nextAttemptAt asc),
+  // then by createdAt then id as tiebreakers. This guarantees the "drain in
+  // order" semantic across batches and avoids starvation of an older row
+  // when a burst of newer rows is enqueued.
   const dueIds = await db
     .select({ id: schema.notificationsOutboxTable.id })
     .from(schema.notificationsOutboxTable)
@@ -99,6 +104,11 @@ export async function drainOutbox(): Promise<{ delivered: number; failed: number
         eq(schema.notificationsOutboxTable.status, "pending"),
         lt(schema.notificationsOutboxTable.nextAttemptAt, new Date()),
       ),
+    )
+    .orderBy(
+      schema.notificationsOutboxTable.nextAttemptAt,
+      schema.notificationsOutboxTable.createdAt,
+      schema.notificationsOutboxTable.id,
     )
     .limit(CLAIM_BATCH_SIZE);
   const claimed = dueIds.length
