@@ -1,27 +1,19 @@
 import { useEffect } from "react";
+import { issueCsrfToken } from "@workspace/api-client-react";
 import { setApiCsrfToken, setApiCsrfRefresher } from "./api";
 
 /**
  * Browser-side CSRF wiring for the cookie-session double-submit pattern
  * implemented in `artifacts/api-server/src/middlewares/csrf.ts`. The
  * manufacturer portal uses its own `api.ts` fetch wrapper rather than the
- * generated `@workspace/api-client-react`, so this hook talks to that
- * wrapper directly.
+ * generated `@workspace/api-client-react` client for its calls, but it
+ * still uses the generated `issueCsrfToken` helper so the request shape is
+ * typed by the OpenAPI contract.
  */
-
-const CSRF_TOKEN_URL = "/api/csrf-token";
-
-type CsrfResponse = { csrfToken?: string };
 
 export async function fetchCsrfToken(): Promise<string | null> {
   try {
-    const res = await fetch(CSRF_TOKEN_URL, {
-      method: "GET",
-      credentials: "include",
-      headers: { Accept: "application/json" },
-    });
-    if (!res.ok) return null;
-    const body = (await res.json()) as CsrfResponse;
+    const body = await issueCsrfToken({ credentials: "include" });
     const token = typeof body.csrfToken === "string" ? body.csrfToken : null;
     setApiCsrfToken(token);
     return token;

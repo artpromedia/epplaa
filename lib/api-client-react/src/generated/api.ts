@@ -59,6 +59,7 @@ import type {
   CreateReviewBody,
   CreateSellerListingBody,
   CreateStreamBody,
+  CsrfToken,
   DeletePushTokenParams,
   DisputePage,
   EarningsSummary,
@@ -249,6 +250,86 @@ export function useHealthCheck<
   request?: SecondParameter<typeof customFetch>;
 }): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
   const queryOptions = getHealthCheckQueryOptions(options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * Issues a fresh CSRF token, sets the `csrf_token` cookie, and returns
+the token in the body so the SPA can echo it as `X-CSRF-Token` on
+mutating requests. This endpoint is itself exempt from CSRF
+verification (see `EXEMPT_PATH_PREFIXES` in the server middleware).
+
+ * @summary Issue a CSRF double-submit token (sets the cookie, returns the token)
+ */
+export const getIssueCsrfTokenUrl = () => {
+  return `/api/csrf-token`;
+};
+
+export const issueCsrfToken = async (
+  options?: RequestInit,
+): Promise<CsrfToken> => {
+  return customFetch<CsrfToken>(getIssueCsrfTokenUrl(), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getIssueCsrfTokenQueryKey = () => {
+  return [`/api/csrf-token`] as const;
+};
+
+export const getIssueCsrfTokenQueryOptions = <
+  TData = Awaited<ReturnType<typeof issueCsrfToken>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof issueCsrfToken>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getIssueCsrfTokenQueryKey();
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof issueCsrfToken>>> = ({
+    signal,
+  }) => issueCsrfToken({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof issueCsrfToken>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type IssueCsrfTokenQueryResult = NonNullable<
+  Awaited<ReturnType<typeof issueCsrfToken>>
+>;
+export type IssueCsrfTokenQueryError = ErrorType<unknown>;
+
+/**
+ * @summary Issue a CSRF double-submit token (sets the cookie, returns the token)
+ */
+
+export function useIssueCsrfToken<
+  TData = Awaited<ReturnType<typeof issueCsrfToken>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof issueCsrfToken>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getIssueCsrfTokenQueryOptions(options);
 
   const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
     queryKey: QueryKey;

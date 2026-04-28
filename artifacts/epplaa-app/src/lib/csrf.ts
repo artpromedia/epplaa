@@ -1,5 +1,9 @@
 import { useEffect } from "react";
-import { setCsrfToken, setCsrfTokenRefresher } from "@workspace/api-client-react";
+import {
+  issueCsrfToken,
+  setCsrfToken,
+  setCsrfTokenRefresher,
+} from "@workspace/api-client-react";
 
 /**
  * Browser-side CSRF wiring for the cookie-session double-submit pattern
@@ -21,19 +25,9 @@ import { setCsrfToken, setCsrfTokenRefresher } from "@workspace/api-client-react
  * scheme and CSRF tokens specifically don't need to be HttpOnly.
  */
 
-const CSRF_TOKEN_URL = "/api/csrf-token";
-
-type CsrfResponse = { csrfToken?: string };
-
 export async function fetchCsrfToken(): Promise<string | null> {
   try {
-    const res = await fetch(CSRF_TOKEN_URL, {
-      method: "GET",
-      credentials: "include",
-      headers: { Accept: "application/json" },
-    });
-    if (!res.ok) return null;
-    const body = (await res.json()) as CsrfResponse;
+    const body = await issueCsrfToken({ credentials: "include" });
     const token = typeof body.csrfToken === "string" ? body.csrfToken : null;
     setCsrfToken(token);
     return token;

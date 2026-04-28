@@ -15,6 +15,18 @@ export const HealthCheckResponse = zod.object({
 });
 
 /**
+ * Issues a fresh CSRF token, sets the `csrf_token` cookie, and returns
+the token in the body so the SPA can echo it as `X-CSRF-Token` on
+mutating requests. This endpoint is itself exempt from CSRF
+verification (see `EXEMPT_PATH_PREFIXES` in the server middleware).
+
+ * @summary Issue a CSRF double-submit token (sets the cookie, returns the token)
+ */
+export const IssueCsrfTokenResponse = zod.object({
+  csrfToken: zod.string(),
+});
+
+/**
  * @summary Get the signed-in user (provisions if first call)
  */
 export const GetMeResponse = zod.object({

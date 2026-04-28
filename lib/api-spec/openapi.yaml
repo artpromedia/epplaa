@@ -31,6 +31,7 @@ tags:
   - { name: discovery }
   - { name: seller }
   - { name: admin }
+  - { name: csrf }
 paths:
   /healthz:
     get:
@@ -43,6 +44,23 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/HealthStatus" }
+
+  /csrf-token:
+    get:
+      operationId: issueCsrfToken
+      tags: [csrf]
+      summary: Issue a CSRF double-submit token (sets the cookie, returns the token)
+      description: |
+        Issues a fresh CSRF token, sets the `csrf_token` cookie, and returns
+        the token in the body so the SPA can echo it as `X-CSRF-Token` on
+        mutating requests. This endpoint is itself exempt from CSRF
+        verification (see `EXEMPT_PATH_PREFIXES` in the server middleware).
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CsrfToken" }
 
   /me:
     get:
@@ -2000,6 +2018,11 @@ components:
       properties:
         error: { type: string }
         detail: { type: string }
+    CsrfToken:
+      type: object
+      required: [csrfToken]
+      properties:
+        csrfToken: { type: string }
 
     User:
       type: object

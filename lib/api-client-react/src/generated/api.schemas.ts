@@ -14,6 +14,10 @@ export interface ApiError {
   detail?: string;
 }
 
+export interface CsrfToken {
+  csrfToken: string;
+}
+
 export type UserAddressesItem = { [key: string]: unknown };
 
 export type UserPaymentMethodsItem = { [key: string]: unknown };
