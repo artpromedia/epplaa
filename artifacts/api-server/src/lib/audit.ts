@@ -112,17 +112,18 @@ function canonicalJson(value: unknown): string {
  * (with PII scrubbed) and never bubble to the caller — the request that
  * triggered the action must not fail just because the audit insert did.
  */
+// Stable advisory-lock key (arbitrary 64-bit constant). Concurrent recordAudit
+// calls serialize on this lock so prev_hash linking is atomic across workers.
+const AUDIT_CHAIN_LOCK_KEY = 0x4541_5544_4954_4348n; // 'EAUDITCH'
+
 export async function recordAudit(input: RecordAuditInput): Promise<void> {
   try {
     await ensureChainHeadLoaded();
     const scrubbedPayload = scrubPii(input.payload ?? {}) as Record<string, unknown>;
-    const prevHash = chainHead ?? "";
-    // Canonical content deliberately omits a write-time timestamp.
-    // The chain itself orders rows (via prevHash + DB sequence), and
-    // including a recomputed timestamp would prevent verifyAuditChain
-    // from rebuilding the exact rowHash later. We bind the immutable
-    // facts (actor/action/entity/entityId/piiRead/payload) — that's
-    // what tamper detection has to cover.
+    // Canonical content deliberately omits a write-time timestamp so that
+    // verifyAuditChain can recompute the rowHash from row data alone. We
+    // bind the immutable facts (actor/action/entity/entityId/piiRead/
+    // payload) — that's what tamper detection has to cover.
     const content = canonicalJson({
       actor: input.actorId ?? null,
       action: input.action,
@@ -131,18 +132,33 @@ export async function recordAudit(input: RecordAuditInput): Promise<void> {
       piiRead: Boolean(input.piiRead),
       payload: scrubbedPayload,
     });
-    const rowHash = createHash("sha256").update(prevHash).update("\n").update(content).digest("hex");
-    await db.insert(schema.auditEventsTable).values({
-      actorId: input.actorId ?? null,
-      action: input.action,
-      entity: input.entity,
-      entityId: input.entityId ?? "",
-      piiRead: Boolean(input.piiRead),
-      payload: scrubbedPayload,
-      prevHash,
-      rowHash,
+    // Serialize the read-prev / compute-hash / insert-row sequence inside a
+    // single transaction holding a Postgres advisory lock. Concurrent
+    // workers (or interleaved async writes within one process) used to
+    // race on the in-memory `chainHead`, producing rows that linked off
+    // the same prev_hash and broke chain verification. The advisory lock
+    // is released when the transaction commits.
+    await db.transaction(async (tx) => {
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(${AUDIT_CHAIN_LOCK_KEY})`);
+      const [last] = await tx
+        .select({ rowHash: schema.auditEventsTable.rowHash })
+        .from(schema.auditEventsTable)
+        .orderBy(desc(schema.auditEventsTable.seq))
+        .limit(1);
+      const prevHash = last?.rowHash ?? "";
+      const rowHash = createHash("sha256").update(prevHash).update("\n").update(content).digest("hex");
+      await tx.insert(schema.auditEventsTable).values({
+        actorId: input.actorId ?? null,
+        action: input.action,
+        entity: input.entity,
+        entityId: input.entityId ?? "",
+        piiRead: Boolean(input.piiRead),
+        payload: scrubbedPayload,
+        prevHash,
+        rowHash,
+      });
+      chainHead = rowHash;
     });
-    chainHead = rowHash;
   } catch (err) {
     logger.error({ err: (err as Error).message, action: input.action }, "audit_write_failed");
   }

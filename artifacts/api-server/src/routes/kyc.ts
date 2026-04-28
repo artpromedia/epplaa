@@ -250,12 +250,38 @@ router.post("/kyc/start", async (req, res) => {
     status: "draft",
     documentIds,
   });
-  // Run an opportunistic sanctions screen on opening (cheap stub in dev,
-  // real provider in prod). Result is persisted; the payout gate uses it.
+  // Run an opportunistic sanctions screen on opening. Authoritative inputs
+  // come from records the user does not control directly: the seller
+  // application (legal/business name) and the verified user record
+  // (countryCode). We deliberately ignore any subjectName/country in the
+  // request body — accepting client-provided values would let a sanctioned
+  // user submit a benign name and create a fresh `clear` row that
+  // overrides their compliance-reviewed status.
+  const [seller] = await db
+    .select()
+    .from(schema.sellersTable)
+    .where(eq(schema.sellersTable.userId, userId))
+    .limit(1);
+  const [user] = await db
+    .select({ displayName: schema.usersTable.displayName, countryCode: schema.usersTable.countryCode })
+    .from(schema.usersTable)
+    .where(eq(schema.usersTable.clerkId, userId))
+    .limit(1);
+  const application = (seller?.application ?? {}) as {
+    legalName?: string;
+    businessName?: string;
+    country?: string;
+  };
+  const authoritativeName =
+    application.legalName ??
+    application.businessName ??
+    user?.displayName?.trim() ??
+    userId;
+  const authoritativeCountry = application.country ?? user?.countryCode ?? "NG";
   await screenSubject({
     userId,
-    name: String(body.subjectName ?? userId),
-    country: String(body.country ?? "NG"),
+    name: authoritativeName,
+    country: authoritativeCountry,
   });
   await recordAudit({
     actorId: userId,

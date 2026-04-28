@@ -613,13 +613,18 @@ async function finalizeOrderAfterPayment(
   // Manufacturer payouts — weekly batch via Flutterwave international rail.
   // We use a 7-day hold so the daily payouts cron picks them up only on the
   // weekly settlement boundary. Manufacturer onboarding/KYC and bank details
-  // are owned by the cross-border task; until then payouts wait in 'scheduled'
-  // state for finance.
+  // are owned by a separate cross-border task, but sanctions screening is
+  // platform-wide: we screen the manufacturer here at first attribution
+  // ("onboarding" from the payouts system's POV) so they enter the
+  // sanctions_screenings cohort that the quarterly resweep walks. If the
+  // screen comes back blocked/flagged the row lands in `blocked` state
+  // immediately rather than scheduling a disbursement.
   const MANUFACTURER_HOLD_DAYS = 7;
   for (const [manufacturerId, mfgNet] of grossPerManufacturer.entries()) {
     if (mfgNet <= 0) continue;
     const mfgHoldUntil = new Date(paidAt.getTime() + MANUFACTURER_HOLD_DAYS * 24 * 3600 * 1000);
     holdMillis.push(mfgHoldUntil.getTime());
+    const mfgBlocked = await manufacturerSanctionsBlocked(manufacturerId);
     await db
       .insert(schema.payoutsTable)
       .values({
@@ -630,7 +635,8 @@ async function finalizeOrderAfterPayment(
         intentId,
         amountMinor: mfgNet,
         currencyCode: order.currencyCode,
-        status: "pending",
+        status: mfgBlocked ? "blocked" : "pending",
+        errorMessage: mfgBlocked ? "sanctions_review_required" : null,
         kind: "manufacturer_share",
         holdUntil: mfgHoldUntil,
         reference: `MO-${orderId}-${manufacturerId.slice(-6)}`,

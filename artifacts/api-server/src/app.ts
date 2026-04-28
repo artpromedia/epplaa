@@ -56,7 +56,10 @@ app.use(
   }),
 );
 app.use(cors());
-app.use(express.json({ limit: "1mb" }));
+// Body limit needs to comfortably exceed the 6 MB max KYC document size
+// (kyc.ts MAX_DOC_BYTES) once base64-encoded. base64 inflates by ~4/3, so a
+// 6 MB blob lands around 8 MB, plus envelope. Use 10 MB to leave headroom.
+app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true }));
 app.use(clerkMiddleware());
 
