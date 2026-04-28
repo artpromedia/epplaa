@@ -261,15 +261,19 @@ export async function missingKindsForTier(
 ): Promise<KycVerificationKind[]> {
   const required = TIER_REQUIRED_KINDS[targetTier] ?? [];
   if (required.length === 0) return [];
+  // Only docs that are actually present (uploaded) or already approved
+  // count toward tier prerequisites. `claimed` rows are stubs created by
+  // /kyc/documents before bytes arrive — accepting them would let a
+  // seller submit empty placeholders and still pass the gate. `rejected`
+  // and `deleted` rows have no evidentiary value.
+  const VALID_DOC_STATUSES = new Set(["uploaded", "approved"]);
   const owned = await db
     .select({ id: schema.kycDocumentsTable.id, kind: schema.kycDocumentsTable.kind, status: schema.kycDocumentsTable.status })
     .from(schema.kycDocumentsTable)
     .where(eq(schema.kycDocumentsTable.userId, userId));
   const haveKinds = new Set<string>();
   for (const d of owned) {
-    if (d.status === "deleted") continue;
-    // For prerequisite checks we accept any non-deleted doc the user owns —
-    // either uploaded or already part of an earlier approved verification.
+    if (!VALID_DOC_STATUSES.has(d.status)) continue;
     haveKinds.add(d.kind);
   }
   // Include the docs in this submission even if they haven't been re-fetched.
@@ -281,7 +285,7 @@ export async function missingKindsForTier(
         eq(schema.kycDocumentsTable.userId, userId),
         inArray(schema.kycDocumentsTable.id, extraDocIds),
       ));
-    for (const d of extras) if (d.status !== "deleted") haveKinds.add(d.kind);
+    for (const d of extras) if (VALID_DOC_STATUSES.has(d.status)) haveKinds.add(d.kind);
   }
   return required.filter((k) => !haveKinds.has(k));
 }

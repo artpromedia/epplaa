@@ -1409,7 +1409,7 @@ export const ClaimKycDocumentBody = zod.object({
   kind: zod
     .string()
     .describe(
-      "gov_id | proof_of_address | bank_statement | cac_certificate | ubo_declaration",
+      "gov_id | bank_verification | cac | ubo | selfie | address_proof",
     ),
   contentType: zod.string(),
   filename: zod.string(),

@@ -1026,7 +1026,7 @@ export type RequestSellerPayoutBody = {
 };
 
 export type ClaimKycDocumentBody = {
-  /** gov_id | proof_of_address | bank_statement | cac_certificate | ubo_declaration */
+  /** gov_id | bank_verification | cac | ubo | selfie | address_proof */
   kind: string;
   contentType: string;
   filename: string;

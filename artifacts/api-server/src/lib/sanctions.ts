@@ -114,11 +114,31 @@ export async function screenSubject(input: ScreenInput): Promise<ScreenResult> {
  * past (or null) and runs a fresh screen.
  */
 export async function quarterlyResweep(): Promise<{ rescreened: number; blocked: number }> {
-  const due = await db
-    .select({ id: schema.sanctionsScreeningsTable.id, userId: schema.sanctionsScreeningsTable.userId })
+  // Pull only the LATEST screening row per user, then filter to those whose
+  // most recent nextReviewAt is in the past. Selecting all overdue rows
+  // would re-process every historical screening every sweep, which both
+  // wastes provider calls and hides genuine fresh dueness behind ancient
+  // backlog rows. The latest row is the system-of-record for each user.
+  const latestPerUser = await db
+    .select({
+      id: schema.sanctionsScreeningsTable.id,
+      userId: schema.sanctionsScreeningsTable.userId,
+      nextReviewAt: schema.sanctionsScreeningsTable.nextReviewAt,
+      createdAt: schema.sanctionsScreeningsTable.createdAt,
+    })
     .from(schema.sanctionsScreeningsTable)
-    .where(lte(schema.sanctionsScreeningsTable.nextReviewAt, new Date()))
-    .limit(100);
+    .orderBy(desc(schema.sanctionsScreeningsTable.createdAt));
+  const seen = new Set<string>();
+  const due: Array<{ id: string; userId: string }> = [];
+  const now = new Date();
+  for (const row of latestPerUser) {
+    if (seen.has(row.userId)) continue;
+    seen.add(row.userId);
+    if (row.nextReviewAt && row.nextReviewAt <= now) {
+      due.push({ id: row.id, userId: row.userId });
+      if (due.length >= 100) break;
+    }
+  }
   let blocked = 0;
   for (const row of due) {
     // Pull the latest snapshot from the seller application for fresh inputs.

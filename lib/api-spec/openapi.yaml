@@ -1172,7 +1172,7 @@ paths:
               type: object
               required: [kind, contentType, filename, sizeBytes]
               properties:
-                kind: { type: string, description: "gov_id | proof_of_address | bank_statement | cac_certificate | ubo_declaration" }
+                kind: { type: string, description: "gov_id | bank_verification | cac | ubo | selfie | address_proof" }
                 contentType: { type: string }
                 filename: { type: string }
                 sizeBytes: { type: integer }
