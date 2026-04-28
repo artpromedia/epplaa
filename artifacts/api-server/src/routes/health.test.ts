@@ -38,6 +38,7 @@ vi.mock("../lib/logger", () => ({
   },
 }));
 
+const { dbHealthWatcher } = await import("../lib/subsystemHealth");
 const { default: healthRouter } = await import("./health");
 
 function buildApp(): Express {
@@ -56,20 +57,37 @@ beforeEach(() => {
     firstFailureAt: null,
     lastRecoveredAt: null,
   };
+  dbHealthWatcher.__reset();
 });
 
 describe("GET /healthz (liveness)", () => {
-  it("returns 200 with rateLimitStore status even when dependencies are down", async () => {
+  it("returns 200 with rateLimitStore + subsystems map even when dependencies are down", async () => {
     // Liveness should never reach the DB or Redis — verify by making
     // both mocks throw and asserting healthz still returns 200.
     dbExecuteMock.mockRejectedValue(new Error("nope"));
     pingRedisMock.mockResolvedValue({ ok: false, error: "nope" });
     const res = await request(buildApp()).get("/healthz");
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({
-      status: "ok",
+    expect(res.body.status).toBe("ok");
+    // Legacy top-level rateLimitStore field stays for back-compat with
+    // the older probe + dashboards.
+    expect(res.body.rateLimitStore).toEqual({
+      kind: "redis",
+      state: "healthy",
+      failureCount: 0,
+      firstFailureAt: null,
+      lastRecoveredAt: null,
+    });
+    // New canonical multi-subsystem map. Each entry must have the same
+    // shape so a probe walking it doesn't need per-subsystem branching.
+    expect(res.body.subsystems).toEqual({
       rateLimitStore: {
-        kind: "redis",
+        state: "healthy",
+        failureCount: 0,
+        firstFailureAt: null,
+        lastRecoveredAt: null,
+      },
+      db: {
         state: "healthy",
         failureCount: 0,
         firstFailureAt: null,
@@ -80,7 +98,7 @@ describe("GET /healthz (liveness)", () => {
     expect(pingRedisMock).not.toHaveBeenCalled();
   });
 
-  it("reflects degraded → recovered transitions in rateLimitStore", async () => {
+  it("reflects degraded → recovered transitions in rateLimitStore (legacy + subsystems map)", async () => {
     // Simulate the watcher snapshot moving through three states the way
     // it would in production as Redis fails, fails again, then recovers.
     // /healthz must surface each transition without restart.
@@ -93,8 +111,8 @@ describe("GET /healthz (liveness)", () => {
     };
     let res = await request(buildApp()).get("/healthz");
     expect(res.status).toBe(200);
-    expect(res.body.rateLimitStore).toEqual({
-      kind: "redis",
+    expect(res.body.rateLimitStore.state).toBe("degraded");
+    expect(res.body.subsystems.rateLimitStore).toEqual({
       state: "degraded",
       failureCount: 1,
       firstFailureAt: 1_700_000_000_000,
@@ -107,10 +125,10 @@ describe("GET /healthz (liveness)", () => {
       failureCount: 4,
     };
     res = await request(buildApp()).get("/healthz");
-    expect(res.body.rateLimitStore.state).toBe("degraded");
-    expect(res.body.rateLimitStore.failureCount).toBe(4);
-    expect(res.body.rateLimitStore.firstFailureAt).toBe(1_700_000_000_000);
-    expect(res.body.rateLimitStore.lastRecoveredAt).toBeNull();
+    expect(res.body.subsystems.rateLimitStore.failureCount).toBe(4);
+    expect(res.body.subsystems.rateLimitStore.firstFailureAt).toBe(
+      1_700_000_000_000,
+    );
 
     // Redis recovers: state flips to healthy, the streak fields reset,
     // and lastRecoveredAt advances so dashboards can timeline the
@@ -123,13 +141,44 @@ describe("GET /healthz (liveness)", () => {
       lastRecoveredAt: 1_700_000_005_000,
     };
     res = await request(buildApp()).get("/healthz");
-    expect(res.body.rateLimitStore).toEqual({
-      kind: "redis",
+    expect(res.body.subsystems.rateLimitStore).toEqual({
       state: "healthy",
       failureCount: 0,
       firstFailureAt: null,
       lastRecoveredAt: 1_700_000_005_000,
     });
+  });
+
+  it("surfaces a degraded DB streak in subsystems.db once /readyz has recorded failures", async () => {
+    // Drive the dbHealthWatcher via /readyz the way the platform LB
+    // would in production — a stuck DB outage should show up as a
+    // degraded streak on /healthz without any extra plumbing.
+    dbExecuteMock.mockRejectedValueOnce(new Error("ECONNREFUSED"));
+    pingRedisMock.mockResolvedValueOnce({ ok: true });
+    await request(buildApp()).get("/readyz");
+
+    const res = await request(buildApp()).get("/healthz");
+    expect(res.body.subsystems.db.state).toBe("degraded");
+    expect(typeof res.body.subsystems.db.firstFailureAt).toBe("number");
+    expect(res.body.subsystems.db.failureCount).toBeGreaterThanOrEqual(1);
+    // Other subsystems remain healthy — only the failing one is flagged.
+    expect(res.body.subsystems.rateLimitStore.state).toBe("healthy");
+  });
+
+  it("clears the DB streak on /healthz once /readyz observes a successful DB ping", async () => {
+    // Fail once, then succeed — the streak should close and
+    // lastRecoveredAt should be populated.
+    dbExecuteMock.mockRejectedValueOnce(new Error("ECONNREFUSED"));
+    pingRedisMock.mockResolvedValueOnce({ ok: true });
+    await request(buildApp()).get("/readyz");
+    dbExecuteMock.mockResolvedValueOnce({ rows: [] });
+    pingRedisMock.mockResolvedValueOnce({ ok: true });
+    await request(buildApp()).get("/readyz");
+
+    const res = await request(buildApp()).get("/healthz");
+    expect(res.body.subsystems.db.state).toBe("healthy");
+    expect(res.body.subsystems.db.firstFailureAt).toBeNull();
+    expect(typeof res.body.subsystems.db.lastRecoveredAt).toBe("number");
   });
 });
 

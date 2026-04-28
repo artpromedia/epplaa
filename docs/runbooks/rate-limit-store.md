@@ -137,11 +137,30 @@ as a finer-grained channel.
 
 The Sentry alert above fires on failure **rate** — >N failures per
 rolling minute. It deliberately misses a slow trickle of failures
-that keeps the watcher in `degraded` for many minutes without ever
+that keeps a watcher in `degraded` for many minutes without ever
 crossing the per-minute threshold. To catch that case we ship a tiny
-probe that pages on streak **duration** instead, by computing
-`now - rateLimitStore.firstFailureAt` from `/healthz` and exiting
-non-zero when it exceeds a threshold.
+probe that pages on streak **duration** instead, by walking
+`/healthz`'s `subsystems` map and exiting non-zero when **any**
+subsystem's `now - firstFailureAt` exceeds a threshold.
+
+The `subsystems` map currently exposes:
+
+- `rateLimitStore` — fed by the Redis rate-limit failure watcher.
+- `db` — fed by the `/readyz` Postgres ping (every readiness probe
+  call counts as a heartbeat). A DB pool that's been intermittently
+  unreachable for > threshold pages on-call without any extra
+  background polling.
+
+New subsystems (audit chain queue, payment-gateway circuit breakers,
+…) can be added by creating a `SubsystemFailureWatcher` instance and
+including its snapshot in the map; the probe will pick them up
+automatically.
+
+The page reason names the offending subsystem (e.g. `db degraded for
+540123ms (> threshold 300000ms)`) so on-call doesn't have to re-curl
+`/healthz` to know where to start digging. When more than one
+subsystem is page-worthy at the same time, the reason lists every
+offender so a correlated outage is visible at a glance.
 
 Wire it into your external uptime check / cron / scheduled job:
 
@@ -156,14 +175,17 @@ distinct for log triage):
 
 | Code | Meaning                                                       |
 | ---- | ------------------------------------------------------------- |
-| 0    | Healthy, OR `state=degraded` but streak is shorter than the threshold |
+| 0    | Every subsystem is healthy, OR at least one is degraded but no streak exceeds the threshold |
 | 1    | Probe error (network failure, non-2xx, malformed body, missing `HEALTHZ_URL`) — the probe itself failed; investigate the probe host before assuming the api is broken |
-| 2    | **Page**: `state=degraded` and streak duration > threshold (or the response shape regressed in a way that prevents evaluation) |
+| 2    | **Page**: at least one subsystem `state=degraded` and streak duration > threshold (or the response shape regressed in a way that prevents evaluation) |
 
 The probe writes a single JSON line to stdout (or stderr on probe
 error) describing what it observed — include that line verbatim in
-the page body so on-call sees the streak duration, threshold, and
-`firstFailureAt` without re-curling `/healthz`.
+the page body so on-call sees the offending subsystem, streak
+duration, threshold, and `firstFailureAt` without re-curling
+`/healthz`. The line includes a `subsystem` field naming the worst
+offender and a `subsystems` array with the per-subsystem evaluation
+detail.
 
 Tunable env vars (probe-side):
 

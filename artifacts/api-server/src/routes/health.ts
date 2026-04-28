@@ -2,6 +2,7 @@ import { Router, type IRouter } from "express";
 import { sql } from "drizzle-orm";
 import { db } from "../lib/db";
 import { logger } from "../lib/logger";
+import { dbHealthWatcher, type SubsystemSnapshot } from "../lib/subsystemHealth";
 import {
   getRateLimitStoreKind,
   getRateLimitStoreStatus,
@@ -16,16 +17,35 @@ router.get("/healthz", (_req, res) => {
   // `/readyz` for the dependency-aware probe that drains a replica
   // out of rotation when DB or Redis is unreachable.
   //
-  // `rateLimitStore` lets ops verify a live replica is using the intended
-  // bucket backend (see docs/runbooks/rate-limit-store.md) AND surfaces
-  // the live failure-streak state from RedisFailureWatcher so dashboards
-  // and uptime probes can track degraded ↔ recovered transitions
-  // without cross-referencing Sentry. The values are tiny and
-  // non-sensitive so we expose them on the unauthenticated endpoint
-  // rather than gating behind admin auth.
+  // The response now exposes a `subsystems` map so the duration-based
+  // stuck-degraded probe (scripts/checkHealthzDegraded.ts) can iterate
+  // over every backing service that tracks a failure streak — not just
+  // the rate-limit store. Each entry has the same `{ state,
+  // firstFailureAt, ... }` shape so dashboards and probes can parse a
+  // uniform schema.
+  //
+  // The legacy top-level `rateLimitStore` field is preserved (and
+  // mirrors `subsystems.rateLimitStore` plus its `kind`) for back-compat
+  // with the previous probe + dashboards. Removing it would silently
+  // break older callers; the duplication is cheap.
+  const rateLimitStatus = getRateLimitStoreStatus();
+  const dbStatus: SubsystemSnapshot = dbHealthWatcher.getSnapshot();
+  const subsystems: Record<string, SubsystemSnapshot> = {
+    // Strip `kind` from the rate-limit snapshot so every subsystem
+    // entry has an identical shape — `kind` stays on the top-level
+    // legacy field for callers that need it.
+    rateLimitStore: {
+      state: rateLimitStatus.state,
+      failureCount: rateLimitStatus.failureCount,
+      firstFailureAt: rateLimitStatus.firstFailureAt,
+      lastRecoveredAt: rateLimitStatus.lastRecoveredAt,
+    },
+    db: dbStatus,
+  };
   res.json({
     status: "ok",
-    rateLimitStore: getRateLimitStoreStatus(),
+    rateLimitStore: rateLimitStatus,
+    subsystems,
   });
 });
 
@@ -73,6 +93,15 @@ function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
  *     replica is actually configured for redis (`RATE_LIMIT_STORE=redis`).
  *     A memory-store replica reports `redis: "skipped"` and stays ready.
  *
+ * The DB check also feeds `dbHealthWatcher`: every probe records either
+ * success or failure, which is what gives /healthz the
+ * `subsystems.db.firstFailureAt` streak that the duration alert reads.
+ * The platform LB hits /readyz on an O(seconds) cadence so the
+ * watcher's resolution is plenty for a "stuck for minutes" alert. We
+ * do not also wire per-request DB errors into the watcher: that would
+ * conflate "this one statement failed" with "the pool is unreachable",
+ * and the probe is meant to surface the latter.
+ *
  * We deliberately do NOT touch the audit chain, Sentry, or external
  * payment gateways here — readiness is "can this replica serve a
  * request at all", not "is every downstream healthy". Coupling readyz
@@ -86,9 +115,11 @@ router.get("/readyz", (_req, res) => {
     try {
       await withTimeout(db.execute(sql`SELECT 1`), READYZ_DB_TIMEOUT_MS, "db");
       checks.db = "ok";
+      dbHealthWatcher.recordSuccess();
     } catch (err) {
       checks.db = "failed";
       failures.db = (err as Error).message;
+      dbHealthWatcher.record();
     }
 
     const redisResult = await pingRateLimitRedis();

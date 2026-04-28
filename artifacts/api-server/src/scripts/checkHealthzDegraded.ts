@@ -1,18 +1,27 @@
 /**
  * checkHealthzDegraded — uptime probe that pages on-call when /healthz
- * has reported `rateLimitStore.state === "degraded"` for longer than a
- * configurable threshold.
+ * has reported any backing subsystem in `state === "degraded"` for
+ * longer than a configurable threshold.
  *
  * Why this exists (see docs/runbooks/rate-limit-store.md):
  * The Sentry-side alert
  * (`rate_limit_redis_failure_threshold_breached`) fires on failure
  * *rate* — i.e. >N failures per rolling minute. That works for a
  * cliff-edge outage but misses a slow trickle of failures that keeps
- * the watcher in `degraded` for many minutes without ever crossing the
+ * a watcher in `degraded` for many minutes without ever crossing the
  * per-minute rate threshold. This probe complements that by alerting
- * on streak *duration*: if /healthz keeps reporting `degraded` and the
- * streak that began at `firstFailureAt` exceeds the threshold, exit
- * non-zero so the surrounding cron / uptime check pages on-call.
+ * on streak *duration*: if /healthz keeps reporting `degraded` for
+ * any subsystem and the streak that began at `firstFailureAt` exceeds
+ * the threshold, exit non-zero so the surrounding cron / uptime check
+ * pages on-call.
+ *
+ * The probe walks every entry in `body.subsystems` (rate-limit store,
+ * DB, ...future audit chain / payment circuit breakers) and pages on
+ * the worst one — naming the offending subsystem in the page reason
+ * so on-call doesn't have to re-curl /healthz to know where to start
+ * digging. For backwards compatibility with /healthz responses that
+ * pre-date the subsystems map, the probe also accepts the legacy
+ * top-level `rateLimitStore` field as a single-subsystem source.
  *
  * Usage (cron / scheduled job / external uptime probe):
  *
@@ -27,7 +36,8 @@
  *   0  healthy or short-lived degraded streak (under the threshold)
  *   1  probe error (network failure, non-2xx, malformed body) — does
  *      not necessarily mean the api is broken; the probe itself failed
- *   2  page on-call: state=degraded AND streak duration > threshold
+ *   2  page on-call: at least one subsystem state=degraded AND streak
+ *      duration > threshold
  *
  * The script writes a single JSON line to stdout describing what it
  * observed so the surrounding wrapper (cron log, PagerDuty event
@@ -56,39 +66,57 @@ export function parseDurationMs(
  * Shape of the relevant slice of the /healthz response. Kept narrow
  * (only the fields the alert evaluator needs) so a future addition to
  * the response body doesn't require a code change here.
+ *
+ * `subsystems` is the canonical multi-subsystem map. `rateLimitStore`
+ * is preserved as a back-compat alternative for /healthz responses
+ * served by an api-server version that pre-dates the subsystems map.
  */
+export interface SubsystemEntry {
+  state?: unknown;
+  firstFailureAt?: unknown;
+  [k: string]: unknown;
+}
 export interface HealthzBody {
   status?: unknown;
-  rateLimitStore?: {
-    state?: unknown;
-    firstFailureAt?: unknown;
-    [k: string]: unknown;
-  };
+  subsystems?: Record<string, SubsystemEntry> | unknown;
+  rateLimitStore?: SubsystemEntry | unknown;
   [k: string]: unknown;
 }
 
 export type EvaluationOutcome = "healthy" | "below_threshold" | "page";
 
-export interface EvaluationResult {
+/** Per-subsystem evaluation. Combined into a single overall result. */
+export interface SubsystemEvaluation {
+  name: string;
   outcome: EvaluationOutcome;
-  /** Human-readable reason — included verbatim in the structured log
-   *  line so the on-call page body explains *why* it fired. */
   reason: string;
   /** ms since `firstFailureAt`, or null when not in a degraded streak
    *  or when the field is missing/invalid. */
   durationMs: number | null;
-  /** Raw values surfaced for log triage. */
   state: string | null;
   firstFailureAt: number | null;
+}
+
+export interface EvaluationResult {
+  outcome: EvaluationOutcome;
+  /** Human-readable reason — included verbatim in the structured log
+   *  line so the on-call page body explains *why* it fired. Names
+   *  the offending subsystem when the outcome is `page`. */
+  reason: string;
+  /** ms since `firstFailureAt` of the worst subsystem, or null. */
+  durationMs: number | null;
+  /** Name of the subsystem driving the outcome, or null when no
+   *  evaluable subsystem was present in the body (response-shape
+   *  regression). */
+  subsystem: string | null;
+  /** Per-subsystem detail surfaced for log triage. Empty list when
+   *  the response had no recognisable subsystems block at all. */
+  subsystems: SubsystemEvaluation[];
   thresholdMs: number;
 }
 
 /**
- * Pure evaluator: decide whether the observed /healthz body should
- * page on-call. Split out from the runner so it can be unit-tested
- * without spinning an HTTP server.
- *
- * Decision matrix:
+ * Per-subsystem decision matrix:
  *   state missing / unrecognised   -> page (treat as actionable;
  *                                     either /healthz changed shape
  *                                     or someone is serving an
@@ -108,50 +136,48 @@ export interface EvaluationResult {
  *   state === "degraded" and
  *     duration <= threshold        -> below_threshold (no page)
  */
-export function evaluateHealthz(
-  body: HealthzBody,
+function evaluateSubsystem(
+  name: string,
+  entry: SubsystemEntry | undefined,
   nowMs: number,
   thresholdMs: number,
-): EvaluationResult {
-  const store = body.rateLimitStore;
-  const rawState = store?.state;
+): SubsystemEvaluation {
+  const rawState = entry?.state;
   const state = typeof rawState === "string" ? rawState : null;
-
-  const rawFirst = store?.firstFailureAt;
+  const rawFirst = entry?.firstFailureAt;
   const firstFailureAt =
     typeof rawFirst === "number" && Number.isFinite(rawFirst) ? rawFirst : null;
 
   if (state === "healthy") {
     return {
+      name,
       outcome: "healthy",
-      reason: "rateLimitStore.state=healthy",
+      reason: `${name}.state=healthy`,
       durationMs: null,
       state,
       firstFailureAt,
-      thresholdMs,
     };
   }
 
   if (state !== "degraded") {
     return {
+      name,
       outcome: "page",
-      reason: `rateLimitStore.state missing or unrecognised (got ${JSON.stringify(rawState)})`,
+      reason: `${name}.state missing or unrecognised (got ${JSON.stringify(rawState)})`,
       durationMs: null,
       state,
       firstFailureAt,
-      thresholdMs,
     };
   }
 
   if (firstFailureAt === null) {
     return {
+      name,
       outcome: "page",
-      reason:
-        "rateLimitStore.state=degraded but firstFailureAt missing/invalid — cannot compute streak duration",
+      reason: `${name}.state=degraded but firstFailureAt missing/invalid — cannot compute streak duration`,
       durationMs: null,
       state,
       firstFailureAt,
-      thresholdMs,
     };
   }
 
@@ -162,20 +188,142 @@ export function evaluateHealthz(
 
   if (durationMs > thresholdMs) {
     return {
+      name,
       outcome: "page",
-      reason: `rateLimitStore degraded for ${durationMs}ms (> threshold ${thresholdMs}ms)`,
+      reason: `${name} degraded for ${durationMs}ms (> threshold ${thresholdMs}ms)`,
       durationMs,
       state,
       firstFailureAt,
-      thresholdMs,
     };
   }
   return {
+    name,
     outcome: "below_threshold",
-    reason: `rateLimitStore degraded for ${durationMs}ms (<= threshold ${thresholdMs}ms)`,
+    reason: `${name} degraded for ${durationMs}ms (<= threshold ${thresholdMs}ms)`,
     durationMs,
     state,
     firstFailureAt,
+  };
+}
+
+function isSubsystemEntry(v: unknown): v is SubsystemEntry {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
+/**
+ * Extract the per-subsystem entries from /healthz. Prefers the
+ * canonical `subsystems` map; falls back to the legacy top-level
+ * `rateLimitStore` field for /healthz responses that pre-date the map.
+ *
+ * Returns an empty list when neither shape is present — the caller
+ * treats that as a response-shape regression and pages on it.
+ */
+function extractSubsystems(body: HealthzBody): Array<[string, SubsystemEntry]> {
+  const out: Array<[string, SubsystemEntry]> = [];
+  const map = body.subsystems;
+  if (typeof map === "object" && map !== null && !Array.isArray(map)) {
+    for (const [name, entry] of Object.entries(map as Record<string, unknown>)) {
+      if (isSubsystemEntry(entry)) out.push([name, entry]);
+    }
+  }
+  if (out.length === 0) {
+    // Back-compat: older /healthz responses only exposed the rate-limit
+    // store at the top level. Treat it as a single-subsystem map so
+    // the duration alert still works during a rolling deploy.
+    const legacy = body.rateLimitStore;
+    if (isSubsystemEntry(legacy)) {
+      out.push(["rateLimitStore", legacy]);
+    }
+  }
+  return out;
+}
+
+/**
+ * Severity ranking used to pick the worst per-subsystem outcome. The
+ * "page" with the longest known degradation wins (so on-call sees the
+ * subsystem that's been broken the longest); ties fall back to name
+ * order for deterministic test output.
+ */
+function outcomeRank(o: EvaluationOutcome): number {
+  if (o === "page") return 2;
+  if (o === "below_threshold") return 1;
+  return 0;
+}
+
+/**
+ * Pure evaluator: decide whether the observed /healthz body should
+ * page on-call. Walks every subsystem and returns the worst outcome,
+ * naming the offending subsystem in the reason so the page body is
+ * actionable.
+ *
+ * Special cases:
+ *   - No subsystems present at all (neither `subsystems` map nor the
+ *     legacy `rateLimitStore` field) -> page. The response shape
+ *     regressed and a human should look.
+ */
+export function evaluateHealthz(
+  body: HealthzBody,
+  nowMs: number,
+  thresholdMs: number,
+): EvaluationResult {
+  const entries = extractSubsystems(body);
+
+  if (entries.length === 0) {
+    return {
+      outcome: "page",
+      reason:
+        "no recognisable subsystems in /healthz body (neither `subsystems` map nor legacy `rateLimitStore` field present)",
+      durationMs: null,
+      subsystem: null,
+      subsystems: [],
+      thresholdMs,
+    };
+  }
+
+  const evaluations = entries
+    .map(([name, entry]) => evaluateSubsystem(name, entry, nowMs, thresholdMs))
+    // Stable name ordering so when several subsystems share the worst
+    // outcome the page reason is deterministic across probe runs.
+    .sort((a, b) => a.name.localeCompare(b.name));
+
+  // Pick the worst outcome; among equally-bad outcomes prefer the
+  // subsystem with the largest known durationMs so on-call sees the
+  // one that's been broken longest first.
+  let worst = evaluations[0]!;
+  for (const e of evaluations) {
+    const rankCmp = outcomeRank(e.outcome) - outcomeRank(worst.outcome);
+    if (rankCmp > 0) {
+      worst = e;
+      continue;
+    }
+    if (rankCmp === 0) {
+      const wDur = worst.durationMs ?? -1;
+      const eDur = e.durationMs ?? -1;
+      if (eDur > wDur) worst = e;
+    }
+  }
+
+  // If the worst outcome is `page`, list every subsystem that's
+  // currently page-worthy so the reason captures all simultaneously
+  // failing dependencies (not just the longest one). Common case is
+  // one offender, but a correlated outage should not silently hide
+  // siblings.
+  let reason = worst.reason;
+  if (worst.outcome === "page") {
+    const offenders = evaluations.filter((e) => e.outcome === "page");
+    if (offenders.length > 1) {
+      reason =
+        `multiple subsystems page-worthy: ` +
+        offenders.map((o) => o.reason).join("; ");
+    }
+  }
+
+  return {
+    outcome: worst.outcome,
+    reason,
+    durationMs: worst.durationMs,
+    subsystem: worst.name,
+    subsystems: evaluations,
     thresholdMs,
   };
 }
@@ -301,8 +449,8 @@ export async function main(
       reason: result.reason,
       url,
       httpStatus: probe.httpStatus,
-      state: result.state,
-      firstFailureAt: result.firstFailureAt,
+      subsystem: result.subsystem,
+      subsystems: result.subsystems,
       durationMs: result.durationMs,
       thresholdMs: result.thresholdMs,
     }),
