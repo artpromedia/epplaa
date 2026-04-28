@@ -4,6 +4,19 @@ import request from "supertest";
 
 const dbExecuteMock = vi.fn();
 const pingRedisMock = vi.fn();
+let storeStatusMock: {
+  kind: "memory" | "redis";
+  state: "healthy" | "degraded";
+  failureCount: number;
+  firstFailureAt: number | null;
+  lastRecoveredAt: number | null;
+} = {
+  kind: "redis",
+  state: "healthy",
+  failureCount: 0,
+  firstFailureAt: null,
+  lastRecoveredAt: null,
+};
 
 vi.mock("../lib/db", () => ({
   db: {
@@ -13,6 +26,7 @@ vi.mock("../lib/db", () => ({
 
 vi.mock("../middlewares/apiRateLimit", () => ({
   getRateLimitStoreKind: () => "redis",
+  getRateLimitStoreStatus: () => storeStatusMock,
   pingRateLimitRedis: (...args: unknown[]) => pingRedisMock(...args),
 }));
 
@@ -35,19 +49,87 @@ function buildApp(): Express {
 beforeEach(() => {
   dbExecuteMock.mockReset();
   pingRedisMock.mockReset();
+  storeStatusMock = {
+    kind: "redis",
+    state: "healthy",
+    failureCount: 0,
+    firstFailureAt: null,
+    lastRecoveredAt: null,
+  };
 });
 
 describe("GET /healthz (liveness)", () => {
-  it("returns 200 with rateLimitStore kind even when dependencies are down", async () => {
+  it("returns 200 with rateLimitStore status even when dependencies are down", async () => {
     // Liveness should never reach the DB or Redis — verify by making
     // both mocks throw and asserting healthz still returns 200.
     dbExecuteMock.mockRejectedValue(new Error("nope"));
     pingRedisMock.mockResolvedValue({ ok: false, error: "nope" });
     const res = await request(buildApp()).get("/healthz");
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ status: "ok", rateLimitStore: "redis" });
+    expect(res.body).toEqual({
+      status: "ok",
+      rateLimitStore: {
+        kind: "redis",
+        state: "healthy",
+        failureCount: 0,
+        firstFailureAt: null,
+        lastRecoveredAt: null,
+      },
+    });
     expect(dbExecuteMock).not.toHaveBeenCalled();
     expect(pingRedisMock).not.toHaveBeenCalled();
+  });
+
+  it("reflects degraded → recovered transitions in rateLimitStore", async () => {
+    // Simulate the watcher snapshot moving through three states the way
+    // it would in production as Redis fails, fails again, then recovers.
+    // /healthz must surface each transition without restart.
+    storeStatusMock = {
+      kind: "redis",
+      state: "degraded",
+      failureCount: 1,
+      firstFailureAt: 1_700_000_000_000,
+      lastRecoveredAt: null,
+    };
+    let res = await request(buildApp()).get("/healthz");
+    expect(res.status).toBe(200);
+    expect(res.body.rateLimitStore).toEqual({
+      kind: "redis",
+      state: "degraded",
+      failureCount: 1,
+      firstFailureAt: 1_700_000_000_000,
+      lastRecoveredAt: null,
+    });
+
+    // Streak deepens — failureCount climbs but firstFailureAt is sticky.
+    storeStatusMock = {
+      ...storeStatusMock,
+      failureCount: 4,
+    };
+    res = await request(buildApp()).get("/healthz");
+    expect(res.body.rateLimitStore.state).toBe("degraded");
+    expect(res.body.rateLimitStore.failureCount).toBe(4);
+    expect(res.body.rateLimitStore.firstFailureAt).toBe(1_700_000_000_000);
+    expect(res.body.rateLimitStore.lastRecoveredAt).toBeNull();
+
+    // Redis recovers: state flips to healthy, the streak fields reset,
+    // and lastRecoveredAt advances so dashboards can timeline the
+    // incident from /healthz alone.
+    storeStatusMock = {
+      kind: "redis",
+      state: "healthy",
+      failureCount: 0,
+      firstFailureAt: null,
+      lastRecoveredAt: 1_700_000_005_000,
+    };
+    res = await request(buildApp()).get("/healthz");
+    expect(res.body.rateLimitStore).toEqual({
+      kind: "redis",
+      state: "healthy",
+      failureCount: 0,
+      firstFailureAt: null,
+      lastRecoveredAt: 1_700_000_005_000,
+    });
   });
 });
 

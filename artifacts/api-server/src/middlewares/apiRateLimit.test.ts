@@ -16,7 +16,12 @@ vi.mock("../lib/sentry", () => ({
   initSentryServer: () => {},
 }));
 
-import { __test__, getRateLimitStoreKind, pingRateLimitRedis } from "./apiRateLimit";
+import {
+  __test__,
+  getRateLimitStoreKind,
+  getRateLimitStoreStatus,
+  pingRateLimitRedis,
+} from "./apiRateLimit";
 
 beforeEach(() => {
   sentryCalls.exceptions.length = 0;
@@ -139,6 +144,97 @@ describe("RedisStore parity with InMemoryStore", () => {
       redisOut.push((await store.bump("k", t0 + off, window, max)).allowed);
     }
     expect(redisOut).toEqual(memOut);
+  });
+});
+
+describe("RedisFailureWatcher.getSnapshot (used by /healthz)", () => {
+  it("reports healthy with zeroed counters when no failure has occurred", () => {
+    const watcher = new __test__.RedisFailureWatcher({ threshold: 3, cooldownMs: 60_000 });
+    expect(watcher.getSnapshot()).toEqual({
+      state: "healthy",
+      failureCount: 0,
+      firstFailureAt: null,
+      lastRecoveredAt: null,
+    });
+  });
+
+  it("flips to degraded on the very first failure and tracks streak depth", () => {
+    const watcher = new __test__.RedisFailureWatcher({ threshold: 5, cooldownMs: 60_000 });
+    const t0 = 9_000_000;
+    watcher.record("rate_limit_redis_bump_failed", new Error("x"), t0);
+    watcher.record("rate_limit_redis_bump_failed", new Error("x"), t0 + 50);
+    expect(watcher.getSnapshot()).toEqual({
+      state: "degraded",
+      failureCount: 2,
+      firstFailureAt: t0,
+      lastRecoveredAt: null,
+    });
+  });
+
+  it("returns to healthy and stamps lastRecoveredAt after a streak ends", () => {
+    const watcher = new __test__.RedisFailureWatcher({ threshold: 5, cooldownMs: 60_000 });
+    const t0 = 9_100_000;
+    // Sub-threshold blip — even without a paged alert, /healthz should
+    // still record the recovery so dashboards can timeline the blip.
+    watcher.record("rate_limit_redis_bump_failed", new Error("x"), t0);
+    watcher.recordSuccess(t0 + 200);
+    expect(watcher.getSnapshot()).toEqual({
+      state: "healthy",
+      failureCount: 0,
+      firstFailureAt: null,
+      lastRecoveredAt: t0 + 200,
+    });
+  });
+
+  it("preserves the prior lastRecoveredAt while a fresh streak is in progress", () => {
+    const watcher = new __test__.RedisFailureWatcher({ threshold: 5, cooldownMs: 60_000 });
+    const t0 = 9_200_000;
+    watcher.record("rate_limit_redis_bump_failed", new Error("x"), t0);
+    watcher.recordSuccess(t0 + 100);
+    // Second incident starts.
+    watcher.record("rate_limit_redis_bump_failed", new Error("x"), t0 + 1_000);
+    const snap = watcher.getSnapshot();
+    expect(snap.state).toBe("degraded");
+    expect(snap.firstFailureAt).toBe(t0 + 1_000);
+    expect(snap.failureCount).toBe(1);
+    // The previous recovery timestamp survives so consumers can compute
+    // the gap between recoveries / mean time between failures.
+    expect(snap.lastRecoveredAt).toBe(t0 + 100);
+  });
+});
+
+describe("getRateLimitStoreStatus (module-level helper)", () => {
+  it("merges store kind with the watcher snapshot", () => {
+    __test__.redisFailureWatcher.__reset();
+    const status = getRateLimitStoreStatus();
+    expect(status).toEqual({
+      kind: __test__.store.kind,
+      state: "healthy",
+      failureCount: 0,
+      firstFailureAt: null,
+      lastRecoveredAt: null,
+    });
+  });
+
+  it("reflects watcher state changes live without restart", () => {
+    __test__.redisFailureWatcher.__reset();
+    const t0 = 9_500_000;
+    __test__.redisFailureWatcher.record(
+      "rate_limit_redis_bump_failed",
+      new Error("x"),
+      t0,
+    );
+    const degraded = getRateLimitStoreStatus();
+    expect(degraded.state).toBe("degraded");
+    expect(degraded.failureCount).toBe(1);
+    expect(degraded.firstFailureAt).toBe(t0);
+
+    __test__.redisFailureWatcher.recordSuccess(t0 + 500);
+    const recovered = getRateLimitStoreStatus();
+    expect(recovered.state).toBe("healthy");
+    expect(recovered.failureCount).toBe(0);
+    expect(recovered.firstFailureAt).toBeNull();
+    expect(recovered.lastRecoveredAt).toBe(t0 + 500);
   });
 });
 

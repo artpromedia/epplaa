@@ -4,6 +4,7 @@ import { db } from "../lib/db";
 import { logger } from "../lib/logger";
 import {
   getRateLimitStoreKind,
+  getRateLimitStoreStatus,
   pingRateLimitRedis,
 } from "../middlewares/apiRateLimit";
 
@@ -16,12 +17,15 @@ router.get("/healthz", (_req, res) => {
   // out of rotation when DB or Redis is unreachable.
   //
   // `rateLimitStore` lets ops verify a live replica is using the intended
-  // bucket backend (see docs/runbooks/rate-limit-store.md). It's a tiny,
-  // non-sensitive string so we expose it on the unauthenticated endpoint
-  // rather than gating it behind admin auth.
+  // bucket backend (see docs/runbooks/rate-limit-store.md) AND surfaces
+  // the live failure-streak state from RedisFailureWatcher so dashboards
+  // and uptime probes can track degraded ↔ recovered transitions
+  // without cross-referencing Sentry. The values are tiny and
+  // non-sensitive so we expose them on the unauthenticated endpoint
+  // rather than gating behind admin auth.
   res.json({
     status: "ok",
-    rateLimitStore: getRateLimitStoreKind(),
+    rateLimitStore: getRateLimitStoreStatus(),
   });
 });
 

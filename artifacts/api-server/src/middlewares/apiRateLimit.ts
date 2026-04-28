@@ -73,6 +73,11 @@ class RedisFailureWatcher {
   private firstFailureAt: number | null = null;
   private failuresSinceFirstFailure = 0;
   private breachedThisIncident = false;
+  // Wallclock timestamp of the most recent recordSuccess that closed an
+  // active failure streak. Surfaced via /healthz so dashboards and
+  // uptime probes can see when the store last recovered without
+  // grepping Sentry. `null` until at least one streak has recovered.
+  private lastRecoveredAt: number | null = null;
   readonly thresholdPerMin: number;
   readonly cooldownMs: number;
 
@@ -156,6 +161,12 @@ class RedisFailureWatcher {
     this.firstFailureAt = null;
     this.failuresSinceFirstFailure = 0;
     this.breachedThisIncident = false;
+    // Stamp the recovery clock for any streak that actually recovered,
+    // even sub-threshold blips. /healthz consumers want "when did the
+    // store last come back" regardless of whether on-call was paged.
+    if (startedAt !== null) {
+      this.lastRecoveredAt = now;
+    }
     if (!hadBreach || startedAt === null) return;
     // Recovery is the true close of an alert window: drop the cooldown
     // gate so a fresh outage right after recovery can re-page on-call
@@ -182,6 +193,34 @@ class RedisFailureWatcher {
     });
   }
 
+  /**
+   * Read-only snapshot of the current incident-streak state for /healthz.
+   *
+   *   state            — "degraded" while a streak is ongoing
+   *                      (firstFailureAt !== null), otherwise "healthy".
+   *                      We deliberately surface even sub-threshold
+   *                      streaks so dashboards can spot Redis trouble
+   *                      before the alert fires.
+   *   failureCount     — number of failures in the current streak. 0
+   *                      when healthy.
+   *   firstFailureAt   — ms epoch the current streak began, or null.
+   *   lastRecoveredAt  — ms epoch the most recent streak ended, or null
+   *                      until at least one streak has recovered.
+   */
+  getSnapshot(): {
+    state: "healthy" | "degraded";
+    failureCount: number;
+    firstFailureAt: number | null;
+    lastRecoveredAt: number | null;
+  } {
+    return {
+      state: this.firstFailureAt === null ? "healthy" : "degraded",
+      failureCount: this.failuresSinceFirstFailure,
+      firstFailureAt: this.firstFailureAt,
+      lastRecoveredAt: this.lastRecoveredAt,
+    };
+  }
+
   /** Test-only: reset internal counters between cases. */
   __reset(): void {
     this.timestamps = [];
@@ -189,6 +228,7 @@ class RedisFailureWatcher {
     this.firstFailureAt = null;
     this.failuresSinceFirstFailure = 0;
     this.breachedThisIncident = false;
+    this.lastRecoveredAt = null;
   }
 }
 
@@ -511,6 +551,30 @@ export function apiRateLimit(opts: ApiRateLimitOptions = {}): RequestHandler {
  */
 export function getRateLimitStoreKind(): "memory" | "redis" {
   return store.kind;
+}
+
+/**
+ * Combined rate-limit store status surfaced on /healthz. The shape
+ * intentionally always includes the streak fields (even for
+ * `kind === "memory"`, where they're constant) so dashboard panels and
+ * uptime probes can parse a stable schema without conditional branches.
+ *
+ * For memory replicas the failure-watcher fields are constants:
+ *   { state: "healthy", failureCount: 0, firstFailureAt: null, lastRecoveredAt: null }
+ * because the watcher is only fed by RedisStore — there's nothing else
+ * to fail. We still return them so the schema is uniform.
+ */
+export function getRateLimitStoreStatus(): {
+  kind: "memory" | "redis";
+  state: "healthy" | "degraded";
+  failureCount: number;
+  firstFailureAt: number | null;
+  lastRecoveredAt: number | null;
+} {
+  return {
+    kind: store.kind,
+    ...redisFailureWatcher.getSnapshot(),
+  };
 }
 
 /**
