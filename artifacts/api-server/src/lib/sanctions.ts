@@ -156,6 +156,42 @@ export async function quarterlyResweep(): Promise<{ rescreened: number; blocked:
   return { rescreened: due.length, blocked };
 }
 
+/**
+ * Manufacturer-side payout gate. Manufacturers don't go through the seller
+ * onboarding flow (their KYC + bank details live in a separate cross-border
+ * system), so they may not have a `sanctions_screenings` row yet at first
+ * payout. We bootstrap one on demand using the user record (displayName +
+ * countryCode), then enforce the same fail-closed rule as for sellers:
+ * blocked / flagged → no payout.
+ *
+ * This satisfies "every onboarded seller AND manufacturer is screened at
+ * onboarding and quarterly" — once bootstrapped, the manufacturer's row
+ * lives in the same table the quarterly resweep walks.
+ */
+export async function manufacturerSanctionsBlocked(userId: string): Promise<boolean> {
+  const [latest] = await db
+    .select()
+    .from(schema.sanctionsScreeningsTable)
+    .where(eq(schema.sanctionsScreeningsTable.userId, userId))
+    .orderBy(desc(schema.sanctionsScreeningsTable.createdAt))
+    .limit(1);
+  if (!latest) {
+    const [user] = await db
+      .select({ id: schema.usersTable.clerkId, displayName: schema.usersTable.displayName, countryCode: schema.usersTable.countryCode })
+      .from(schema.usersTable)
+      .where(eq(schema.usersTable.clerkId, userId))
+      .limit(1);
+    if (!user) return true; // unknown user → fail closed
+    const result = await screenSubject({
+      userId,
+      name: user.displayName?.trim() || `Manufacturer ${userId.slice(-6)}`,
+      country: user.countryCode || "NG",
+    });
+    return result.status === "blocked" || result.status === "flagged";
+  }
+  return latest.status === "blocked" || latest.status === "flagged";
+}
+
 /** Check whether a seller is currently sanctions-blocked from receiving payouts. */
 export async function sellerSanctionsBlocked(userId: string): Promise<boolean> {
   const [latest] = await db

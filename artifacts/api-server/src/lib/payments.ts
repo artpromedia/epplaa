@@ -15,7 +15,7 @@ import { db, schema } from "./db";
 import { logger } from "./logger";
 import { newPaymentAttemptId, newPaymentIntentId, newPaymentReference } from "./ids";
 import { requiredTierForOrder } from "./kyc";
-import { sellerSanctionsBlocked } from "./sanctions";
+import { sellerSanctionsBlocked, manufacturerSanctionsBlocked } from "./sanctions";
 import { recordAudit } from "./audit";
 
 /**
@@ -745,9 +745,30 @@ export async function processDuePayouts(): Promise<{ processed: number; failed: 
     .from(schema.payoutsTable)
     .where(eq(schema.payoutsTable.status, "blocked"));
   for (const payout of blocked) {
-    // Manufacturer + wallet payouts never go through the seller gate
-    // and shouldn't be polled here. Skip defensively.
-    if (payout.kind === "wallet_withdrawal" || payout.kind === "manufacturer_share") continue;
+    // Wallet withdrawals are non-seller and not subject to either gate.
+    if (payout.kind === "wallet_withdrawal") continue;
+    // Manufacturer payouts use a sanctions-only gate (no KYC tier — that's
+    // a seller-flow concept). manufacturerSanctionsBlocked() bootstraps a
+    // screening row from the user record on first encounter so we don't
+    // need a separate manufacturer onboarding flow to satisfy the
+    // "every onboarded seller AND manufacturer is screened" requirement.
+    if (payout.kind === "manufacturer_share") {
+      const blocked = await manufacturerSanctionsBlocked(payout.userId);
+      if (!blocked) {
+        await db
+          .update(schema.payoutsTable)
+          .set({ status: "pending", errorMessage: null })
+          .where(eq(schema.payoutsTable.id, payout.id));
+        await recordAudit({
+          actorId: null,
+          action: "payout.unblocked",
+          entity: "payout",
+          entityId: payout.id,
+          payload: { userId: payout.userId, kind: "manufacturer_share", amountMinor: payout.amountMinor },
+        });
+      }
+      continue;
+    }
     const seller = await loadSellerForUser(payout.userId);
     const sellerKycTier = (seller as { kycTier?: number } | null)?.kycTier ?? 1;
     const required = payout.requiredKycTier ?? 1;
@@ -791,16 +812,33 @@ export async function processDuePayouts(): Promise<{ processed: number; failed: 
   // so the next sweep can release it once cleared.
   //
   // Wallet withdrawals belong to non-seller users and are exempt.
-  // Manufacturer-share payouts run on the cross-border rail; manufacturer
-  // KYC + sanctions are owned by a separate onboarding flow that doesn't
-  // populate `sellers.kycTier` or write `sanctions_screenings` rows. If
-  // we let the seller gate run on these we'd reblock every manufacturer
-  // payout indefinitely. They already wait on a 7-day hold and finance
-  // reviews them before settlement.
+  // Manufacturer-share payouts run a sanctions-only check (no KYC tier);
+  // manufacturerSanctionsBlocked() bootstraps a screening row from the
+  // user record on first encounter so unscreened manufacturers don't
+  // slip through.
   const stillDue: typeof due = [];
   for (const payout of due) {
-    if (payout.kind === "wallet_withdrawal" || payout.kind === "manufacturer_share") {
+    if (payout.kind === "wallet_withdrawal") {
       stillDue.push(payout);
+      continue;
+    }
+    if (payout.kind === "manufacturer_share") {
+      const blocked = await manufacturerSanctionsBlocked(payout.userId);
+      if (blocked) {
+        await db
+          .update(schema.payoutsTable)
+          .set({ status: "blocked", errorMessage: "sanctions_review_required" })
+          .where(eq(schema.payoutsTable.id, payout.id));
+        await recordAudit({
+          actorId: null,
+          action: "payout.reblocked",
+          entity: "payout",
+          entityId: payout.id,
+          payload: { userId: payout.userId, kind: "manufacturer_share", reason: "sanctions_review_required", amountMinor: payout.amountMinor },
+        });
+      } else {
+        stillDue.push(payout);
+      }
       continue;
     }
     const seller = await loadSellerForUser(payout.userId);
