@@ -12,6 +12,7 @@ import { formatPrice } from "@/lib/format";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { useToast } from "@/hooks/use-toast";
 import { connectStreamSocket } from "@/lib/stream-socket";
+import { useGetProduct } from "@workspace/api-client-react";
 import {
   getStreamPlayback,
   listStreamMessages,
@@ -62,13 +63,15 @@ export default function LiveShopping() {
   const { toast } = useToast();
   const [, navigate] = useLocation();
 
-  const stream = SEED_STREAMS.find((s) => s.id === streamId) || SEED_STREAMS[0];
-  const pinnedProduct = SEED_PRODUCTS.find(
-    (p) => p.id === stream.currentProductId,
-  );
+  // Seed fallback: lets the demo URLs (/live/stream1, /live/stream-2…) keep
+  // working when no real DB row exists yet. For real streams created by the
+  // seller go-live flow, every visible piece of metadata is overridden below
+  // from the playback row so the UI never shows the wrong host/product.
+  const seedStream =
+    SEED_STREAMS.find((s) => s.id === streamId) || SEED_STREAMS[0];
 
-  const seedViewers = useMemo(() => parseViewerCount(stream.viewerCount), [
-    stream.viewerCount,
+  const seedViewers = useMemo(() => parseViewerCount(seedStream.viewerCount), [
+    seedStream.viewerCount,
   ]);
   const [viewers, setViewers] = useState<number>(seedViewers);
   const [likeCount, setLikeCount] = useState<number>(12800);
@@ -83,6 +86,39 @@ export default function LiveShopping() {
   // seed/bot experience so demo streams under SEED_STREAMS still work.
   const [realPlayback, setRealPlayback] = useState<StreamPlayback | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
+
+  // Real-stream metadata overrides: when the playback row exists, the host
+  // name / poster / pinned product MUST come from the DB, not from the seed
+  // fallback (otherwise newly created streams render with the wrong seller).
+  const liveTitle = realPlayback?.title ?? seedStream.title;
+  const liveHostName = realPlayback?.hostName ?? seedStream.hostName;
+  const liveHostAvatar =
+    (realPlayback?.hostAvatar?.length ? realPlayback.hostAvatar : null) ??
+    seedStream.hostAvatar;
+  const livePosterImage =
+    (realPlayback?.posterImage?.length ? realPlayback.posterImage : null) ??
+    seedStream.posterImage;
+  const livePinnedProductId =
+    realPlayback?.currentProductId ?? seedStream.currentProductId ?? null;
+  const seedPinned = SEED_PRODUCTS.find((p) => p.id === livePinnedProductId);
+  // For real streams the pinned product may be a real DB product that isn't
+  // in the seed catalogue — fetch on demand so the buy-now overlay still
+  // resolves. `useGetProduct` is gated by `enabled: !!productId` so passing
+  // an empty string here is a no-op.
+  const { data: fetchedPinned } = useGetProduct(
+    !seedPinned && livePinnedProductId ? livePinnedProductId : "",
+  );
+  const pinnedProduct = seedPinned ?? fetchedPinned ?? undefined;
+  // Stable shape that downstream JSX keys off. Anywhere the JSX used to
+  // read `stream.X` should now read `stream.X` from this object.
+  const stream = {
+    ...seedStream,
+    title: liveTitle,
+    hostName: liveHostName,
+    hostAvatar: liveHostAvatar,
+    posterImage: livePosterImage,
+    currentProductId: livePinnedProductId,
+  };
 
   // Seed the chat with the existing static comments so the screen never looks
   // empty before bots start talking.

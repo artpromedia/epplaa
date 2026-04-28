@@ -338,6 +338,8 @@ export const GetStreamPlaybackResponse = zod.object({
   peakViewers: zod.number(),
   title: zod.string(),
   hostName: zod.string(),
+  hostAvatar: zod.string().nullish(),
+  posterImage: zod.string().nullish(),
   currentProductId: zod.string().nullish(),
   isLive: zod.boolean(),
   startedAtIso: zod.string().nullish(),

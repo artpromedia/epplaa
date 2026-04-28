@@ -1,12 +1,27 @@
 import { Link } from "wouter";
 import { Play, Clock, Eye } from "lucide-react";
 import { useTheme } from "@/lib/theme-context";
-import { SEED_REPLAYS, relativeTime } from "@/lib/replays";
+import { SEED_REPLAYS, relativeTime, type Replay } from "@/lib/replays";
 import { PageHeader } from "@/components/page-header";
+import { useListReplays } from "@workspace/api-client-react";
 
+/**
+ * Replays index. Pulls real replay rows from the backend (which are
+ * persisted automatically when a live stream ends). While the request
+ * is in flight — or if it fails — we render the seed catalogue so the
+ * page is never empty in dev or first-load scenarios.
+ */
 export default function Replays() {
   const { resolvedTheme } = useTheme();
   const isDark = resolvedTheme === "dark";
+
+  const { data, isLoading } = useListReplays();
+  const apiReplays = (data ?? []) as Replay[];
+  const replays: Replay[] = isLoading
+    ? SEED_REPLAYS
+    : apiReplays.length > 0
+      ? apiReplays
+      : SEED_REPLAYS;
 
   return (
     <div className="flex flex-col h-full w-full">
@@ -23,7 +38,7 @@ export default function Replays() {
         </p>
 
         <div className="grid grid-cols-2 gap-3" data-testid="list-replays">
-          {SEED_REPLAYS.map((r) => (
+          {replays.map((r) => (
             <Link
               key={r.id}
               href={`/replay/${r.id}`}

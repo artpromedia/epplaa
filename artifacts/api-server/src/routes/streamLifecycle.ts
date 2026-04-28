@@ -231,6 +231,8 @@ router.get("/streams/:streamId/playback", async (req, res) => {
     peakViewers: row.peakViewers,
     title: row.title,
     hostName: row.hostName,
+    hostAvatar: row.hostAvatar,
+    posterImage: row.posterImage,
     currentProductId: row.currentProductId,
     isLive: row.isLive,
     startedAtIso: row.startedAt?.toISOString() ?? null,

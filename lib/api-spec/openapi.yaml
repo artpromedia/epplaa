@@ -2347,6 +2347,8 @@ components:
         peakViewers: { type: integer }
         title: { type: string }
         hostName: { type: string }
+        hostAvatar: { type: string, nullable: true }
+        posterImage: { type: string, nullable: true }
         currentProductId: { type: string, nullable: true }
         isLive: { type: boolean }
         startedAtIso: { type: string, nullable: true }

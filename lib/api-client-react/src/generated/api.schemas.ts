@@ -704,6 +704,8 @@ export interface StreamPlayback {
   peakViewers: number;
   title: string;
   hostName: string;
+  hostAvatar?: string | null;
+  posterImage?: string | null;
   currentProductId?: string | null;
   isLive: boolean;
   startedAtIso?: string | null;
