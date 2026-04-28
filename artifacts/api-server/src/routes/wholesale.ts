@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { and, asc, desc, eq, ilike, type SQL } from "drizzle-orm";
+import { and, asc, desc, eq, ilike, inArray, type SQL } from "drizzle-orm";
 import { db, schema } from "../lib/db";
 import { requireUserId } from "../lib/auth";
 import { recordAudit } from "../lib/audit";
@@ -381,19 +381,49 @@ router.get("/wholesale/orders/:orderId", async (req, res) => {
 router.post("/wholesale/orders/:orderId/cancel", async (req, res) => {
   const userId = requireUserId(req, res);
   if (!userId) return;
-  // State-machine guard: only cancel from draft/booked.
+  const orderId = String(req.params.orderId ?? "");
+  // Resolve current status under the seller-ownership filter so we can
+  // distinguish "not yours / doesn't exist" (404) from "wrong state" (409).
+  const [existing] = await db
+    .select({ id: schema.wholesaleOrdersTable.id, status: schema.wholesaleOrdersTable.status })
+    .from(schema.wholesaleOrdersTable)
+    .where(
+      and(
+        eq(schema.wholesaleOrdersTable.sellerUserId, userId),
+        eq(schema.wholesaleOrdersTable.id, orderId),
+      ),
+    )
+    .limit(1);
+  if (!existing) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  // State-machine guard: cancellation is only legal pre-shipment. Once an
+  // order is in_transit / at_customs / warehoused / delivered, finance and
+  // logistics rely on the lifecycle and a silent "cancelled" flip would
+  // corrupt landed-cost reconciliation, freight-cost capture, and the
+  // manufacturer payout that fires on delivered transition.
+  const CANCELLABLE = new Set(["draft", "booked"]);
+  if (!CANCELLABLE.has(existing.status)) {
+    res.status(409).json({ error: "wrong_state", currentStatus: existing.status });
+    return;
+  }
+  // Conditional UPDATE so a concurrent state change between SELECT and
+  // UPDATE cannot race past the guard — if the status moved, no row is
+  // returned and we report the latest state.
   const [row] = await db
     .update(schema.wholesaleOrdersTable)
     .set({ status: "cancelled" })
     .where(
       and(
         eq(schema.wholesaleOrdersTable.sellerUserId, userId),
-        eq(schema.wholesaleOrdersTable.id, String(req.params.orderId ?? "")),
+        eq(schema.wholesaleOrdersTable.id, orderId),
+        inArray(schema.wholesaleOrdersTable.status, ["draft", "booked"]),
       ),
     )
     .returning();
   if (!row) {
-    res.status(404).json({ error: "not_found" });
+    res.status(409).json({ error: "wrong_state" });
     return;
   }
   await recordAudit({
@@ -401,6 +431,7 @@ router.post("/wholesale/orders/:orderId/cancel", async (req, res) => {
     action: "wholesale.order.cancel",
     entity: "wholesale_order",
     entityId: row.id,
+    payload: { previousStatus: existing.status },
   });
   res.json(rowToWholesaleOrder(row));
 });
