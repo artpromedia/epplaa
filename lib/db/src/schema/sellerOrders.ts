@@ -6,6 +6,11 @@ export const sellerOrdersTable = pgTable("seller_orders", {
   buyerName: text("buyer_name").notNull(),
   buyerHandle: text("buyer_handle").notNull(),
   buyerAvatar: text("buyer_avatar"),
+  // Optional link to the buyer's user account so status-change events
+  // (e.g. delivered) can be notified back to them. Nullable for
+  // historical seed rows where this link was unknown.
+  buyerUserId: text("buyer_user_id"),
+  orderId: text("order_id"),
   productTitle: text("product_title").notNull(),
   productImage: text("product_image").notNull().default(""),
   qty: integer("qty").notNull().default(1),

@@ -5,6 +5,8 @@ import { requireUserId } from "../lib/auth";
 import { newListingId } from "../lib/ids";
 import { newPayoutId, newPayoutReference } from "../lib/ids";
 import { COUNTRY_BY_CODE } from "../lib/static";
+import { enqueueNotification } from "../lib/notifications";
+import { logger } from "../lib/logger";
 
 const router: IRouter = Router();
 
@@ -244,6 +246,41 @@ router.post("/seller/orders/:sellerOrderId/transitions", async (req, res) => {
   if (!row) {
     res.status(404).json({ error: "not_found" });
     return;
+  }
+  // Buyer-side notifications for status changes that the buyer cares about.
+  // Only fires when the seller_order row is linked to a buyer account
+  // (buyerUserId column). Historical seed rows have no link and are skipped.
+  if (row.buyerUserId) {
+    try {
+      if (status === "shipped") {
+        await enqueueNotification({
+          userId: row.buyerUserId,
+          eventType: "order_dispatched",
+          payload: {
+            title: "Your order is on the way",
+            body: row.productTitle,
+            url: row.orderId ? `/orders/${row.orderId}` : "/account/orders",
+            orderId: row.orderId ?? row.id,
+          },
+        });
+      } else if (status === "delivered" || status === "completed") {
+        await enqueueNotification({
+          userId: row.buyerUserId,
+          eventType: "order_delivered",
+          payload: {
+            title: "Order delivered",
+            body: row.productTitle,
+            url: row.orderId ? `/orders/${row.orderId}` : "/account/orders",
+            orderId: row.orderId ?? row.id,
+          },
+        });
+      }
+    } catch (err) {
+      logger.error(
+        { err: (err as Error).message, sellerOrderId: row.id },
+        "notify_seller_order_transition_failed",
+      );
+    }
   }
   res.json(rowToSellerOrder(row));
 });
