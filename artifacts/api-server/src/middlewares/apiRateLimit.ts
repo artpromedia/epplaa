@@ -6,6 +6,7 @@ import { newSafeId } from "../lib/ids";
 import { logger } from "../lib/logger";
 import { getUserId } from "../lib/auth";
 import { userHasAnyRole } from "../lib/roles";
+import { captureException, captureMessage } from "../lib/sentry";
 
 /**
  * Per-route + per-identity rate limiter.
@@ -34,14 +35,99 @@ interface BumpResult {
 }
 
 interface BucketStore {
+  readonly kind: "memory" | "redis";
   bump(key: string, now: number, windowMs: number, max: number): Promise<BumpResult>;
 }
+
+/**
+ * Watches RedisStore failure log keys and forwards them to Sentry so the
+ * "degrade open" branch never goes unnoticed. Two signals are emitted:
+ *
+ *   1. Per-failure `captureException` with `tags.kind` set to one of the
+ *      log keys ("rate_limit_redis_bump_failed" or
+ *      "rate_limit_redis_client_error"). A Sentry alert rule keyed off
+ *      `tags.subsystem == "rate_limit"` can fire above any chosen
+ *      events-per-minute threshold.
+ *   2. An in-process sliding-minute counter that, when it crosses
+ *      `RATE_LIMIT_REDIS_FAILURE_ALERT_PER_MIN` (default 5), emits a
+ *      `level: "fatal"` `captureMessage` with a stable fingerprint.
+ *      Sentry's default new-issue notification fires on the first such
+ *      event so we get an alert even when no project-specific rule has
+ *      been configured. The breach is throttled to one event per
+ *      `RATE_LIMIT_REDIS_FAILURE_ALERT_COOLDOWN_MS` (default 60s) to
+ *      avoid spamming on-call during a sustained outage.
+ */
+class RedisFailureWatcher {
+  private timestamps: number[] = [];
+  private lastBreachAt = 0;
+  readonly thresholdPerMin: number;
+  readonly cooldownMs: number;
+
+  constructor(opts?: { threshold?: number; cooldownMs?: number }) {
+    this.thresholdPerMin =
+      opts?.threshold ??
+      Number(process.env.RATE_LIMIT_REDIS_FAILURE_ALERT_PER_MIN ?? "5");
+    this.cooldownMs =
+      opts?.cooldownMs ??
+      Number(process.env.RATE_LIMIT_REDIS_FAILURE_ALERT_COOLDOWN_MS ?? "60000");
+  }
+
+  record(
+    kind: "rate_limit_redis_bump_failed" | "rate_limit_redis_client_error",
+    err: unknown,
+    now: number = Date.now(),
+  ): void {
+    captureException(err, {
+      tags: { subsystem: "rate_limit", kind },
+      level: "error",
+    });
+    const cutoff = now - 60_000;
+    this.timestamps.push(now);
+    while (this.timestamps.length > 0 && this.timestamps[0]! <= cutoff) {
+      this.timestamps.shift();
+    }
+    if (
+      this.timestamps.length >= this.thresholdPerMin &&
+      now - this.lastBreachAt >= this.cooldownMs
+    ) {
+      this.lastBreachAt = now;
+      logger.error(
+        { count: this.timestamps.length, threshold: this.thresholdPerMin },
+        "rate_limit_redis_failure_threshold_breached",
+      );
+      captureMessage("rate_limit_redis_failure_threshold_breached", {
+        level: "fatal",
+        tags: {
+          subsystem: "rate_limit",
+          alert: "rate_limit_store_degraded",
+        },
+        extra: {
+          count: this.timestamps.length,
+          threshold: this.thresholdPerMin,
+          windowSeconds: 60,
+        },
+        // Stable fingerprint so all breaches roll up into a single Sentry
+        // issue instead of one issue per cooldown tick.
+        fingerprint: ["rate-limit-redis-failure-threshold"],
+      });
+    }
+  }
+
+  /** Test-only: reset internal counters between cases. */
+  __reset(): void {
+    this.timestamps = [];
+    this.lastBreachAt = 0;
+  }
+}
+
+const redisFailureWatcher = new RedisFailureWatcher();
 
 interface Bucket {
   hits: number[];
 }
 
 class InMemoryStore implements BucketStore {
+  readonly kind = "memory" as const;
   private readonly map = new Map<string, Bucket>();
   async bump(key: string, now: number, windowMs: number, max: number): Promise<BumpResult> {
     const cutoff = now - windowMs;
@@ -113,6 +199,7 @@ interface RateLimitRedis extends Redis {
 }
 
 class RedisStore implements BucketStore {
+  readonly kind = "redis" as const;
   private readonly redis: RateLimitRedis;
   private memberSeq = 0;
   constructor(redis: Redis) {
@@ -143,11 +230,14 @@ class RedisStore implements BucketStore {
     } catch (err) {
       // Degrade open if Redis is unreachable — better to serve than to
       // 429 every request because of a backing-store outage. The error
-      // is logged so on-call can react.
+      // is logged AND forwarded to Sentry (see RedisFailureWatcher) so
+      // on-call notices instead of the rate limiter silently disabling
+      // itself.
       logger.error(
         { err: (err as Error).message },
         "rate_limit_redis_bump_failed",
       );
+      redisFailureWatcher.record("rate_limit_redis_bump_failed", err);
       return { allowed: true, retryAfterMs: 0 };
     }
   }
@@ -172,6 +262,7 @@ function createBucketStore(): BucketStore {
         { err: err.message },
         "rate_limit_redis_client_error",
       );
+      redisFailureWatcher.record("rate_limit_redis_client_error", err);
     });
     return new RedisStore(client);
   }
@@ -296,4 +387,20 @@ export function apiRateLimit(opts: ApiRateLimitOptions = {}): RequestHandler {
   };
 }
 
-export const __test__ = { resolveTier, store, InMemoryStore, RedisStore };
+/**
+ * Returns the configured bucket store kind ("memory" | "redis"). Exposed
+ * via /healthz so operators can verify a running replica is using the
+ * intended backend without grepping env vars on the host.
+ */
+export function getRateLimitStoreKind(): "memory" | "redis" {
+  return store.kind;
+}
+
+export const __test__ = {
+  resolveTier,
+  store,
+  InMemoryStore,
+  RedisStore,
+  RedisFailureWatcher,
+  redisFailureWatcher,
+};

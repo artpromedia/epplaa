@@ -110,12 +110,43 @@ export function initSentryServer(): void {
   logger.info({ release: process.env.SENTRY_RELEASE ?? null }, "sentry_initialised");
 }
 
-export function captureException(
-  err: unknown,
-  context?: Record<string, unknown>,
-): void {
+export interface CaptureOptions {
+  level?: Sentry.SeverityLevel;
+  tags?: Record<string, string>;
+  extra?: Record<string, unknown>;
+  fingerprint?: string[];
+}
+
+function buildCaptureContext(options?: CaptureOptions) {
+  if (!options) return undefined;
+  const ctx: {
+    level?: Sentry.SeverityLevel;
+    tags?: Record<string, string>;
+    extra?: Record<string, unknown>;
+    fingerprint?: string[];
+  } = {};
+  if (options.level) ctx.level = options.level;
+  if (options.tags) ctx.tags = options.tags;
+  if (options.fingerprint) ctx.fingerprint = options.fingerprint;
+  if (options.extra) ctx.extra = scrubObject(options.extra);
+  return ctx;
+}
+
+export function captureException(err: unknown, options?: CaptureOptions): void {
   if (!initialised || !process.env.SENTRY_DSN) return;
-  Sentry.captureException(err, context ? { extra: scrubObject(context) } : undefined);
+  Sentry.captureException(err, buildCaptureContext(options));
+}
+
+/**
+ * Send a structured message to Sentry. Use for high-level alert signals
+ * (e.g. "this subsystem is degraded") where there's no underlying Error
+ * to capture. `level: "fatal"` fires Sentry's default new-issue alert
+ * rule on the very first event so we don't depend on a project-specific
+ * threshold rule being configured.
+ */
+export function captureMessage(message: string, options?: CaptureOptions): void {
+  if (!initialised || !process.env.SENTRY_DSN) return;
+  Sentry.captureMessage(message, buildCaptureContext(options));
 }
 
 export { Sentry };

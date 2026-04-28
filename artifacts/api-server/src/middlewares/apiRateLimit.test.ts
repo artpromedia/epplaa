@@ -1,6 +1,27 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import RedisMock from "ioredis-mock";
-import { __test__ } from "./apiRateLimit";
+
+const sentryCalls = {
+  exceptions: [] as Array<{ err: unknown; options?: unknown }>,
+  messages: [] as Array<{ message: string; options?: unknown }>,
+};
+
+vi.mock("../lib/sentry", () => ({
+  captureException: (err: unknown, options?: unknown) => {
+    sentryCalls.exceptions.push({ err, options });
+  },
+  captureMessage: (message: string, options?: unknown) => {
+    sentryCalls.messages.push({ message, options });
+  },
+  initSentryServer: () => {},
+}));
+
+import { __test__, getRateLimitStoreKind } from "./apiRateLimit";
+
+beforeEach(() => {
+  sentryCalls.exceptions.length = 0;
+  sentryCalls.messages.length = 0;
+});
 
 describe("InMemoryStore bucket exhaustion", () => {
   it("admits up to max within window then 429s", async () => {
@@ -114,5 +135,122 @@ describe("RedisStore parity with InMemoryStore", () => {
       redisOut.push((await store.bump("k", t0 + off, window, max)).allowed);
     }
     expect(redisOut).toEqual(memOut);
+  });
+});
+
+describe("getRateLimitStoreKind", () => {
+  it("matches the active store implementation", () => {
+    const expected = __test__.store instanceof __test__.RedisStore ? "redis" : "memory";
+    expect(getRateLimitStoreKind()).toBe(expected);
+  });
+
+  it("InMemoryStore reports kind=memory", () => {
+    expect(new __test__.InMemoryStore().kind).toBe("memory");
+  });
+
+  it("RedisStore reports kind=redis", () => {
+    const r = new RedisMock();
+    const s = new __test__.RedisStore(r as never);
+    expect(s.kind).toBe("redis");
+    void r.quit();
+  });
+});
+
+describe("RedisFailureWatcher Sentry forwarding", () => {
+  it("forwards every failure to Sentry with subsystem+kind tags", () => {
+    const watcher = new __test__.RedisFailureWatcher({ threshold: 999, cooldownMs: 60_000 });
+    const err = new Error("boom");
+    watcher.record("rate_limit_redis_bump_failed", err, 1_000_000);
+    watcher.record("rate_limit_redis_client_error", err, 1_000_100);
+    expect(sentryCalls.exceptions).toHaveLength(2);
+    const first = sentryCalls.exceptions[0]!.options as {
+      tags: Record<string, string>;
+      level: string;
+    };
+    expect(first.tags).toEqual({
+      subsystem: "rate_limit",
+      kind: "rate_limit_redis_bump_failed",
+    });
+    expect(first.level).toBe("error");
+    const second = sentryCalls.exceptions[1]!.options as {
+      tags: Record<string, string>;
+    };
+    expect(second.tags.kind).toBe("rate_limit_redis_client_error");
+  });
+
+  it("emits a fatal captureMessage once the threshold is crossed", () => {
+    const watcher = new __test__.RedisFailureWatcher({ threshold: 3, cooldownMs: 60_000 });
+    const t0 = 2_000_000;
+    for (let i = 0; i < 2; i++) {
+      watcher.record("rate_limit_redis_bump_failed", new Error("x"), t0 + i);
+    }
+    // Below threshold: per-failure exceptions but no breach message yet.
+    expect(sentryCalls.messages).toHaveLength(0);
+    watcher.record("rate_limit_redis_bump_failed", new Error("x"), t0 + 2);
+    expect(sentryCalls.messages).toHaveLength(1);
+    const msg = sentryCalls.messages[0]!;
+    expect(msg.message).toBe("rate_limit_redis_failure_threshold_breached");
+    const opts = msg.options as {
+      level: string;
+      tags: Record<string, string>;
+      fingerprint: string[];
+      extra: Record<string, unknown>;
+    };
+    expect(opts.level).toBe("fatal");
+    expect(opts.tags).toEqual({
+      subsystem: "rate_limit",
+      alert: "rate_limit_store_degraded",
+    });
+    expect(opts.fingerprint).toEqual(["rate-limit-redis-failure-threshold"]);
+    expect(opts.extra).toMatchObject({ count: 3, threshold: 3, windowSeconds: 60 });
+  });
+
+  it("throttles repeat breaches until the cooldown elapses", () => {
+    const watcher = new __test__.RedisFailureWatcher({ threshold: 2, cooldownMs: 60_000 });
+    const t0 = 3_000_000;
+    watcher.record("rate_limit_redis_bump_failed", new Error("x"), t0);
+    watcher.record("rate_limit_redis_bump_failed", new Error("x"), t0 + 1);
+    expect(sentryCalls.messages).toHaveLength(1);
+    // More failures inside the cooldown window: no additional breach event.
+    watcher.record("rate_limit_redis_bump_failed", new Error("x"), t0 + 2);
+    watcher.record("rate_limit_redis_bump_failed", new Error("x"), t0 + 3);
+    expect(sentryCalls.messages).toHaveLength(1);
+    // After the cooldown elapses and there are still threshold-many fresh
+    // failures in the rolling minute, a second breach event fires.
+    watcher.record("rate_limit_redis_bump_failed", new Error("x"), t0 + 60_001);
+    watcher.record("rate_limit_redis_bump_failed", new Error("x"), t0 + 60_002);
+    expect(sentryCalls.messages).toHaveLength(2);
+  });
+
+  it("forgets failures older than the rolling 60s window", () => {
+    const watcher = new __test__.RedisFailureWatcher({ threshold: 3, cooldownMs: 60_000 });
+    const t0 = 4_000_000;
+    watcher.record("rate_limit_redis_bump_failed", new Error("x"), t0);
+    watcher.record("rate_limit_redis_bump_failed", new Error("x"), t0 + 1);
+    // 61 seconds later — earlier hits have aged out, so threshold is not
+    // crossed by a single new failure.
+    watcher.record("rate_limit_redis_bump_failed", new Error("x"), t0 + 61_000);
+    expect(sentryCalls.messages).toHaveLength(0);
+  });
+});
+
+describe("RedisStore.bump degrades open and notifies on Lua failure", () => {
+  it("returns allowed=true and records a Sentry exception when Redis throws", async () => {
+    const fakeRedis = {
+      defineCommand: () => {},
+      rateLimitBump: async () => {
+        throw new Error("simulated NOSCRIPT");
+      },
+    };
+    __test__.redisFailureWatcher.__reset();
+    const store = new __test__.RedisStore(fakeRedis as never);
+    const r = await store.bump("k", Date.now(), 1000, 5);
+    expect(r.allowed).toBe(true);
+    expect(r.retryAfterMs).toBe(0);
+    expect(sentryCalls.exceptions).toHaveLength(1);
+    const opts = sentryCalls.exceptions[0]!.options as {
+      tags: Record<string, string>;
+    };
+    expect(opts.tags.kind).toBe("rate_limit_redis_bump_failed");
   });
 });
