@@ -256,6 +256,22 @@ export default function SellerEarnings() {
                     </div>
                     <PayoutStatusBadge status={p.status} isDark={isDark} />
                   </div>
+                  {p.status === "blocked" && p.errorMessage && (
+                    <div
+                      className={`mt-2 text-[11px] rounded-md px-2 py-1.5 ${
+                        isDark
+                          ? "bg-red-500/10 text-red-300 border border-red-500/30"
+                          : "bg-red-50 text-red-800 border border-red-200"
+                      }`}
+                      data-testid={`payout-block-reason-${p.id}`}
+                    >
+                      {p.errorMessage.startsWith("kyc_tier_required")
+                        ? `Verify Tier ${p.requiredKycTier ?? 2} KYC to release this payout.`
+                        : p.errorMessage === "sanctions_review_required"
+                          ? "Compliance review required — contact support."
+                          : p.errorMessage}
+                    </div>
+                  )}
                   {p.status === "pending" && (
                     <button
                       onClick={() => {
@@ -440,7 +456,7 @@ function PayoutStatusBadge({
   status,
   isDark,
 }: {
-  status: "pending" | "paid" | "rejected";
+  status: "pending" | "paid" | "rejected" | "blocked" | "processing" | "scheduled" | "cancelled";
   isDark: boolean;
 }) {
   const map: Record<string, string> = {
@@ -453,10 +469,22 @@ function PayoutStatusBadge({
     rejected: isDark
       ? "bg-red-500/15 text-red-300"
       : "bg-red-100 text-red-800",
+    blocked: isDark
+      ? "bg-red-500/15 text-red-300"
+      : "bg-red-100 text-red-800",
+    processing: isDark
+      ? "bg-sky-500/15 text-sky-300"
+      : "bg-sky-100 text-sky-800",
+    scheduled: isDark
+      ? "bg-stone-500/15 text-stone-300"
+      : "bg-stone-200 text-stone-800",
+    cancelled: isDark
+      ? "bg-stone-500/15 text-stone-300"
+      : "bg-stone-200 text-stone-800",
   };
   return (
     <span
-      className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded ${map[status]}`}
+      className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded ${map[status] ?? map.pending}`}
     >
       {status}
     </span>

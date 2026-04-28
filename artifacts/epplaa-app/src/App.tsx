@@ -31,6 +31,8 @@ import Profile from "@/pages/profile";
 import PaymentMethods from "@/pages/account/payment-methods";
 import Addresses from "@/pages/account/addresses";
 import Settings from "@/pages/account/settings";
+import Privacy from "@/pages/account/privacy";
+import SellerKyc from "@/pages/seller/kyc";
 import SellerApply from "@/pages/seller/apply";
 import SellerTiers from "@/pages/seller/tiers";
 import SellerStudio from "@/pages/seller/studio";
@@ -111,7 +113,9 @@ function Router() {
         <Route path="/account/payment-methods" component={PaymentMethods} />
         <Route path="/account/addresses" component={Addresses} />
         <Route path="/account/settings" component={Settings} />
+        <Route path="/account/privacy" component={Privacy} />
         <Route path="/seller/apply" component={SellerApply} />
+        <Route path="/seller/kyc" component={SellerKyc} />
         <Route path="/seller/tiers" component={SellerTiers} />
         <Route path="/seller/studio" component={SellerStudio} />
         <Route path="/seller/listings" component={SellerListings} />

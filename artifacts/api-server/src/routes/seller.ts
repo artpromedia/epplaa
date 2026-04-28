@@ -7,6 +7,8 @@ import { newPayoutId, newPayoutReference } from "../lib/ids";
 import { COUNTRY_BY_CODE } from "../lib/static";
 import { enqueueNotification } from "../lib/notifications";
 import { logger } from "../lib/logger";
+import { requiredTierForOrder } from "../lib/kyc";
+import { sellerSanctionsBlocked } from "../lib/sanctions";
 
 const router: IRouter = Router();
 
@@ -383,6 +385,10 @@ router.get("/seller/earnings", async (req, res) => {
       bankLast4: p.bankLast4,
       reference: p.reference,
       paidAtIso: p.paidAt?.toISOString() ?? null,
+      // Surface the block reason so the UI can render an actionable hint
+      // (e.g. "kyc_tier_required:2" → "Verify Tier 2 KYC to unlock").
+      errorMessage: p.errorMessage,
+      requiredKycTier: p.requiredKycTier,
     })),
     payoutThresholdMinor: 5000 * minorPerMajor,
     holdDays: HOLD_DAYS,
@@ -400,16 +406,34 @@ router.post("/seller/payouts", async (req, res) => {
   }
   const profile = await getProfile(userId);
   const application = profile.application as { payoutBank?: string; payoutAccountLast4?: string } | null;
+  // Compliance gate — same rules that protect order-driven payouts.
+  // We compute the rolling-30d threshold INCLUDING this withdrawal and
+  // require the seller's verified `kycTier` to meet it. We also park the
+  // request when the most recent sanctions screen is flagged. The row
+  // is still created so the seller can see why it's stuck and so the
+  // cron can release it once KYC clears.
+  const { requiredTier } = await requiredTierForOrder(userId, amount);
+  const sellerKycTier = (profile as { kycTier?: number } | null)?.kycTier ?? 1;
+  const sanctionsBlocked = await sellerSanctionsBlocked(userId);
+  const blocked = sellerKycTier < requiredTier || sanctionsBlocked;
+  const status = blocked ? "blocked" : "pending";
+  const errorMessage = sanctionsBlocked
+    ? "sanctions_review_required"
+    : sellerKycTier < requiredTier
+      ? `kyc_tier_required:${requiredTier}`
+      : null;
   const [row] = await db
     .insert(schema.payoutsTable)
     .values({
       id: newPayoutId(),
       userId,
       amountMinor: amount,
-      status: "pending",
+      status,
       bankLabel: application?.payoutBank ?? "Bank",
       bankLast4: application?.payoutAccountLast4 ?? "0000",
       reference: newPayoutReference(),
+      requiredKycTier: requiredTier,
+      errorMessage,
     })
     .returning();
   res.status(201).json({

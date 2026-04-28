@@ -19,10 +19,12 @@ import type {
 import type {
   AddRecentSearchBody,
   AddressVerification,
+  AdminKycVerification,
   AdminRunDuePayouts200,
   AdminRunReconciliation200,
   AppendReturnMessageBody,
   ApplySellerBody,
+  ApproveKycVerificationBody,
   BadRequestResponse,
   BlockSellerBody,
   BlockedSeller,
@@ -31,6 +33,8 @@ import type {
   Cart,
   CartItemUpsertBody,
   CheckoutDraft,
+  ClaimKycDocument201,
+  ClaimKycDocumentBody,
   CompleteOnboardingBody,
   Country,
   CreateReturnBody,
@@ -41,13 +45,16 @@ import type {
   ForbiddenResponse,
   FulfillmentLocation,
   GatewayHealthSnapshot,
+  GetKycDocument200,
   GetPaymentsMode200,
   GetSellerEarningsParams,
   GoLiveResponse,
   HealthStatus,
+  KycStatus,
   ListFulfillmentLocationsParams,
   ListProductsParams,
   ListReviewsParams,
+  NdprRequest,
   NotFoundResponse,
   NotificationPrefs,
   Ok,
@@ -74,7 +81,10 @@ import type {
   ReferralHub,
   RefundOrderBody,
   RefundResponse,
+  RejectKycVerificationBody,
   Replay,
+  RequestNdprRectifyBody,
+  RequestNdprRestrictBody,
   RequestSellerPayoutBody,
   ReturnRecord,
   Review,
@@ -85,7 +95,10 @@ import type {
   SellerProfile,
   SellerStreamRecord,
   SetSellerModeBody,
+  StartKycVerification201,
+  StartKycVerificationBody,
   Stream,
+  SubmitKycVerification200,
   SubmitSafetyReportBody,
   TransitionReturnBody,
   TransitionSellerOrderBody,
@@ -94,6 +107,8 @@ import type {
   UpdateSellerListingBody,
   UpdateWalletSettingsBody,
   UpgradeSellerTierBody,
+  UploadKycDocument200,
+  UploadKycDocumentBody,
   User,
   VapidPublicKey,
   VerifyAddressBody,
@@ -7298,4 +7313,1339 @@ export const useMarkSellerPayoutPaid = <
   TContext
 > => {
   return useMutation(getMarkSellerPayoutPaidMutationOptions(options));
+};
+
+export const getGetKycStatusUrl = () => {
+  return `/api/kyc/me`;
+};
+
+export const getKycStatus = async (
+  options?: RequestInit,
+): Promise<KycStatus> => {
+  return customFetch<KycStatus>(getGetKycStatusUrl(), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetKycStatusQueryKey = () => {
+  return [`/api/kyc/me`] as const;
+};
+
+export const getGetKycStatusQueryOptions = <
+  TData = Awaited<ReturnType<typeof getKycStatus>>,
+  TError = ErrorType<UnauthorizedResponse>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getKycStatus>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetKycStatusQueryKey();
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof getKycStatus>>> = ({
+    signal,
+  }) => getKycStatus({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getKycStatus>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetKycStatusQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getKycStatus>>
+>;
+export type GetKycStatusQueryError = ErrorType<UnauthorizedResponse>;
+
+export function useGetKycStatus<
+  TData = Awaited<ReturnType<typeof getKycStatus>>,
+  TError = ErrorType<UnauthorizedResponse>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getKycStatus>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetKycStatusQueryOptions(options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+export const getClaimKycDocumentUrl = () => {
+  return `/api/kyc/documents`;
+};
+
+export const claimKycDocument = async (
+  claimKycDocumentBody: ClaimKycDocumentBody,
+  options?: RequestInit,
+): Promise<ClaimKycDocument201> => {
+  return customFetch<ClaimKycDocument201>(getClaimKycDocumentUrl(), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(claimKycDocumentBody),
+  });
+};
+
+export const getClaimKycDocumentMutationOptions = <
+  TError = ErrorType<BadRequestResponse | UnauthorizedResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof claimKycDocument>>,
+    TError,
+    { data: BodyType<ClaimKycDocumentBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof claimKycDocument>>,
+  TError,
+  { data: BodyType<ClaimKycDocumentBody> },
+  TContext
+> => {
+  const mutationKey = ["claimKycDocument"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof claimKycDocument>>,
+    { data: BodyType<ClaimKycDocumentBody> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return claimKycDocument(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type ClaimKycDocumentMutationResult = NonNullable<
+  Awaited<ReturnType<typeof claimKycDocument>>
+>;
+export type ClaimKycDocumentMutationBody = BodyType<ClaimKycDocumentBody>;
+export type ClaimKycDocumentMutationError = ErrorType<
+  BadRequestResponse | UnauthorizedResponse
+>;
+
+export const useClaimKycDocument = <
+  TError = ErrorType<BadRequestResponse | UnauthorizedResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof claimKycDocument>>,
+    TError,
+    { data: BodyType<ClaimKycDocumentBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof claimKycDocument>>,
+  TError,
+  { data: BodyType<ClaimKycDocumentBody> },
+  TContext
+> => {
+  return useMutation(getClaimKycDocumentMutationOptions(options));
+};
+
+export const getUploadKycDocumentUrl = (id: string) => {
+  return `/api/kyc/documents/${id}/upload`;
+};
+
+export const uploadKycDocument = async (
+  id: string,
+  uploadKycDocumentBody: UploadKycDocumentBody,
+  options?: RequestInit,
+): Promise<UploadKycDocument200> => {
+  return customFetch<UploadKycDocument200>(getUploadKycDocumentUrl(id), {
+    ...options,
+    method: "PUT",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(uploadKycDocumentBody),
+  });
+};
+
+export const getUploadKycDocumentMutationOptions = <
+  TError = ErrorType<BadRequestResponse | UnauthorizedResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof uploadKycDocument>>,
+    TError,
+    { id: string; data: BodyType<UploadKycDocumentBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof uploadKycDocument>>,
+  TError,
+  { id: string; data: BodyType<UploadKycDocumentBody> },
+  TContext
+> => {
+  const mutationKey = ["uploadKycDocument"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof uploadKycDocument>>,
+    { id: string; data: BodyType<UploadKycDocumentBody> }
+  > = (props) => {
+    const { id, data } = props ?? {};
+
+    return uploadKycDocument(id, data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type UploadKycDocumentMutationResult = NonNullable<
+  Awaited<ReturnType<typeof uploadKycDocument>>
+>;
+export type UploadKycDocumentMutationBody = BodyType<UploadKycDocumentBody>;
+export type UploadKycDocumentMutationError = ErrorType<
+  BadRequestResponse | UnauthorizedResponse
+>;
+
+export const useUploadKycDocument = <
+  TError = ErrorType<BadRequestResponse | UnauthorizedResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof uploadKycDocument>>,
+    TError,
+    { id: string; data: BodyType<UploadKycDocumentBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof uploadKycDocument>>,
+  TError,
+  { id: string; data: BodyType<UploadKycDocumentBody> },
+  TContext
+> => {
+  return useMutation(getUploadKycDocumentMutationOptions(options));
+};
+
+export const getGetKycDocumentUrl = (id: string) => {
+  return `/api/kyc/documents/${id}`;
+};
+
+export const getKycDocument = async (
+  id: string,
+  options?: RequestInit,
+): Promise<GetKycDocument200> => {
+  return customFetch<GetKycDocument200>(getGetKycDocumentUrl(id), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetKycDocumentQueryKey = (id: string) => {
+  return [`/api/kyc/documents/${id}`] as const;
+};
+
+export const getGetKycDocumentQueryOptions = <
+  TData = Awaited<ReturnType<typeof getKycDocument>>,
+  TError = ErrorType<UnauthorizedResponse | NotFoundResponse>,
+>(
+  id: string,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getKycDocument>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetKycDocumentQueryKey(id);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof getKycDocument>>> = ({
+    signal,
+  }) => getKycDocument(id, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: !!id,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getKycDocument>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetKycDocumentQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getKycDocument>>
+>;
+export type GetKycDocumentQueryError = ErrorType<
+  UnauthorizedResponse | NotFoundResponse
+>;
+
+export function useGetKycDocument<
+  TData = Awaited<ReturnType<typeof getKycDocument>>,
+  TError = ErrorType<UnauthorizedResponse | NotFoundResponse>,
+>(
+  id: string,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getKycDocument>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetKycDocumentQueryOptions(id, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+export const getStartKycVerificationUrl = () => {
+  return `/api/kyc/start`;
+};
+
+export const startKycVerification = async (
+  startKycVerificationBody: StartKycVerificationBody,
+  options?: RequestInit,
+): Promise<StartKycVerification201> => {
+  return customFetch<StartKycVerification201>(getStartKycVerificationUrl(), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(startKycVerificationBody),
+  });
+};
+
+export const getStartKycVerificationMutationOptions = <
+  TError = ErrorType<UnauthorizedResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof startKycVerification>>,
+    TError,
+    { data: BodyType<StartKycVerificationBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof startKycVerification>>,
+  TError,
+  { data: BodyType<StartKycVerificationBody> },
+  TContext
+> => {
+  const mutationKey = ["startKycVerification"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof startKycVerification>>,
+    { data: BodyType<StartKycVerificationBody> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return startKycVerification(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type StartKycVerificationMutationResult = NonNullable<
+  Awaited<ReturnType<typeof startKycVerification>>
+>;
+export type StartKycVerificationMutationBody =
+  BodyType<StartKycVerificationBody>;
+export type StartKycVerificationMutationError = ErrorType<UnauthorizedResponse>;
+
+export const useStartKycVerification = <
+  TError = ErrorType<UnauthorizedResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof startKycVerification>>,
+    TError,
+    { data: BodyType<StartKycVerificationBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof startKycVerification>>,
+  TError,
+  { data: BodyType<StartKycVerificationBody> },
+  TContext
+> => {
+  return useMutation(getStartKycVerificationMutationOptions(options));
+};
+
+export const getSubmitKycVerificationUrl = (id: string) => {
+  return `/api/kyc/verifications/${id}/submit`;
+};
+
+export const submitKycVerification = async (
+  id: string,
+  options?: RequestInit,
+): Promise<SubmitKycVerification200> => {
+  return customFetch<SubmitKycVerification200>(
+    getSubmitKycVerificationUrl(id),
+    {
+      ...options,
+      method: "POST",
+    },
+  );
+};
+
+export const getSubmitKycVerificationMutationOptions = <
+  TError = ErrorType<UnauthorizedResponse | NotFoundResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof submitKycVerification>>,
+    TError,
+    { id: string },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof submitKycVerification>>,
+  TError,
+  { id: string },
+  TContext
+> => {
+  const mutationKey = ["submitKycVerification"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof submitKycVerification>>,
+    { id: string }
+  > = (props) => {
+    const { id } = props ?? {};
+
+    return submitKycVerification(id, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type SubmitKycVerificationMutationResult = NonNullable<
+  Awaited<ReturnType<typeof submitKycVerification>>
+>;
+
+export type SubmitKycVerificationMutationError = ErrorType<
+  UnauthorizedResponse | NotFoundResponse
+>;
+
+export const useSubmitKycVerification = <
+  TError = ErrorType<UnauthorizedResponse | NotFoundResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof submitKycVerification>>,
+    TError,
+    { id: string },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof submitKycVerification>>,
+  TError,
+  { id: string },
+  TContext
+> => {
+  return useMutation(getSubmitKycVerificationMutationOptions(options));
+};
+
+export const getListPendingKycUrl = () => {
+  return `/api/admin/kyc/pending`;
+};
+
+export const listPendingKyc = async (
+  options?: RequestInit,
+): Promise<AdminKycVerification[]> => {
+  return customFetch<AdminKycVerification[]>(getListPendingKycUrl(), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getListPendingKycQueryKey = () => {
+  return [`/api/admin/kyc/pending`] as const;
+};
+
+export const getListPendingKycQueryOptions = <
+  TData = Awaited<ReturnType<typeof listPendingKyc>>,
+  TError = ErrorType<UnauthorizedResponse | ForbiddenResponse>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof listPendingKyc>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getListPendingKycQueryKey();
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof listPendingKyc>>> = ({
+    signal,
+  }) => listPendingKyc({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof listPendingKyc>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type ListPendingKycQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listPendingKyc>>
+>;
+export type ListPendingKycQueryError = ErrorType<
+  UnauthorizedResponse | ForbiddenResponse
+>;
+
+export function useListPendingKyc<
+  TData = Awaited<ReturnType<typeof listPendingKyc>>,
+  TError = ErrorType<UnauthorizedResponse | ForbiddenResponse>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof listPendingKyc>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getListPendingKycQueryOptions(options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+export const getApproveKycVerificationUrl = (id: string) => {
+  return `/api/admin/kyc/${id}/approve`;
+};
+
+export const approveKycVerification = async (
+  id: string,
+  approveKycVerificationBody: ApproveKycVerificationBody,
+  options?: RequestInit,
+): Promise<Ok> => {
+  return customFetch<Ok>(getApproveKycVerificationUrl(id), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(approveKycVerificationBody),
+  });
+};
+
+export const getApproveKycVerificationMutationOptions = <
+  TError = ErrorType<BadRequestResponse | ForbiddenResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof approveKycVerification>>,
+    TError,
+    { id: string; data: BodyType<ApproveKycVerificationBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof approveKycVerification>>,
+  TError,
+  { id: string; data: BodyType<ApproveKycVerificationBody> },
+  TContext
+> => {
+  const mutationKey = ["approveKycVerification"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof approveKycVerification>>,
+    { id: string; data: BodyType<ApproveKycVerificationBody> }
+  > = (props) => {
+    const { id, data } = props ?? {};
+
+    return approveKycVerification(id, data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type ApproveKycVerificationMutationResult = NonNullable<
+  Awaited<ReturnType<typeof approveKycVerification>>
+>;
+export type ApproveKycVerificationMutationBody =
+  BodyType<ApproveKycVerificationBody>;
+export type ApproveKycVerificationMutationError = ErrorType<
+  BadRequestResponse | ForbiddenResponse
+>;
+
+export const useApproveKycVerification = <
+  TError = ErrorType<BadRequestResponse | ForbiddenResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof approveKycVerification>>,
+    TError,
+    { id: string; data: BodyType<ApproveKycVerificationBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof approveKycVerification>>,
+  TError,
+  { id: string; data: BodyType<ApproveKycVerificationBody> },
+  TContext
+> => {
+  return useMutation(getApproveKycVerificationMutationOptions(options));
+};
+
+export const getRejectKycVerificationUrl = (id: string) => {
+  return `/api/admin/kyc/${id}/reject`;
+};
+
+export const rejectKycVerification = async (
+  id: string,
+  rejectKycVerificationBody: RejectKycVerificationBody,
+  options?: RequestInit,
+): Promise<Ok> => {
+  return customFetch<Ok>(getRejectKycVerificationUrl(id), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(rejectKycVerificationBody),
+  });
+};
+
+export const getRejectKycVerificationMutationOptions = <
+  TError = ErrorType<BadRequestResponse | ForbiddenResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof rejectKycVerification>>,
+    TError,
+    { id: string; data: BodyType<RejectKycVerificationBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof rejectKycVerification>>,
+  TError,
+  { id: string; data: BodyType<RejectKycVerificationBody> },
+  TContext
+> => {
+  const mutationKey = ["rejectKycVerification"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof rejectKycVerification>>,
+    { id: string; data: BodyType<RejectKycVerificationBody> }
+  > = (props) => {
+    const { id, data } = props ?? {};
+
+    return rejectKycVerification(id, data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type RejectKycVerificationMutationResult = NonNullable<
+  Awaited<ReturnType<typeof rejectKycVerification>>
+>;
+export type RejectKycVerificationMutationBody =
+  BodyType<RejectKycVerificationBody>;
+export type RejectKycVerificationMutationError = ErrorType<
+  BadRequestResponse | ForbiddenResponse
+>;
+
+export const useRejectKycVerification = <
+  TError = ErrorType<BadRequestResponse | ForbiddenResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof rejectKycVerification>>,
+    TError,
+    { id: string; data: BodyType<RejectKycVerificationBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof rejectKycVerification>>,
+  TError,
+  { id: string; data: BodyType<RejectKycVerificationBody> },
+  TContext
+> => {
+  return useMutation(getRejectKycVerificationMutationOptions(options));
+};
+
+export const getListNdprRequestsUrl = () => {
+  return `/api/ndpr/requests`;
+};
+
+export const listNdprRequests = async (
+  options?: RequestInit,
+): Promise<NdprRequest[]> => {
+  return customFetch<NdprRequest[]>(getListNdprRequestsUrl(), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getListNdprRequestsQueryKey = () => {
+  return [`/api/ndpr/requests`] as const;
+};
+
+export const getListNdprRequestsQueryOptions = <
+  TData = Awaited<ReturnType<typeof listNdprRequests>>,
+  TError = ErrorType<UnauthorizedResponse>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof listNdprRequests>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getListNdprRequestsQueryKey();
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof listNdprRequests>>
+  > = ({ signal }) => listNdprRequests({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof listNdprRequests>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type ListNdprRequestsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listNdprRequests>>
+>;
+export type ListNdprRequestsQueryError = ErrorType<UnauthorizedResponse>;
+
+export function useListNdprRequests<
+  TData = Awaited<ReturnType<typeof listNdprRequests>>,
+  TError = ErrorType<UnauthorizedResponse>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof listNdprRequests>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getListNdprRequestsQueryOptions(options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+export const getGetNdprRequestUrl = (id: string) => {
+  return `/api/ndpr/requests/${id}`;
+};
+
+export const getNdprRequest = async (
+  id: string,
+  options?: RequestInit,
+): Promise<NdprRequest> => {
+  return customFetch<NdprRequest>(getGetNdprRequestUrl(id), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetNdprRequestQueryKey = (id: string) => {
+  return [`/api/ndpr/requests/${id}`] as const;
+};
+
+export const getGetNdprRequestQueryOptions = <
+  TData = Awaited<ReturnType<typeof getNdprRequest>>,
+  TError = ErrorType<UnauthorizedResponse | NotFoundResponse>,
+>(
+  id: string,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getNdprRequest>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetNdprRequestQueryKey(id);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof getNdprRequest>>> = ({
+    signal,
+  }) => getNdprRequest(id, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: !!id,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getNdprRequest>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetNdprRequestQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getNdprRequest>>
+>;
+export type GetNdprRequestQueryError = ErrorType<
+  UnauthorizedResponse | NotFoundResponse
+>;
+
+export function useGetNdprRequest<
+  TData = Awaited<ReturnType<typeof getNdprRequest>>,
+  TError = ErrorType<UnauthorizedResponse | NotFoundResponse>,
+>(
+  id: string,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getNdprRequest>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetNdprRequestQueryOptions(id, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+export const getRequestNdprExportUrl = () => {
+  return `/api/ndpr/export`;
+};
+
+export const requestNdprExport = async (
+  options?: RequestInit,
+): Promise<NdprRequest> => {
+  return customFetch<NdprRequest>(getRequestNdprExportUrl(), {
+    ...options,
+    method: "POST",
+  });
+};
+
+export const getRequestNdprExportMutationOptions = <
+  TError = ErrorType<UnauthorizedResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof requestNdprExport>>,
+    TError,
+    void,
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof requestNdprExport>>,
+  TError,
+  void,
+  TContext
+> => {
+  const mutationKey = ["requestNdprExport"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof requestNdprExport>>,
+    void
+  > = () => {
+    return requestNdprExport(requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type RequestNdprExportMutationResult = NonNullable<
+  Awaited<ReturnType<typeof requestNdprExport>>
+>;
+
+export type RequestNdprExportMutationError = ErrorType<UnauthorizedResponse>;
+
+export const useRequestNdprExport = <
+  TError = ErrorType<UnauthorizedResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof requestNdprExport>>,
+    TError,
+    void,
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof requestNdprExport>>,
+  TError,
+  void,
+  TContext
+> => {
+  return useMutation(getRequestNdprExportMutationOptions(options));
+};
+
+export const getRequestNdprPortabilityUrl = () => {
+  return `/api/ndpr/portability`;
+};
+
+export const requestNdprPortability = async (
+  options?: RequestInit,
+): Promise<NdprRequest> => {
+  return customFetch<NdprRequest>(getRequestNdprPortabilityUrl(), {
+    ...options,
+    method: "POST",
+  });
+};
+
+export const getRequestNdprPortabilityMutationOptions = <
+  TError = ErrorType<UnauthorizedResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof requestNdprPortability>>,
+    TError,
+    void,
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof requestNdprPortability>>,
+  TError,
+  void,
+  TContext
+> => {
+  const mutationKey = ["requestNdprPortability"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof requestNdprPortability>>,
+    void
+  > = () => {
+    return requestNdprPortability(requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type RequestNdprPortabilityMutationResult = NonNullable<
+  Awaited<ReturnType<typeof requestNdprPortability>>
+>;
+
+export type RequestNdprPortabilityMutationError =
+  ErrorType<UnauthorizedResponse>;
+
+export const useRequestNdprPortability = <
+  TError = ErrorType<UnauthorizedResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof requestNdprPortability>>,
+    TError,
+    void,
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof requestNdprPortability>>,
+  TError,
+  void,
+  TContext
+> => {
+  return useMutation(getRequestNdprPortabilityMutationOptions(options));
+};
+
+export const getRequestNdprEraseUrl = () => {
+  return `/api/ndpr/erase`;
+};
+
+export const requestNdprErase = async (
+  options?: RequestInit,
+): Promise<NdprRequest> => {
+  return customFetch<NdprRequest>(getRequestNdprEraseUrl(), {
+    ...options,
+    method: "POST",
+  });
+};
+
+export const getRequestNdprEraseMutationOptions = <
+  TError = ErrorType<UnauthorizedResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof requestNdprErase>>,
+    TError,
+    void,
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof requestNdprErase>>,
+  TError,
+  void,
+  TContext
+> => {
+  const mutationKey = ["requestNdprErase"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof requestNdprErase>>,
+    void
+  > = () => {
+    return requestNdprErase(requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type RequestNdprEraseMutationResult = NonNullable<
+  Awaited<ReturnType<typeof requestNdprErase>>
+>;
+
+export type RequestNdprEraseMutationError = ErrorType<UnauthorizedResponse>;
+
+export const useRequestNdprErase = <
+  TError = ErrorType<UnauthorizedResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof requestNdprErase>>,
+    TError,
+    void,
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof requestNdprErase>>,
+  TError,
+  void,
+  TContext
+> => {
+  return useMutation(getRequestNdprEraseMutationOptions(options));
+};
+
+export const getCancelNdprRequestUrl = (id: string) => {
+  return `/api/ndpr/requests/${id}/cancel`;
+};
+
+export const cancelNdprRequest = async (
+  id: string,
+  options?: RequestInit,
+): Promise<NdprRequest> => {
+  return customFetch<NdprRequest>(getCancelNdprRequestUrl(id), {
+    ...options,
+    method: "POST",
+  });
+};
+
+export const getCancelNdprRequestMutationOptions = <
+  TError = ErrorType<UnauthorizedResponse | NotFoundResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof cancelNdprRequest>>,
+    TError,
+    { id: string },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof cancelNdprRequest>>,
+  TError,
+  { id: string },
+  TContext
+> => {
+  const mutationKey = ["cancelNdprRequest"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof cancelNdprRequest>>,
+    { id: string }
+  > = (props) => {
+    const { id } = props ?? {};
+
+    return cancelNdprRequest(id, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type CancelNdprRequestMutationResult = NonNullable<
+  Awaited<ReturnType<typeof cancelNdprRequest>>
+>;
+
+export type CancelNdprRequestMutationError = ErrorType<
+  UnauthorizedResponse | NotFoundResponse
+>;
+
+export const useCancelNdprRequest = <
+  TError = ErrorType<UnauthorizedResponse | NotFoundResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof cancelNdprRequest>>,
+    TError,
+    { id: string },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof cancelNdprRequest>>,
+  TError,
+  { id: string },
+  TContext
+> => {
+  return useMutation(getCancelNdprRequestMutationOptions(options));
+};
+
+export const getRequestNdprRectifyUrl = () => {
+  return `/api/ndpr/rectify`;
+};
+
+export const requestNdprRectify = async (
+  requestNdprRectifyBody: RequestNdprRectifyBody,
+  options?: RequestInit,
+): Promise<NdprRequest> => {
+  return customFetch<NdprRequest>(getRequestNdprRectifyUrl(), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(requestNdprRectifyBody),
+  });
+};
+
+export const getRequestNdprRectifyMutationOptions = <
+  TError = ErrorType<BadRequestResponse | UnauthorizedResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof requestNdprRectify>>,
+    TError,
+    { data: BodyType<RequestNdprRectifyBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof requestNdprRectify>>,
+  TError,
+  { data: BodyType<RequestNdprRectifyBody> },
+  TContext
+> => {
+  const mutationKey = ["requestNdprRectify"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof requestNdprRectify>>,
+    { data: BodyType<RequestNdprRectifyBody> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return requestNdprRectify(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type RequestNdprRectifyMutationResult = NonNullable<
+  Awaited<ReturnType<typeof requestNdprRectify>>
+>;
+export type RequestNdprRectifyMutationBody = BodyType<RequestNdprRectifyBody>;
+export type RequestNdprRectifyMutationError = ErrorType<
+  BadRequestResponse | UnauthorizedResponse
+>;
+
+export const useRequestNdprRectify = <
+  TError = ErrorType<BadRequestResponse | UnauthorizedResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof requestNdprRectify>>,
+    TError,
+    { data: BodyType<RequestNdprRectifyBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof requestNdprRectify>>,
+  TError,
+  { data: BodyType<RequestNdprRectifyBody> },
+  TContext
+> => {
+  return useMutation(getRequestNdprRectifyMutationOptions(options));
+};
+
+export const getRequestNdprRestrictUrl = () => {
+  return `/api/ndpr/restrict`;
+};
+
+export const requestNdprRestrict = async (
+  requestNdprRestrictBody?: RequestNdprRestrictBody,
+  options?: RequestInit,
+): Promise<NdprRequest> => {
+  return customFetch<NdprRequest>(getRequestNdprRestrictUrl(), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(requestNdprRestrictBody),
+  });
+};
+
+export const getRequestNdprRestrictMutationOptions = <
+  TError = ErrorType<UnauthorizedResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof requestNdprRestrict>>,
+    TError,
+    { data: BodyType<RequestNdprRestrictBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof requestNdprRestrict>>,
+  TError,
+  { data: BodyType<RequestNdprRestrictBody> },
+  TContext
+> => {
+  const mutationKey = ["requestNdprRestrict"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof requestNdprRestrict>>,
+    { data: BodyType<RequestNdprRestrictBody> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return requestNdprRestrict(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type RequestNdprRestrictMutationResult = NonNullable<
+  Awaited<ReturnType<typeof requestNdprRestrict>>
+>;
+export type RequestNdprRestrictMutationBody = BodyType<RequestNdprRestrictBody>;
+export type RequestNdprRestrictMutationError = ErrorType<UnauthorizedResponse>;
+
+export const useRequestNdprRestrict = <
+  TError = ErrorType<UnauthorizedResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof requestNdprRestrict>>,
+    TError,
+    { data: BodyType<RequestNdprRestrictBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof requestNdprRestrict>>,
+  TError,
+  { data: BodyType<RequestNdprRestrictBody> },
+  TContext
+> => {
+  return useMutation(getRequestNdprRestrictMutationOptions(options));
 };

@@ -20,6 +20,19 @@ export const usersTable = pgTable("users", {
     .$type<Record<string, unknown>[]>()
     .notNull()
     .default([]),
+  /**
+   * NDPR data-subject state. `dataExportRequestedAt` is set by /ndpr/export
+   * for rate-limiting (one export per 30 days). `dataDeletedAt` is set when
+   * an erase request becomes effective (after 30-day grace window); the
+   * retention engine then anonymises remaining rows.
+   */
+  dataExportRequestedAt: timestamp("data_export_requested_at", { withTimezone: true }),
+  dataDeletedAt: timestamp("data_deleted_at", { withTimezone: true }),
+  /**
+   * Restrict-processing flag (NDPR §2.16). Set by /ndpr/restrict. While
+   * restricted, mutating endpoints reject and the user is read-only.
+   */
+  processingRestrictedAt: timestamp("processing_restricted_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true })
     .notNull()

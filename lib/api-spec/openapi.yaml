@@ -1148,6 +1148,283 @@ paths:
         "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Payout" } } } }
         "401": { $ref: "#/components/responses/Unauthorized" }
 
+  # ---- KYC ---------------------------------------------------------------
+  # Sellers move through tiers 1 → 3 as their rolling-30d GMV crosses
+  # NGN 500k and NGN 5M thresholds. Each tier requires more verifications
+  # (gov_id, bank, CAC, UBO). Documents are uploaded under signed URLs
+  # (or inline encrypted in dev) and reviewed by an admin.
+  /kyc/me:
+    get:
+      operationId: getKycStatus
+      tags: [kyc]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/KycStatus" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /kyc/documents:
+    post:
+      operationId: claimKycDocument
+      tags: [kyc]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [kind, contentType, filename, sizeBytes]
+              properties:
+                kind: { type: string, description: "gov_id | proof_of_address | bank_statement | cac_certificate | ubo_declaration" }
+                contentType: { type: string }
+                filename: { type: string }
+                sizeBytes: { type: integer }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [id, uploadPath]
+                properties:
+                  id: { type: string }
+                  uploadPath: { type: string }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /kyc/documents/{id}/upload:
+    put:
+      operationId: uploadKycDocument
+      tags: [kyc]
+      parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [blobBase64]
+              properties:
+                blobBase64: { type: string }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, sha256]
+                properties:
+                  ok: { type: boolean }
+                  sha256: { type: string }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /kyc/documents/{id}:
+    get:
+      operationId: getKycDocument
+      tags: [kyc]
+      parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [id, kind, status, mimeType, fileName]
+                properties:
+                  id: { type: string }
+                  kind: { type: string }
+                  status: { type: string }
+                  mimeType: { type: string }
+                  fileName: { type: string }
+                  contentBase64: { type: ["string", "null"] }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /kyc/start:
+    post:
+      operationId: startKycVerification
+      tags: [kyc]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [kind]
+              properties:
+                kind: { type: string, description: "gov_id | bank_verification | cac | ubo" }
+                tier: { type: integer, enum: [1, 2, 3] }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [id, status]
+                properties:
+                  id: { type: string }
+                  status: { type: string }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /kyc/verifications/{id}/submit:
+    post:
+      operationId: submitKycVerification
+      tags: [kyc]
+      parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [id, status]
+                properties:
+                  id: { type: string }
+                  status: { type: string }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  # ---- Admin KYC -------------------------------------------------------
+  /admin/kyc/pending:
+    get:
+      operationId: listPendingKyc
+      tags: [admin]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/AdminKycVerification" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /admin/kyc/{id}/approve:
+    post:
+      operationId: approveKycVerification
+      tags: [admin]
+      parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [tier]
+              properties:
+                tier: { type: integer, enum: [1, 2, 3] }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Ok" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /admin/kyc/{id}/reject:
+    post:
+      operationId: rejectKycVerification
+      tags: [admin]
+      parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason: { type: string }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Ok" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  # ---- NDPR ------------------------------------------------------------
+  # Nigeria Data Protection Regulation — data-subject rights. All write
+  # operations are audited and create rows in `ndpr_requests`.
+  /ndpr/requests:
+    get:
+      operationId: listNdprRequests
+      tags: [ndpr]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/NdprRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /ndpr/requests/{id}:
+    get:
+      operationId: getNdprRequest
+      tags: [ndpr]
+      parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/NdprRequest" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /ndpr/export:
+    post:
+      operationId: requestNdprExport
+      tags: [ndpr]
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/NdprRequest" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /ndpr/portability:
+    post:
+      operationId: requestNdprPortability
+      tags: [ndpr]
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/NdprRequest" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /ndpr/erase:
+    post:
+      operationId: requestNdprErase
+      tags: [ndpr]
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/NdprRequest" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /ndpr/requests/{id}/cancel:
+    post:
+      operationId: cancelNdprRequest
+      tags: [ndpr]
+      parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/NdprRequest" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /ndpr/rectify:
+    post:
+      operationId: requestNdprRectify
+      tags: [ndpr]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [patch]
+              properties:
+                patch:
+                  type: object
+                  additionalProperties: true
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/NdprRequest" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /ndpr/restrict:
+    post:
+      operationId: requestNdprRestrict
+      tags: [ndpr]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                lift: { type: boolean }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/NdprRequest" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
 components:
   responses:
     Unauthorized:
@@ -1977,3 +2254,78 @@ components:
           items: { $ref: "#/components/schemas/Payout" }
         payoutThresholdMinor: { type: integer }
         holdDays: { type: integer }
+
+    # KYC tier status returned by GET /kyc/me. The seller sees their
+    # current tier, the rolling-30d-driven required tier, the docs they've
+    # already uploaded, and the list of doc kinds still missing for the
+    # next tier.
+    KycStatus:
+      type: object
+      required: [kycTier, requiredKycTier, rolling30dGmvMinor, thresholds, documents, verifications]
+      properties:
+        kycTier: { type: integer, enum: [1, 2, 3] }
+        requiredKycTier: { type: integer, enum: [1, 2, 3] }
+        rolling30dGmvMinor: { type: integer }
+        thresholds:
+          type: object
+          required: [tier2Minor, tier3Minor]
+          properties:
+            tier2Minor: { type: integer }
+            tier3Minor: { type: integer }
+        documents:
+          type: array
+          items:
+            type: object
+            required: [id, kind, filename, status, createdAtIso]
+            properties:
+              id: { type: string }
+              kind: { type: string }
+              filename: { type: string }
+              status: { type: string }
+              createdAtIso: { type: string }
+        verifications:
+          type: array
+          items:
+            type: object
+            required: [id, kind, status]
+            properties:
+              id: { type: string }
+              kind: { type: string }
+              status: { type: string }
+              targetTier: { type: ["integer", "null"] }
+              reviewerNote: { type: ["string", "null"] }
+              submittedAtIso: { type: ["string", "null"] }
+              reviewedAtIso: { type: ["string", "null"] }
+
+    AdminKycVerification:
+      type: object
+      required: [id, userId, kind, status, createdAtIso]
+      properties:
+        id: { type: string }
+        userId: { type: string }
+        kind: { type: string }
+        status: { type: string }
+        submittedAtIso: { type: ["string", "null"] }
+        createdAtIso: { type: string }
+
+    NdprRequest:
+      type: object
+      required: [id, kind, status, createdAtIso]
+      properties:
+        id: { type: string }
+        kind: { type: string, description: "export | erase | rectify | restrict | portability" }
+        status: { type: string }
+        createdAtIso: { type: string }
+        effectiveAtIso: { type: ["string", "null"] }
+        completedAtIso: { type: ["string", "null"] }
+        cancelledAtIso: { type: ["string", "null"] }
+        bundleToken: { type: ["string", "null"] }
+        bundlePayload:
+          oneOf:
+            - { type: "null" }
+            - { type: object, additionalProperties: true }
+        requestBody:
+          oneOf:
+            - { type: "null" }
+            - { type: object, additionalProperties: true }
+        failureReason: { type: ["string", "null"] }

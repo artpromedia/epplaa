@@ -14,6 +14,8 @@ import {
 import { db, schema } from "./db";
 import { logger } from "./logger";
 import { newPaymentAttemptId, newPaymentIntentId, newPaymentReference } from "./ids";
+import { requiredTierForOrder } from "./kyc";
+import { sellerSanctionsBlocked } from "./sanctions";
 
 /**
  * 5-minute rolling window for the gateway health counters. The router opens
@@ -555,6 +557,22 @@ async function finalizeOrderAfterPayment(
     const sellerHoldUntil = new Date(paidAt.getTime() + holdDays * 24 * 3600 * 1000);
     holdMillis.push(sellerHoldUntil.getTime());
     if (sellerNet <= 0) continue;
+    // KYC tier gate: compute the rolling-30d threshold INCLUDING this
+    // order's contribution. If the seller's verified `kycTier` is below
+    // the requirement, the payout is inserted as `blocked` and held until
+    // KYC clears (re-evaluated by `processDuePayouts`).
+    const { requiredTier } = await requiredTierForOrder(sellerId, sellerNet);
+    const sellerKycTier = seller?.kycTier ?? 1;
+    const kycSatisfied = sellerKycTier >= requiredTier;
+    // Sanctions gate — if the most recent screening is flagged or blocked,
+    // park the payout regardless of tier.
+    const sanctionsBlocked = await sellerSanctionsBlocked(sellerId);
+    const status = !kycSatisfied || sanctionsBlocked ? "blocked" : "pending";
+    const errorMessage = sanctionsBlocked
+      ? "sanctions_review_required"
+      : !kycSatisfied
+        ? `kyc_tier_required:${requiredTier}`
+        : null;
     await db
       .insert(schema.payoutsTable)
       .values({
@@ -565,16 +583,28 @@ async function finalizeOrderAfterPayment(
         intentId,
         amountMinor: sellerNet,
         currencyCode: order.currencyCode,
-        status: "pending",
+        status,
         kind: "seller_share",
         holdUntil: sellerHoldUntil,
         reference: `PO-${orderId}-${sellerId.slice(-6)}`,
         gateway,
+        requiredKycTier: requiredTier,
+        errorMessage,
       })
       .onConflictDoNothing(); // unique (order_id, seller_id) for seller_share
 
     logger.info(
-      { orderId, intentId, sellerId, sellerNet, holdUntil: sellerHoldUntil.toISOString() },
+      {
+        orderId,
+        intentId,
+        sellerId,
+        sellerNet,
+        holdUntil: sellerHoldUntil.toISOString(),
+        status,
+        requiredTier,
+        sellerKycTier,
+        sanctionsBlocked,
+      },
       "seller_payout_scheduled",
     );
   }
@@ -703,6 +733,33 @@ async function loadSellerForUser(userId: string) {
  * Returns the count of payouts processed.
  */
 export async function processDuePayouts(): Promise<{ processed: number; failed: number }> {
+  // First pass — re-evaluate `blocked` payouts. A payout is blocked when
+  // the seller's KYC tier was below the rolling-30d threshold OR the most
+  // recent sanctions screen flagged them. If those conditions are now
+  // resolved we promote `blocked` → `pending` so the second pass can claim
+  // them. We hold the gate by re-checking sanctions live and comparing
+  // sellers.kycTier to the snapshot stored on the payout row.
+  const blocked = await db
+    .select()
+    .from(schema.payoutsTable)
+    .where(eq(schema.payoutsTable.status, "blocked"));
+  for (const payout of blocked) {
+    const seller = await loadSellerForUser(payout.userId);
+    const sellerKycTier = (seller as { kycTier?: number } | null)?.kycTier ?? 1;
+    const required = payout.requiredKycTier ?? 1;
+    const sanctionsBlocked = await sellerSanctionsBlocked(payout.userId);
+    if (sellerKycTier >= required && !sanctionsBlocked) {
+      await db
+        .update(schema.payoutsTable)
+        .set({ status: "pending", errorMessage: null })
+        .where(eq(schema.payoutsTable.id, payout.id));
+      logger.info(
+        { payoutId: payout.id, sellerKycTier, required },
+        "payout_unblocked_kyc_satisfied",
+      );
+    }
+  }
+
   // Atomic claim: flip pending→processing in a single UPDATE...RETURNING
   // so concurrent workers cannot double-pay the same payout. The gateway
   // call below operates only on rows we successfully claimed.
@@ -716,9 +773,41 @@ export async function processDuePayouts(): Promise<{ processed: number; failed: 
       ),
     )
     .returning();
+  // Live re-check at claim time. A seller's compliance posture can change
+  // between scheduling and disbursement (sanctions hit, tier downgrade,
+  // verification revoked). For each just-claimed payout, re-verify and
+  // park anything that no longer passes — bouncing it back to `blocked`
+  // so the next sweep can release it once cleared. Wallet withdrawals
+  // belong to non-seller users and are exempt from the seller gate.
+  const stillDue: typeof due = [];
+  for (const payout of due) {
+    if (payout.kind === "wallet_withdrawal") {
+      stillDue.push(payout);
+      continue;
+    }
+    const seller = await loadSellerForUser(payout.userId);
+    const sellerKycTier = (seller as { kycTier?: number } | null)?.kycTier ?? 1;
+    const required = payout.requiredKycTier ?? 1;
+    const sanctionsBlocked = await sellerSanctionsBlocked(payout.userId);
+    if (sellerKycTier < required || sanctionsBlocked) {
+      const reason = sanctionsBlocked
+        ? "sanctions_review_required"
+        : `kyc_tier_required:${required}`;
+      await db
+        .update(schema.payoutsTable)
+        .set({ status: "blocked", errorMessage: reason })
+        .where(eq(schema.payoutsTable.id, payout.id));
+      logger.warn(
+        { payoutId: payout.id, sellerKycTier, required, sanctionsBlocked },
+        "payout_reblocked_at_claim_time",
+      );
+      continue;
+    }
+    stillDue.push(payout);
+  }
   let processed = 0;
   let failed = 0;
-  for (const payout of due) {
+  for (const payout of stillDue) {
     // Wallet withdrawals carry the destination on the payout row itself
     // (non-seller users have no `sellers.application`). Seller- and
     // manufacturer-share payouts still resolve from the seller profile.

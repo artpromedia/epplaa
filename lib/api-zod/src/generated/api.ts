@@ -1374,3 +1374,235 @@ export const MarkSellerPayoutPaidResponse = zod.object({
   reference: zod.string(),
   paidAtIso: zod.string().nullish(),
 });
+
+export const GetKycStatusResponse = zod.object({
+  kycTier: zod.union([zod.literal(1), zod.literal(2), zod.literal(3)]),
+  requiredKycTier: zod.union([zod.literal(1), zod.literal(2), zod.literal(3)]),
+  rolling30dGmvMinor: zod.number(),
+  thresholds: zod.object({
+    tier2Minor: zod.number(),
+    tier3Minor: zod.number(),
+  }),
+  documents: zod.array(
+    zod.object({
+      id: zod.string(),
+      kind: zod.string(),
+      filename: zod.string(),
+      status: zod.string(),
+      createdAtIso: zod.string(),
+    }),
+  ),
+  verifications: zod.array(
+    zod.object({
+      id: zod.string(),
+      kind: zod.string(),
+      status: zod.string(),
+      targetTier: zod.number().nullish(),
+      reviewerNote: zod.string().nullish(),
+      submittedAtIso: zod.string().nullish(),
+      reviewedAtIso: zod.string().nullish(),
+    }),
+  ),
+});
+
+export const ClaimKycDocumentBody = zod.object({
+  kind: zod
+    .string()
+    .describe(
+      "gov_id | proof_of_address | bank_statement | cac_certificate | ubo_declaration",
+    ),
+  contentType: zod.string(),
+  filename: zod.string(),
+  sizeBytes: zod.number(),
+});
+
+export const UploadKycDocumentParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const UploadKycDocumentBody = zod.object({
+  blobBase64: zod.string(),
+});
+
+export const UploadKycDocumentResponse = zod.object({
+  ok: zod.boolean(),
+  sha256: zod.string(),
+});
+
+export const GetKycDocumentParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const GetKycDocumentResponse = zod.object({
+  id: zod.string(),
+  kind: zod.string(),
+  status: zod.string(),
+  mimeType: zod.string(),
+  fileName: zod.string(),
+  contentBase64: zod.string().nullish(),
+});
+
+export const StartKycVerificationBody = zod.object({
+  kind: zod.string().describe("gov_id | bank_verification | cac | ubo"),
+  tier: zod.union([zod.literal(1), zod.literal(2), zod.literal(3)]).optional(),
+});
+
+export const SubmitKycVerificationParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const SubmitKycVerificationResponse = zod.object({
+  id: zod.string(),
+  status: zod.string(),
+});
+
+export const ListPendingKycResponseItem = zod.object({
+  id: zod.string(),
+  userId: zod.string(),
+  kind: zod.string(),
+  status: zod.string(),
+  submittedAtIso: zod.string().nullish(),
+  createdAtIso: zod.string(),
+});
+export const ListPendingKycResponse = zod.array(ListPendingKycResponseItem);
+
+export const ApproveKycVerificationParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const ApproveKycVerificationBody = zod.object({
+  tier: zod.union([zod.literal(1), zod.literal(2), zod.literal(3)]),
+});
+
+export const ApproveKycVerificationResponse = zod.object({
+  ok: zod.boolean(),
+});
+
+export const RejectKycVerificationParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const RejectKycVerificationBody = zod.object({
+  reason: zod.string(),
+});
+
+export const RejectKycVerificationResponse = zod.object({
+  ok: zod.boolean(),
+});
+
+export const ListNdprRequestsResponseItem = zod.object({
+  id: zod.string(),
+  kind: zod
+    .string()
+    .describe("export | erase | rectify | restrict | portability"),
+  status: zod.string(),
+  createdAtIso: zod.string(),
+  effectiveAtIso: zod.string().nullish(),
+  completedAtIso: zod.string().nullish(),
+  cancelledAtIso: zod.string().nullish(),
+  bundleToken: zod.string().nullish(),
+  bundlePayload: zod
+    .union([zod.null(), zod.record(zod.string(), zod.unknown())])
+    .optional(),
+  requestBody: zod
+    .union([zod.null(), zod.record(zod.string(), zod.unknown())])
+    .optional(),
+  failureReason: zod.string().nullish(),
+});
+export const ListNdprRequestsResponse = zod.array(ListNdprRequestsResponseItem);
+
+export const GetNdprRequestParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const GetNdprRequestResponse = zod.object({
+  id: zod.string(),
+  kind: zod
+    .string()
+    .describe("export | erase | rectify | restrict | portability"),
+  status: zod.string(),
+  createdAtIso: zod.string(),
+  effectiveAtIso: zod.string().nullish(),
+  completedAtIso: zod.string().nullish(),
+  cancelledAtIso: zod.string().nullish(),
+  bundleToken: zod.string().nullish(),
+  bundlePayload: zod
+    .union([zod.null(), zod.record(zod.string(), zod.unknown())])
+    .optional(),
+  requestBody: zod
+    .union([zod.null(), zod.record(zod.string(), zod.unknown())])
+    .optional(),
+  failureReason: zod.string().nullish(),
+});
+
+export const CancelNdprRequestParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const CancelNdprRequestResponse = zod.object({
+  id: zod.string(),
+  kind: zod
+    .string()
+    .describe("export | erase | rectify | restrict | portability"),
+  status: zod.string(),
+  createdAtIso: zod.string(),
+  effectiveAtIso: zod.string().nullish(),
+  completedAtIso: zod.string().nullish(),
+  cancelledAtIso: zod.string().nullish(),
+  bundleToken: zod.string().nullish(),
+  bundlePayload: zod
+    .union([zod.null(), zod.record(zod.string(), zod.unknown())])
+    .optional(),
+  requestBody: zod
+    .union([zod.null(), zod.record(zod.string(), zod.unknown())])
+    .optional(),
+  failureReason: zod.string().nullish(),
+});
+
+export const RequestNdprRectifyBody = zod.object({
+  patch: zod.record(zod.string(), zod.unknown()),
+});
+
+export const RequestNdprRectifyResponse = zod.object({
+  id: zod.string(),
+  kind: zod
+    .string()
+    .describe("export | erase | rectify | restrict | portability"),
+  status: zod.string(),
+  createdAtIso: zod.string(),
+  effectiveAtIso: zod.string().nullish(),
+  completedAtIso: zod.string().nullish(),
+  cancelledAtIso: zod.string().nullish(),
+  bundleToken: zod.string().nullish(),
+  bundlePayload: zod
+    .union([zod.null(), zod.record(zod.string(), zod.unknown())])
+    .optional(),
+  requestBody: zod
+    .union([zod.null(), zod.record(zod.string(), zod.unknown())])
+    .optional(),
+  failureReason: zod.string().nullish(),
+});
+
+export const RequestNdprRestrictBody = zod.object({
+  lift: zod.boolean().optional(),
+});
+
+export const RequestNdprRestrictResponse = zod.object({
+  id: zod.string(),
+  kind: zod
+    .string()
+    .describe("export | erase | rectify | restrict | portability"),
+  status: zod.string(),
+  createdAtIso: zod.string(),
+  effectiveAtIso: zod.string().nullish(),
+  completedAtIso: zod.string().nullish(),
+  cancelledAtIso: zod.string().nullish(),
+  bundleToken: zod.string().nullish(),
+  bundlePayload: zod
+    .union([zod.null(), zod.record(zod.string(), zod.unknown())])
+    .optional(),
+  requestBody: zod
+    .union([zod.null(), zod.record(zod.string(), zod.unknown())])
+    .optional(),
+  failureReason: zod.string().nullish(),
+});

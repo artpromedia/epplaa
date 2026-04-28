@@ -36,6 +36,12 @@ export const payoutsTable = pgTable("payouts", {
   /** Hold release time — funds cannot be paid out before this. */
   holdUntil: timestamp("hold_until", { withTimezone: true }),
   errorMessage: text("error_message"),
+  /**
+   * Required KYC tier at the time this payout was scheduled. Used by
+   * `processDuePayouts` to re-evaluate `blocked` payouts against the
+   * seller's current `kycTier`.
+   */
+  requiredKycTier: integer("required_kyc_tier").notNull().default(1),
   requestedAt: timestamp("requested_at", { withTimezone: true }).notNull().defaultNow(),
   paidAt: timestamp("paid_at", { withTimezone: true }),
 }, (t) => [

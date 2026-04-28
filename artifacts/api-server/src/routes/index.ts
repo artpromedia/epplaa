@@ -29,6 +29,8 @@ import promosRouter from "./promos";
 import fulfillmentRouter from "./fulfillment";
 import boxRouter from "./box";
 import pudoRouter from "./pudo";
+import kycRouter from "./kyc";
+import ndprRouter from "./ndpr";
 
 const router: IRouter = Router();
 
@@ -62,5 +64,7 @@ router.use(promosRouter);
 router.use(fulfillmentRouter);
 router.use(boxRouter);
 router.use(pudoRouter);
+router.use(kycRouter);
+router.use(ndprRouter);
 
 export default router;

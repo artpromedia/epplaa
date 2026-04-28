@@ -11,11 +11,20 @@ export interface PayoutRequest {
   id: string;
   requestedAtIso: string;
   amountMinor: number;
-  status: "pending" | "paid" | "rejected";
+  status:
+    | "pending"
+    | "paid"
+    | "rejected"
+    | "blocked"
+    | "processing"
+    | "scheduled"
+    | "cancelled";
   bankLabel: string;
   bankLast4: string;
   reference: string;
   paidAtIso?: string;
+  errorMessage?: string | null;
+  requiredKycTier?: number | null;
 }
 
 export interface EarningsSummary {
@@ -89,6 +98,9 @@ export function useSellerEarnings(country: Country): {
         bankLast4: p.bankLast4,
         reference: p.reference,
         paidAtIso: p.paidAtIso ?? undefined,
+        errorMessage: (p as { errorMessage?: string | null }).errorMessage ?? null,
+        requiredKycTier:
+          (p as { requiredKycTier?: number | null }).requiredKycTier ?? null,
       })),
     };
   }, [query.data, country.currency.minorPerMajor]);

@@ -12,6 +12,10 @@ import { runDailyReconciliation, recoverStuckRefundLocks } from "./lib/reconcili
 import { processDuePayouts } from "./lib/payments";
 import { drainOutbox } from "./lib/notifications";
 import { autoReturnExpiredBoxReservations } from "./routes/box";
+import { auditMutations } from "./lib/audit";
+import { processDueNdprRequests, requireProcessingNotRestricted } from "./lib/ndpr";
+import { quarterlyResweep } from "./lib/sanctions";
+import { runRetentionSweep } from "./lib/retention";
 
 const app: Express = express();
 
@@ -55,6 +59,18 @@ app.use(cors());
 app.use(express.json({ limit: "1mb" }));
 app.use(express.urlencoded({ extended: true }));
 app.use(clerkMiddleware());
+
+// NDPR Article 19 — Right to Restriction of Processing. Users who flip
+// `processingRestrictedAt` get 423 Locked on every mutating route except
+// the NDPR routes themselves (so they can lift the restriction or cancel
+// an erase). This must run BEFORE the audit middleware so we don't write
+// audit rows for requests we're going to reject.
+app.use("/api", requireProcessingNotRestricted);
+
+// Audit log middleware: every authenticated mutation gets a single
+// hash-chained row in `audit_events` after success. PII in the request
+// body is scrubbed before persistence.
+app.use(auditMutations());
 
 app.use("/api", router);
 
@@ -133,6 +149,45 @@ function startScheduledJobs(): void {
       );
     }, BOX_AUTO_RETURN_INTERVAL_MS);
   }, 120_000);
+  // NDPR processor: every 5 minutes pick up pending requests (assemble
+  // export bundles, apply effective erases, etc.). Erase requests honour
+  // the 30-day grace window via `effective_at`.
+  const NDPR_INTERVAL_MS = 5 * 60 * 1000;
+  setTimeout(() => {
+    void processDueNdprRequests().catch((err) =>
+      logger.error({ err: (err as Error).message }, "ndpr_process_failed"),
+    );
+    setInterval(() => {
+      void processDueNdprRequests().catch((err) =>
+        logger.error({ err: (err as Error).message }, "ndpr_process_failed"),
+      );
+    }, NDPR_INTERVAL_MS);
+  }, 45_000);
+  // Retention engine: daily. Honours the v4.1 retention schedule —
+  // financial records (orders/payouts/payments/audit) preserved 7y;
+  // ephemeral data (notifications, recently viewed, etc.) trimmed.
+  setTimeout(() => {
+    void runRetentionSweep().catch((err) =>
+      logger.error({ err: (err as Error).message }, "retention_sweep_failed"),
+    );
+    setInterval(() => {
+      void runRetentionSweep().catch((err) =>
+        logger.error({ err: (err as Error).message }, "retention_sweep_failed"),
+      );
+    }, DAY_MS);
+  }, 150_000);
+  // Sanctions quarterly resweep: hourly tick, only sellers whose
+  // `next_review_at` is past actually get re-screened.
+  setTimeout(() => {
+    void quarterlyResweep().catch((err) =>
+      logger.error({ err: (err as Error).message }, "sanctions_resweep_failed"),
+    );
+    setInterval(() => {
+      void quarterlyResweep().catch((err) =>
+        logger.error({ err: (err as Error).message }, "sanctions_resweep_failed"),
+      );
+    }, HOUR_MS);
+  }, 180_000);
 }
 
 if (process.env.NODE_ENV !== "test") {

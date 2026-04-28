@@ -745,6 +745,94 @@ export interface EarningsSummary {
   holdDays: number;
 }
 
+export type KycStatusKycTier =
+  (typeof KycStatusKycTier)[keyof typeof KycStatusKycTier];
+
+export const KycStatusKycTier = {
+  NUMBER_1: 1,
+  NUMBER_2: 2,
+  NUMBER_3: 3,
+} as const;
+
+export type KycStatusRequiredKycTier =
+  (typeof KycStatusRequiredKycTier)[keyof typeof KycStatusRequiredKycTier];
+
+export const KycStatusRequiredKycTier = {
+  NUMBER_1: 1,
+  NUMBER_2: 2,
+  NUMBER_3: 3,
+} as const;
+
+export type KycStatusThresholds = {
+  tier2Minor: number;
+  tier3Minor: number;
+};
+
+export type KycStatusDocumentsItem = {
+  id: string;
+  kind: string;
+  filename: string;
+  status: string;
+  createdAtIso: string;
+};
+
+export type KycStatusVerificationsItem = {
+  id: string;
+  kind: string;
+  status: string;
+  /** @nullable */
+  targetTier?: number | null;
+  /** @nullable */
+  reviewerNote?: string | null;
+  /** @nullable */
+  submittedAtIso?: string | null;
+  /** @nullable */
+  reviewedAtIso?: string | null;
+};
+
+export interface KycStatus {
+  kycTier: KycStatusKycTier;
+  requiredKycTier: KycStatusRequiredKycTier;
+  rolling30dGmvMinor: number;
+  thresholds: KycStatusThresholds;
+  documents: KycStatusDocumentsItem[];
+  verifications: KycStatusVerificationsItem[];
+}
+
+export interface AdminKycVerification {
+  id: string;
+  userId: string;
+  kind: string;
+  status: string;
+  /** @nullable */
+  submittedAtIso?: string | null;
+  createdAtIso: string;
+}
+
+export type NdprRequestBundlePayload = null | { [key: string]: unknown };
+
+export type NdprRequestRequestBody = null | { [key: string]: unknown };
+
+export interface NdprRequest {
+  id: string;
+  /** export | erase | rectify | restrict | portability */
+  kind: string;
+  status: string;
+  createdAtIso: string;
+  /** @nullable */
+  effectiveAtIso?: string | null;
+  /** @nullable */
+  completedAtIso?: string | null;
+  /** @nullable */
+  cancelledAtIso?: string | null;
+  /** @nullable */
+  bundleToken?: string | null;
+  bundlePayload?: NdprRequestBundlePayload;
+  requestBody?: NdprRequestRequestBody;
+  /** @nullable */
+  failureReason?: string | null;
+}
+
 /**
  * Sign-in required
  */
@@ -935,4 +1023,88 @@ export type GetSellerEarningsParams = {
 
 export type RequestSellerPayoutBody = {
   amountMinor: number;
+};
+
+export type ClaimKycDocumentBody = {
+  /** gov_id | proof_of_address | bank_statement | cac_certificate | ubo_declaration */
+  kind: string;
+  contentType: string;
+  filename: string;
+  sizeBytes: number;
+};
+
+export type ClaimKycDocument201 = {
+  id: string;
+  uploadPath: string;
+};
+
+export type UploadKycDocumentBody = {
+  blobBase64: string;
+};
+
+export type UploadKycDocument200 = {
+  ok: boolean;
+  sha256: string;
+};
+
+export type GetKycDocument200 = {
+  id: string;
+  kind: string;
+  status: string;
+  mimeType: string;
+  fileName: string;
+  /** @nullable */
+  contentBase64?: string | null;
+};
+
+export type StartKycVerificationBodyTier =
+  (typeof StartKycVerificationBodyTier)[keyof typeof StartKycVerificationBodyTier];
+
+export const StartKycVerificationBodyTier = {
+  NUMBER_1: 1,
+  NUMBER_2: 2,
+  NUMBER_3: 3,
+} as const;
+
+export type StartKycVerificationBody = {
+  /** gov_id | bank_verification | cac | ubo */
+  kind: string;
+  tier?: StartKycVerificationBodyTier;
+};
+
+export type StartKycVerification201 = {
+  id: string;
+  status: string;
+};
+
+export type SubmitKycVerification200 = {
+  id: string;
+  status: string;
+};
+
+export type ApproveKycVerificationBodyTier =
+  (typeof ApproveKycVerificationBodyTier)[keyof typeof ApproveKycVerificationBodyTier];
+
+export const ApproveKycVerificationBodyTier = {
+  NUMBER_1: 1,
+  NUMBER_2: 2,
+  NUMBER_3: 3,
+} as const;
+
+export type ApproveKycVerificationBody = {
+  tier: ApproveKycVerificationBodyTier;
+};
+
+export type RejectKycVerificationBody = {
+  reason: string;
+};
+
+export type RequestNdprRectifyBodyPatch = { [key: string]: unknown };
+
+export type RequestNdprRectifyBody = {
+  patch: RequestNdprRectifyBodyPatch;
+};
+
+export type RequestNdprRestrictBody = {
+  lift?: boolean;
 };

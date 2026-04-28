@@ -1,9 +1,10 @@
 import { Router, type IRouter, type Request, type Response, type NextFunction } from "express";
-import { desc } from "drizzle-orm";
+import { desc, eq } from "drizzle-orm";
 import { db, schema } from "../lib/db";
 import { requireUserId } from "../lib/auth";
 import { runDailyReconciliation } from "../lib/reconciliation";
 import { processDuePayouts } from "../lib/payments";
+import { approveVerification, rejectVerification } from "../lib/kyc";
 
 const router: IRouter = Router();
 
@@ -98,6 +99,65 @@ router.get("/admin/payment-intents", requireAdmin, async (_req, res) => {
       createdAtIso: r.createdAt.toISOString(),
     })),
   );
+});
+
+// ---- KYC review queue (admin) ----
+// We expose a thin admin surface so a compliance reviewer can list
+// pending KYC verifications and approve/reject them. Approval promotes
+// the seller's `kycTier` and sets `nextKycReviewAt` (used by the
+// quarterly resweep). Rejection records the reason and emits an audit
+// event. Both actions are guarded by the same admin allow-list above.
+
+router.get("/admin/kyc/pending", requireAdmin, async (_req, res) => {
+  const rows = await db
+    .select()
+    .from(schema.kycVerificationsTable)
+    .where(eq(schema.kycVerificationsTable.status, "pending_review"))
+    .orderBy(desc(schema.kycVerificationsTable.submittedAt))
+    .limit(100);
+  res.json(
+    rows.map((r) => ({
+      id: r.id,
+      userId: r.userId,
+      kind: r.kind,
+      status: r.status,
+      submittedAtIso: r.submittedAt?.toISOString() ?? null,
+      createdAtIso: r.createdAt.toISOString(),
+    })),
+  );
+});
+
+router.post("/admin/kyc/:id/approve", requireAdmin, async (req, res) => {
+  const reviewerId = requireUserId(req, res);
+  if (!reviewerId) return;
+  const id = String(req.params.id ?? "");
+  // The seller's tier promotion is computed inside `approveVerification`
+  // from the verification row's `targetTier`; we only need the reviewer's
+  // optional note here.
+  const note = String(req.body?.note ?? "approved").trim();
+  const result = await approveVerification(id, reviewerId, note);
+  if (!result.ok) {
+    res.status(404).json({ error: "not_found", detail: result.reason });
+    return;
+  }
+  res.json({ ok: true, kycTier: result.kycTier });
+});
+
+router.post("/admin/kyc/:id/reject", requireAdmin, async (req, res) => {
+  const reviewerId = requireUserId(req, res);
+  if (!reviewerId) return;
+  const id = String(req.params.id ?? "");
+  const reason = String(req.body?.reason ?? "").trim();
+  if (!reason) {
+    res.status(400).json({ error: "bad_request", detail: "reason is required" });
+    return;
+  }
+  const result = await rejectVerification(id, reviewerId, reason);
+  if (!result.ok) {
+    res.status(404).json({ error: "not_found", detail: result.reason });
+    return;
+  }
+  res.json({ ok: true });
 });
 
 export default router;
