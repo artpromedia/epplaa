@@ -1,59 +1,77 @@
 /**
- * Semantic design tokens for the mobile app.
+ * Semantic design tokens for the Epplaa mobile app.
  *
- * These tokens mirror the naming conventions used in web artifacts (index.css)
- * so that multi-artifact projects share a cohesive visual identity.
+ * Mirrors the "Lagos Sunset" palette defined in the sibling web artifact's
+ * src/index.css so both surfaces share a cohesive identity.
  *
- * Replace the placeholder values below with values that match the project's
- * brand. If a sibling web artifact exists, read its index.css and convert the
- * HSL values to hex so both artifacts use the same palette.
+ * - Light: warm cream background, navy primary, sunset coral secondary.
+ * - Dark : deep navy background, sky primary, warm coral secondary.
  *
- * To add dark mode, add a `dark` key with the same token names.
- * The useColors() hook will automatically pick it up.
+ * Hex values were derived directly from the HSL custom properties in
+ * artifacts/epplaa-app/src/index.css. When updating brand colors, update
+ * both files together.
  */
 
 const colors = {
   light: {
-    // Legacy aliases (kept for backward compatibility)
-    text: "#0a0a0a",
-    tint: "#2f95dc",
+    text: "#1c1a18",
+    tint: "#1B2A4A",
 
-    // Core surfaces
-    background: "#ffffff",
-    foreground: "#0a0a0a",
+    background: "#fbeed3",
+    foreground: "#1c1a18",
 
-    // Cards / elevated surfaces
-    card: "#f9f9f9",
-    cardForeground: "#0a0a0a",
+    card: "#fff5d8",
+    cardForeground: "#1c1a18",
 
-    // Primary action color (buttons, links, active states)
-    primary: "#2f95dc",
+    primary: "#1B2A4A",
     primaryForeground: "#ffffff",
 
-    // Secondary / less-emphasis interactive surfaces
-    secondary: "#f0f0f0",
-    secondaryForeground: "#1a1a1a",
+    secondary: "#E6502E",
+    secondaryForeground: "#ffffff",
 
-    // Muted / subdued elements (dividers, timestamps, placeholders)
-    muted: "#f0f0f0",
-    mutedForeground: "#737373",
+    muted: "#ddd8d2",
+    mutedForeground: "#6e6760",
 
-    // Accent highlights (badges, selected items, focus rings)
-    accent: "#f0f0f0",
-    accentForeground: "#1a1a1a",
+    accent: "#1B2A4A",
+    accentForeground: "#ffffff",
 
-    // Destructive actions (delete, error states)
-    destructive: "#ef4444",
+    destructive: "#e5413e",
     destructiveForeground: "#ffffff",
 
-    // Borders and input outlines
-    border: "#e5e5e5",
-    input: "#e5e5e5",
+    border: "#d2cdc8",
+    input: "#d2cdc8",
   },
 
-  // Border radius (in px). Sync from the sibling web artifact's --radius
-  // CSS variable. This value applies to cards, buttons, inputs, and modals.
-  radius: 8,
+  dark: {
+    text: "#ffffff",
+    tint: "#5BA3F5",
+
+    background: "#0F1525",
+    foreground: "#ffffff",
+
+    card: "#171C30",
+    cardForeground: "#ffffff",
+
+    primary: "#5BA3F5",
+    primaryForeground: "#000000",
+
+    secondary: "#FF8855",
+    secondaryForeground: "#000000",
+
+    muted: "#232940",
+    mutedForeground: "#97a0b5",
+
+    accent: "#5BA3F5",
+    accentForeground: "#000000",
+
+    destructive: "#e5413e",
+    destructiveForeground: "#ffffff",
+
+    border: "#2b324a",
+    input: "#2b324a",
+  },
+
+  radius: 12,
 };
 
 export default colors;

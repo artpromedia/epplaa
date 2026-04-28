@@ -355,6 +355,14 @@ class RedisStore implements BucketStore {
 function createBucketStore(): BucketStore {
   const kind = (process.env.RATE_LIMIT_STORE ?? "memory").toLowerCase();
   if (kind === "redis") {
+    // TODO(deploy): provision a managed Redis (Upstash for serverless,
+    // Memorystore for region-pinned VMs) and wire its connection string
+    // into the api-server deployment env as REDIS_URL. Until that's
+    // done, leave RATE_LIMIT_STORE unset (or "memory") in production —
+    // flipping this flag without REDIS_URL fails the boot below, and
+    // any per-replica memory buckets effectively multiply the rate
+    // limit by the replica count, so don't enable horizontal scale-out
+    // on the api-server until this is resolved. Tracked as task #39.
     const url = process.env.REDIS_URL;
     if (!url) {
       throw new Error(

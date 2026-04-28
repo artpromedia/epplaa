@@ -30,9 +30,13 @@ function RootLayoutNav() {
   // See `@/lib/csrf` for the full ship-or-skip rationale.
   useCsrfToken({ enabled: false });
 
+  // Auth and tabs both render header-less stacks; per-screen options
+  // are configured inside each (auth)/_layout.tsx and (tabs)/_layout.tsx.
   return (
-    <Stack screenOptions={{ headerBackTitle: "Back" }}>
-      <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+    <Stack screenOptions={{ headerShown: false }}>
+      <Stack.Screen name="index" />
+      <Stack.Screen name="(auth)" />
+      <Stack.Screen name="(tabs)" />
     </Stack>
   );
 }
