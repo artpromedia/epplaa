@@ -299,6 +299,7 @@ export const VerifyAddressResponse = zod.object({
   placeId: zod.string(),
   confidencePct: zod.number(),
   suggestion: zod.string().nullish(),
+  verificationToken: zod.string().optional(),
   normalized: zod.record(zod.string(), zod.unknown()).optional(),
 });
 

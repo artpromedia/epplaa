@@ -4,6 +4,7 @@ import { db, schema } from "../lib/db";
 import { logger } from "../lib/logger";
 import { aggregateQuotes, verifyAddress } from "../lib/fulfillment";
 import type { ShipmentItem, ShippingAddress } from "../lib/fulfillment";
+import { addressFingerprint, issueVerificationToken } from "../lib/fulfillment/verifyToken";
 
 const router: IRouter = Router();
 
@@ -31,7 +32,16 @@ router.post("/fulfillment/verify-address", async (req, res) => {
   const lng = typeof body.lng === "number" ? body.lng : undefined;
   try {
     const result = await verifyAddress({ countryCode, line, area, city, lat, lng });
-    res.json(result);
+    // Issue a short-lived signed token bound to the address fingerprint
+    // so POST /orders can verify the buyer really went through OkHi for
+    // exactly this address.
+    const addrHash = addressFingerprint({ countryCode, line, area, city, lat, lng });
+    const verificationToken = issueVerificationToken({
+      placeId: result.placeId,
+      confidencePct: result.confidencePct,
+      addrHash,
+    });
+    res.json({ ...result, verificationToken });
   } catch (err) {
     logger.error({ err: (err as Error).message }, "verify_address_failed");
     res.status(500).json({ error: "verify_failed" });

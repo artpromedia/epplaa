@@ -1457,6 +1457,7 @@ components:
         placeId: { type: string }
         confidencePct: { type: integer }
         suggestion: { type: ["string", "null"] }
+        verificationToken: { type: string }
         normalized:
           type: object
           additionalProperties: true

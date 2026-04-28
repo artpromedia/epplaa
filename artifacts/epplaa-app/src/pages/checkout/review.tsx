@@ -196,6 +196,7 @@ export default function CheckoutReview() {
           }
         : {}),
       ...(draft.placeId ? { placeId: draft.placeId } : {}),
+      ...(draft.verificationToken ? { verificationToken: draft.verificationToken } : {}),
     };
 
     const draftOrder: Omit<Order, "id" | "createdAtIso"> = {

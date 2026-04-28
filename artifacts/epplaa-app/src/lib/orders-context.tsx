@@ -52,6 +52,9 @@ export interface OrderFulfillment {
   rateMinor?: number;
   rateRaw?: Record<string, unknown>;
   placeId?: string;
+  /** Signed token from /fulfillment/verify-address; required by the
+   *  server to accept a home-delivery order. */
+  verificationToken?: string;
 }
 
 export interface OrderPayment {

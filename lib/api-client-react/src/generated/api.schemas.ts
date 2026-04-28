@@ -264,6 +264,7 @@ export interface AddressVerification {
   confidencePct: number;
   /** @nullable */
   suggestion?: string | null;
+  verificationToken?: string;
   normalized?: AddressVerificationNormalized;
 }
 

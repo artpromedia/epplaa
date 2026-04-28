@@ -116,9 +116,13 @@ export default function CheckoutAddress() {
           setVerifySuggestion(data.suggestion ?? null);
           setAddr((a) => ({ ...a, confidencePct: data.confidencePct }));
           setVerifyState(data.confidencePct >= 70 ? "ok" : "low");
-          // Persist placeId on the draft so review.tsx can attach it to
-          // the order's fulfillment payload for the dispatcher.
-          set({ placeId: data.placeId });
+          // Persist placeId + signed verification token on the draft so
+          // review.tsx can attach them to the order's fulfillment payload
+          // for the dispatcher (token is required for home delivery).
+          set({
+            placeId: data.placeId,
+            verificationToken: (data as { verificationToken?: string }).verificationToken,
+          });
         })
         .catch(() => setVerifyState("idle"));
     }, 600);

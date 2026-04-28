@@ -25,6 +25,9 @@ export interface CheckoutDraft {
   fulfillmentRate?: FulfillmentRatePick;
   /** OkHi/verify-address result captured for the buyer's chosen address. */
   placeId?: string;
+  /** Signed verification token issued by /fulfillment/verify-address;
+   *  the server requires it to accept a home-delivery order. */
+  verificationToken?: string;
   paymentMethodId?: string;
   channelOverrides?: {
     whatsapp?: boolean;

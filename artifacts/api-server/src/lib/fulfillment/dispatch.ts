@@ -1,4 +1,4 @@
-import { and, eq, sql } from "drizzle-orm";
+import { and, desc, eq, sql } from "drizzle-orm";
 import { db, schema } from "../db";
 import { logger } from "../logger";
 import { enqueueNotification } from "../notifications";
@@ -259,17 +259,34 @@ export async function ingestTrackingEvents(
       .onConflictDoNothing();
     if ((r as { rowCount?: number }).rowCount && (r as { rowCount?: number }).rowCount! > 0) inserted++;
   }
-  // Newest event by occurredAt wins for the projected status.
-  const sorted = [...events].sort((a, b) => b.occurredAt.getTime() - a.occurredAt.getTime());
-  const latest = normalizeShipmentStatus(sorted[0]!.status);
+  // Determine projected status from the newest event in the DB (not just
+  // this batch) so out-of-order webhook deliveries can't regress state.
+  // We also guard terminal states: once delivered/returned/cancelled we
+  // never overwrite with an in-transit status.
+  const TERMINAL = new Set(["delivered", "returned", "cancelled"]);
+  const [newest] = await db
+    .select({ status: schema.shipmentEventsTable.status, occurredAt: schema.shipmentEventsTable.occurredAt })
+    .from(schema.shipmentEventsTable)
+    .where(eq(schema.shipmentEventsTable.shipmentId, shipmentId))
+    .orderBy(desc(schema.shipmentEventsTable.occurredAt))
+    .limit(1);
+  const latest = normalizeShipmentStatus(newest?.status ?? events[0]!.status);
 
-  await db
-    .update(schema.shipmentsTable)
-    .set({
-      status: latest,
-      ...(latest === "delivered" ? { deliveredAt: new Date() } : {}),
-    })
-    .where(eq(schema.shipmentsTable.id, shipmentId));
+  const [current] = await db
+    .select({ status: schema.shipmentsTable.status })
+    .from(schema.shipmentsTable)
+    .where(eq(schema.shipmentsTable.id, shipmentId))
+    .limit(1);
+  const shouldSkip = current && TERMINAL.has(current.status) && !TERMINAL.has(latest);
+  if (!shouldSkip) {
+    await db
+      .update(schema.shipmentsTable)
+      .set({
+        status: latest,
+        ...(latest === "delivered" ? { deliveredAt: new Date() } : {}),
+      })
+      .where(eq(schema.shipmentsTable.id, shipmentId));
+  }
 
   // Project onto the order. We only flip the order to "delivered" when
   // the shipment is delivered; intermediate states stay as-is on the

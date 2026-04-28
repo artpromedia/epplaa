@@ -1,6 +1,7 @@
 import { Router, type IRouter } from "express";
 import { eq, and, desc, inArray } from "drizzle-orm";
 import { db, schema } from "../lib/db";
+import { addressFingerprint, verifyVerificationToken } from "../lib/fulfillment/verifyToken";
 import { requireUserId } from "../lib/auth";
 import { newOrderId, newOtp } from "../lib/ids";
 import { createPaymentIntent } from "../lib/payments";
@@ -278,21 +279,47 @@ router.post("/orders", async (req, res) => {
     return;
   }
 
-  // Server-side address verification gate. Home delivery requires a
-  // verified address (placeId from /fulfillment/verify-address) with
-  // confidence >= 70. Buyers without a verified address are steered
-  // toward Box/PUDO. Pickup-only options skip this gate.
+  // Server-side address verification gate. Home delivery requires the
+  // signed verification token issued by /fulfillment/verify-address, and
+  // the token's bound address fingerprint must match the order's
+  // deliveryAddress. This makes the check tamper-proof: a client cannot
+  // fabricate a placeId / confidencePct without a real OkHi round-trip.
   if (!isPickup) {
-    const placeId = String(fulfillment.placeId ?? "").trim();
-    const deliveryAddress = (fulfillment.deliveryAddress as { confidencePct?: unknown } | undefined) ?? {};
-    const confidencePct = Number(deliveryAddress.confidencePct ?? 0);
-    if (!placeId || !Number.isFinite(confidencePct) || confidencePct < 70) {
+    const deliveryAddress =
+      (fulfillment.deliveryAddress as
+        | { line?: unknown; area?: unknown; city?: unknown; lat?: unknown; lng?: unknown }
+        | undefined) ?? {};
+    const addrLine = String(deliveryAddress.line ?? "").trim();
+    const addrArea = String(deliveryAddress.area ?? "").trim();
+    const addrCity = String(deliveryAddress.city ?? "").trim();
+    const addrLat = typeof deliveryAddress.lat === "number" ? deliveryAddress.lat : undefined;
+    const addrLng = typeof deliveryAddress.lng === "number" ? deliveryAddress.lng : undefined;
+    if (!addrLine) {
+      res.status(400).json({ error: "bad_request", detail: "deliveryAddress required for home delivery" });
+      return;
+    }
+    const expectedHash = addressFingerprint({
+      countryCode,
+      line: addrLine,
+      area: addrArea,
+      city: addrCity,
+      lat: addrLat,
+      lng: addrLng,
+    });
+    const token = String(fulfillment.verificationToken ?? "");
+    const verdict = verifyVerificationToken(token, { addrHash: expectedHash, minConfidence: 70 });
+    if (!verdict.ok) {
       res.status(400).json({
         error: "address_not_verified",
-        detail: "Home delivery requires a verified address. Please re-verify or choose Box/PUDO pickup.",
+        detail: `Home delivery requires a verified address (${verdict.reason}). Please re-verify or choose Box/PUDO pickup.`,
       });
       return;
     }
+    // Persist the verified placeId on the fulfillment payload (don't
+    // trust the client's copy) so dispatch + downstream auditing read
+    // the server-validated value.
+    fulfillment.placeId = verdict.placeId;
+    (deliveryAddress as Record<string, unknown>).confidencePct = verdict.confidencePct;
   }
 
   // Resolve totals + line snapshot server-side. Client-supplied priceMinor
