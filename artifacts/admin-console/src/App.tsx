@@ -7,6 +7,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { Toaster as SonnerToaster } from "@/components/ui/sonner";
 import NotFound from "@/pages/not-found";
 import { ApiAuthBridge } from "@/lib/auth-bridge";
+import { CsrfBridge } from "@/lib/csrf-bridge";
 import "@/lib/api-init";
 import { AdminShell } from "@/components/admin-shell";
 
@@ -115,6 +116,7 @@ function App() {
         <TooltipProvider>
           <SignedIn>
             <ApiAuthBridge />
+            <CsrfBridge />
           </SignedIn>
           <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, "")}>
             <SignedIn>

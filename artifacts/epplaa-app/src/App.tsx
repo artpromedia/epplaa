@@ -19,6 +19,7 @@ import { ReturnsProvider } from "@/lib/returns-context";
 import { SafetyProvider } from "@/lib/safety-context";
 import { OnboardingProvider, useOnboarding } from "@/lib/onboarding-context";
 import { ApiAuthBridge } from "@/lib/auth-bridge";
+import { CsrfBridge } from "@/lib/csrf-bridge";
 import "@/lib/api-init";
 import { AuthGate } from "@/components/auth/auth-gate";
 import { Layout } from "@/components/layout";
@@ -198,6 +199,7 @@ function App() {
     <ClerkProvider publishableKey={CLERK_PUBLISHABLE_KEY}>
       <QueryClientProvider client={queryClient}>
         <ApiAuthBridge />
+        <CsrfBridge />
         <ThemeProvider defaultTheme="system" storageKey="epplaa-theme">
           <TooltipProvider>
             <WouterRouter base={basePath}>

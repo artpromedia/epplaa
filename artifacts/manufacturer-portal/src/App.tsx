@@ -7,6 +7,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { Toaster as SonnerToaster } from "@/components/ui/sonner";
 import NotFound from "@/pages/not-found";
 import { ApiAuthBridge } from "@/lib/auth-bridge";
+import { CsrfBridge } from "@/lib/csrf-bridge";
 import { PortalShell } from "@/components/portal-shell";
 import epplaaLogo from "@assets/epplaa-logo-color_1777409658028.png";
 
@@ -119,6 +120,7 @@ function App() {
         <TooltipProvider>
           <SignedIn>
             <ApiAuthBridge />
+            <CsrfBridge />
           </SignedIn>
           <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, "")}>
             <SignedIn>

@@ -7,9 +7,12 @@ export type ErrorType<T = unknown> = ApiError<T>;
 export type BodyType<T> = T;
 
 export type AuthTokenGetter = () => Promise<string | null> | string | null;
+export type CsrfTokenRefresher = () => Promise<string | null> | string | null;
 
 const NO_BODY_STATUS = new Set([204, 205, 304]);
 const DEFAULT_JSON_ACCEPT = "application/json, application/problem+json";
+const MUTATING_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+const CSRF_HEADER_NAME = "x-csrf-token";
 
 // ---------------------------------------------------------------------------
 // Module-level configuration
@@ -17,6 +20,8 @@ const DEFAULT_JSON_ACCEPT = "application/json, application/problem+json";
 
 let _baseUrl: string | null = null;
 let _authTokenGetter: AuthTokenGetter | null = null;
+let _csrfToken: string | null = null;
+let _csrfRefresher: CsrfTokenRefresher | null = null;
 
 /**
  * Set a base URL that is prepended to every relative request URL
@@ -42,6 +47,45 @@ export function setBaseUrl(url: string | null): void {
  */
 export function setAuthTokenGetter(getter: AuthTokenGetter | null): void {
   _authTokenGetter = getter;
+}
+
+/**
+ * Stash the current CSRF double-submit token. The token is attached as the
+ * `X-CSRF-Token` header on every mutating request (POST/PUT/PATCH/DELETE).
+ * Pair this with `setCsrfTokenRefresher` so the client can transparently
+ * recover from a 403 `csrf_failed` response by fetching a fresh token and
+ * retrying once.
+ *
+ * Pass `null` to clear the token (e.g. on sign-out).
+ */
+export function setCsrfToken(token: string | null): void {
+  _csrfToken = token;
+}
+
+/**
+ * Read the currently stashed CSRF token. Mostly useful for tests and
+ * diagnostics — production code should not need this.
+ */
+export function getCsrfToken(): string | null {
+  return _csrfToken;
+}
+
+/**
+ * Register a callback that re-fetches a CSRF token from the server when a
+ * mutating request is rejected with `403 csrf_failed`. The refresher should
+ * call `GET /api/csrf-token`, set the new token via `setCsrfToken`, and
+ * return it so the in-flight request can be retried.
+ *
+ * Pass `null` to disable automatic refresh (the original 403 will surface).
+ */
+export function setCsrfTokenRefresher(refresher: CsrfTokenRefresher | null): void {
+  _csrfRefresher = refresher;
+}
+
+function isCsrfFailure(data: unknown): boolean {
+  if (!data || typeof data !== "object") return false;
+  const err = (data as Record<string, unknown>).error;
+  return err === "csrf_failed";
 }
 
 function isRequest(input: RequestInfo | URL): input is Request {
@@ -358,14 +402,64 @@ export async function customFetch<T = unknown>(
     }
   }
 
+  // Attach CSRF double-submit token on mutating requests when one is
+  // stashed and the caller hasn't already provided one. The server
+  // exempts bearer-auth requests, but attaching the header for those
+  // too is harmless and means cookie-session callers don't have to
+  // special-case anything.
+  const isMutating = MUTATING_METHODS.has(method);
+  if (isMutating && _csrfToken && !headers.has(CSRF_HEADER_NAME)) {
+    headers.set(CSRF_HEADER_NAME, _csrfToken);
+  }
+
   const requestInfo = { method, url: resolveUrl(input) };
 
   const response = await fetch(input, { ...init, method, headers });
 
   if (!response.ok) {
     const errorData = await parseErrorBody(response, method);
+
+    // Recover from a stale CSRF token: refresh once and retry the same
+    // request with the new value. We only do this for mutating methods
+    // (the only ones the server CSRF-checks) and only when a refresher
+    // is registered. The retry has no recursion so a second 403 is
+    // surfaced normally.
+    if (
+      response.status === 403 &&
+      isMutating &&
+      _csrfRefresher &&
+      isCsrfFailure(errorData)
+    ) {
+      let fresh: string | null = null;
+      try {
+        fresh = await _csrfRefresher();
+      } catch {
+        fresh = null;
+      }
+      if (fresh) {
+        const retryHeaders = new Headers(headers);
+        retryHeaders.set(CSRF_HEADER_NAME, fresh);
+        const retryResponse = await fetch(input, {
+          ...init,
+          method,
+          headers: retryHeaders,
+        });
+        if (!retryResponse.ok) {
+          const retryError = await parseErrorBody(retryResponse, method);
+          throw new ApiError(retryResponse, retryError, requestInfo);
+        }
+        return (await parseSuccessBody(retryResponse, responseType, requestInfo)) as T;
+      }
+    }
+
     throw new ApiError(response, errorData, requestInfo);
   }
 
   return (await parseSuccessBody(response, responseType, requestInfo)) as T;
 }
+
+export const __csrfTestables = {
+  CSRF_HEADER_NAME,
+  MUTATING_METHODS,
+  isCsrfFailure,
+};

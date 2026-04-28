@@ -1,12 +1,39 @@
 type TokenGetter = () => Promise<string | null>;
+type CsrfRefresher = () => Promise<string | null>;
 
 let tokenGetter: TokenGetter | null = null;
+let csrfToken: string | null = null;
+let csrfRefresher: CsrfRefresher | null = null;
 
 export function setApiTokenGetter(g: TokenGetter | null): void {
   tokenGetter = g;
 }
 
+/**
+ * Stash the current CSRF double-submit token. Attached as `X-CSRF-Token`
+ * on every mutating request (POST/PUT/PATCH/DELETE). See
+ * `artifacts/api-server/src/middlewares/csrf.ts` for the server contract.
+ */
+export function setApiCsrfToken(token: string | null): void {
+  csrfToken = token;
+}
+
+export function getApiCsrfToken(): string | null {
+  return csrfToken;
+}
+
+/**
+ * Register a refresher that fetches a fresh CSRF token (typically by
+ * calling `GET /api/csrf-token`) so the client can recover from a 403
+ * `csrf_failed` by retrying once.
+ */
+export function setApiCsrfRefresher(r: CsrfRefresher | null): void {
+  csrfRefresher = r;
+}
+
 const API_PREFIX = "/api";
+const CSRF_HEADER = "X-CSRF-Token";
+const MUTATING = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
 export class ApiError extends Error {
   status: number;
@@ -18,16 +45,21 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(
-  method: string,
-  path: string,
-  body?: unknown,
-): Promise<T> {
-  const url = path.startsWith("http") ? path : `${API_PREFIX}${path}`;
-  const headers: Record<string, string> = {
-    Accept: "application/json",
-  };
-  if (body !== undefined) headers["Content-Type"] = "application/json";
+function isCsrfFailure(body: unknown): boolean {
+  return (
+    !!body &&
+    typeof body === "object" &&
+    (body as Record<string, unknown>).error === "csrf_failed"
+  );
+}
+
+async function buildHeaders(
+  hasBody: boolean,
+  isMutating: boolean,
+  csrfOverride?: string | null,
+): Promise<Record<string, string>> {
+  const headers: Record<string, string> = { Accept: "application/json" };
+  if (hasBody) headers["Content-Type"] = "application/json";
   if (tokenGetter) {
     try {
       const tok = await tokenGetter();
@@ -36,21 +68,66 @@ async function request<T>(
       /* ignore */
     }
   }
-  const res = await fetch(url, {
+  const tokenToSend = csrfOverride ?? csrfToken;
+  if (isMutating && tokenToSend) {
+    headers[CSRF_HEADER] = tokenToSend;
+  }
+  return headers;
+}
+
+async function readResponse(res: Response): Promise<unknown> {
+  const text = await res.text();
+  if (text.length === 0) return null;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return text;
+  }
+}
+
+async function request<T>(
+  method: string,
+  path: string,
+  body?: unknown,
+): Promise<T> {
+  const url = path.startsWith("http") ? path : `${API_PREFIX}${path}`;
+  const isMutating = MUTATING.has(method.toUpperCase());
+  const hasBody = body !== undefined;
+
+  const headers = await buildHeaders(hasBody, isMutating);
+  const init: RequestInit = {
     method,
     headers,
-    body: body !== undefined ? JSON.stringify(body) : undefined,
+    body: hasBody ? JSON.stringify(body) : undefined,
     credentials: "include",
-  });
-  const text = await res.text();
-  let parsed: unknown = null;
-  if (text.length > 0) {
+  };
+
+  let res = await fetch(url, init);
+  let parsed = await readResponse(res);
+
+  // Recover from a stale CSRF token: refresh once and retry. Only meaningful
+  // for cookie-session callers; bearer-auth requests are exempt server-side
+  // so they shouldn't see this 403 in the first place.
+  if (
+    !res.ok &&
+    res.status === 403 &&
+    isMutating &&
+    csrfRefresher &&
+    isCsrfFailure(parsed)
+  ) {
+    let fresh: string | null = null;
     try {
-      parsed = JSON.parse(text);
+      fresh = await csrfRefresher();
     } catch {
-      parsed = text;
+      fresh = null;
+    }
+    if (fresh) {
+      const retryHeaders = await buildHeaders(hasBody, isMutating, fresh);
+      res = await fetch(url, { ...init, headers: retryHeaders });
+      parsed = await readResponse(res);
     }
   }
+
   if (!res.ok) {
     const detail =
       (parsed && typeof parsed === "object" && "error" in (parsed as Record<string, unknown>)
@@ -64,6 +141,7 @@ async function request<T>(
 export const api = {
   get: <T>(path: string) => request<T>("GET", path),
   post: <T>(path: string, body?: unknown) => request<T>("POST", path, body ?? {}),
+  put: <T>(path: string, body?: unknown) => request<T>("PUT", path, body ?? {}),
   patch: <T>(path: string, body?: unknown) => request<T>("PATCH", path, body ?? {}),
   delete: <T>(path: string) => request<T>("DELETE", path),
 };
