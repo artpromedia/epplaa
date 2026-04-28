@@ -132,3 +132,54 @@ Both knobs are env vars on the api-server deployment:
 Per-failure events keep flowing to Sentry regardless, so a Sentry
 issue alert on `tags.subsystem == "rate_limit"` is always available
 as a finer-grained channel.
+
+## Step 5 — Stuck-degraded duration alert (`checkHealthzDegraded`)
+
+The Sentry alert above fires on failure **rate** — >N failures per
+rolling minute. It deliberately misses a slow trickle of failures
+that keeps the watcher in `degraded` for many minutes without ever
+crossing the per-minute threshold. To catch that case we ship a tiny
+probe that pages on streak **duration** instead, by computing
+`now - rateLimitStore.firstFailureAt` from `/healthz` and exiting
+non-zero when it exceeds a threshold.
+
+Wire it into your external uptime check / cron / scheduled job:
+
+```sh
+HEALTHZ_URL="$REPL_API_URL/api/healthz" \
+HEALTHZ_DEGRADED_ALERT_THRESHOLD_MS=300000 \
+  pnpm --filter @workspace/api-server run check-healthz-degraded
+```
+
+Exit codes (any non-zero should page on-call; the codes are kept
+distinct for log triage):
+
+| Code | Meaning                                                       |
+| ---- | ------------------------------------------------------------- |
+| 0    | Healthy, OR `state=degraded` but streak is shorter than the threshold |
+| 1    | Probe error (network failure, non-2xx, malformed body, missing `HEALTHZ_URL`) — the probe itself failed; investigate the probe host before assuming the api is broken |
+| 2    | **Page**: `state=degraded` and streak duration > threshold (or the response shape regressed in a way that prevents evaluation) |
+
+The probe writes a single JSON line to stdout (or stderr on probe
+error) describing what it observed — include that line verbatim in
+the page body so on-call sees the streak duration, threshold, and
+`firstFailureAt` without re-curling `/healthz`.
+
+Tunable env vars (probe-side):
+
+- `HEALTHZ_URL` — **required**, full URL to `/api/healthz`.
+- `HEALTHZ_DEGRADED_ALERT_THRESHOLD_MS` — streak duration that
+  triggers a page. Default `300000` (5 minutes). A missing,
+  non-numeric, zero, or negative value falls back to the default
+  rather than producing a flapping zero-ms threshold.
+- `HEALTHZ_PROBE_TIMEOUT_MS` — fetch timeout for `/healthz`. Default
+  `5000`. Same sanitisation as above.
+
+Set the threshold based on how long you'd tolerate the rate limiter
+degrading open before paging — 5 minutes is a reasonable starting
+point that won't fire on a transient blip but will catch a Redis
+endpoint that's been intermittently failing for a non-trivial window.
+
+This probe is complementary to the Sentry rate-based alert in Step
+4 — keep both wired up. The Sentry alert catches cliff-edge outages
+quickly; this probe catches slow burns the rate alert can miss.
