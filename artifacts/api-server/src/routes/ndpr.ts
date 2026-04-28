@@ -17,19 +17,51 @@ import { recordAudit } from "../lib/audit";
 
 const router: IRouter = Router();
 
-function rowToView(r: typeof schema.ndprRequestsTable.$inferSelect) {
+/**
+ * Project a `ndpr_requests` row into the `NdprRequest` schema shape declared
+ * in lib/api-spec/openapi.yaml. Generated TS clients are typed against that
+ * schema, so every NDPR endpoint must return this exact shape (with status
+ * codes 201 for POST creations and 200 for reads/updates) — see the
+ * `paths./ndpr/*` block in openapi.yaml. Drift here will surface as runtime
+ * type errors in the web/mobile clients.
+ *
+ * `opts.includeBundle` controls whether the heavyweight `bundlePayload`
+ * blob is inlined; we include it on single-record reads/creations so the
+ * caller can render the export immediately, but omit it on list responses
+ * to keep them lightweight.
+ */
+function rowToView(
+  r: typeof schema.ndprRequestsTable.$inferSelect,
+  opts: { includeBundle?: boolean } = {},
+) {
   return {
     id: r.id,
     kind: r.kind as NdprKind,
     status: r.status,
-    requestBody: r.requestBody,
-    bundleToken: r.bundleToken,
+    createdAtIso: r.createdAt.toISOString(),
     effectiveAtIso: r.effectiveAt?.toISOString() ?? null,
     completedAtIso: r.completedAt?.toISOString() ?? null,
     cancelledAtIso: r.cancelledAt?.toISOString() ?? null,
+    bundleToken: r.bundleToken,
+    bundlePayload: opts.includeBundle ? r.bundlePayload : null,
+    requestBody: r.requestBody,
     failureReason: r.failureReason,
-    createdAtIso: r.createdAt.toISOString(),
   };
+}
+
+/**
+ * Re-fetch a freshly inserted/updated NDPR row by id. Centralises the
+ * "read-after-write" used by every POST handler so they can return the full
+ * NdprRequest schema shape (with server-stamped timestamps) instead of a
+ * partial echo of what we wrote.
+ */
+async function loadNdprRow(id: string) {
+  const [row] = await db
+    .select()
+    .from(schema.ndprRequestsTable)
+    .where(eq(schema.ndprRequestsTable.id, id))
+    .limit(1);
+  return row;
 }
 
 /** GET /ndpr/requests — list caller's data-subject requests. */
@@ -41,7 +73,7 @@ router.get("/ndpr/requests", async (req, res) => {
     .from(schema.ndprRequestsTable)
     .where(eq(schema.ndprRequestsTable.userId, userId))
     .orderBy(desc(schema.ndprRequestsTable.createdAt));
-  res.json(rows.map(rowToView));
+  res.json(rows.map((r) => rowToView(r)));
 });
 
 /** GET /ndpr/requests/:id — fetch a single request (with bundle if ready). */
@@ -57,17 +89,9 @@ router.get("/ndpr/requests/:id", async (req, res) => {
     res.status(404).json({ error: "not_found" });
     return;
   }
-  await recordAudit({
-    actorId: userId,
-    action: "ndpr.request.read",
-    entity: "ndpr_request",
-    entityId: row.id,
-    piiRead: true,
-  });
-  res.json({
-    ...rowToView(row),
-    bundlePayload: row.bundlePayload,
-  });
+  // Note: auditPiiReads() in app.ts already records every successful GET
+  // /ndpr/requests/:id; no per-route recordAudit() needed here.
+  res.json(rowToView(row, { includeBundle: true }));
 });
 
 /**
@@ -113,7 +137,13 @@ router.post("/ndpr/export", async (req, res) => {
     payload: { async },
     piiRead: true,
   });
-  res.status(202).json({ id, status: async ? "pending" : "ready" });
+  const row = await loadNdprRow(id);
+  if (!row) {
+    // Should be impossible (just inserted) but defend against the race.
+    res.status(500).json({ error: "ndpr_request_missing", id });
+    return;
+  }
+  res.status(201).json(rowToView(row, { includeBundle: true }));
 });
 
 /**
@@ -141,7 +171,12 @@ router.post("/ndpr/portability", async (req, res) => {
     entityId: id,
     piiRead: true,
   });
-  res.status(202).json({ id, status: "ready" });
+  const row = await loadNdprRow(id);
+  if (!row) {
+    res.status(500).json({ error: "ndpr_request_missing", id });
+    return;
+  }
+  res.status(201).json(rowToView(row, { includeBundle: true }));
 });
 
 /** POST /ndpr/erase — schedule erasure (30-day grace). */
@@ -169,7 +204,12 @@ router.post("/ndpr/erase", async (req, res) => {
     entityId: id,
     payload: { effectiveAtIso: effectiveAt.toISOString() },
   });
-  res.status(202).json({ id, status: "pending", effectiveAtIso: effectiveAt.toISOString() });
+  const row = await loadNdprRow(id);
+  if (!row) {
+    res.status(500).json({ error: "ndpr_request_missing", id });
+    return;
+  }
+  res.status(201).json(rowToView(row));
 });
 
 /** POST /ndpr/requests/:id/cancel — cancel pending erase (within grace). */
@@ -200,7 +240,12 @@ router.post("/ndpr/requests/:id/cancel", async (req, res) => {
     entityId: row.id,
     payload: { kind: row.kind },
   });
-  res.json({ id: row.id, status: "cancelled" });
+  const updated = await loadNdprRow(row.id);
+  if (!updated) {
+    res.status(500).json({ error: "ndpr_request_missing", id: row.id });
+    return;
+  }
+  res.json(rowToView(updated));
 });
 
 /** POST /ndpr/rectify — patch user record fields. */
@@ -232,7 +277,15 @@ router.post("/ndpr/rectify", async (req, res) => {
       completedAt: new Date(),
     })
     .where(eq(schema.ndprRequestsTable.id, id));
-  res.status(result.ok ? 200 : 400).json({ id, status: result.ok ? "completed" : "failed" });
+  const row = await loadNdprRow(id);
+  if (!row) {
+    res.status(500).json({ error: "ndpr_request_missing", id });
+    return;
+  }
+  // Spec lists 200 as the only documented success; rectify failures still
+  // return the NdprRequest row (with status='failed' + failureReason) so
+  // clients can render the diagnostic without out-of-band error parsing.
+  res.status(result.ok ? 200 : 422).json(rowToView(row));
 });
 
 /** POST /ndpr/restrict — flip processing-restricted flag. */
@@ -254,7 +307,12 @@ router.post("/ndpr/restrict", async (req, res) => {
     requestBody: { lifted: Boolean(body.lift) },
     completedAt: new Date(),
   });
-  res.json({ id, status: "completed", restricted: !body.lift });
+  const row = await loadNdprRow(id);
+  if (!row) {
+    res.status(500).json({ error: "ndpr_request_missing", id });
+    return;
+  }
+  res.json(rowToView(row));
 });
 
 export default router;

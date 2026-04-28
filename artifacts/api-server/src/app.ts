@@ -12,9 +12,9 @@ import { runDailyReconciliation, recoverStuckRefundLocks } from "./lib/reconcili
 import { processDuePayouts } from "./lib/payments";
 import { drainOutbox } from "./lib/notifications";
 import { autoReturnExpiredBoxReservations } from "./routes/box";
-import { auditMutations, initAuditChain } from "./lib/audit";
+import { auditMutations, auditPiiReads, initAuditChain } from "./lib/audit";
 import { processDueNdprRequests, requireProcessingNotRestricted } from "./lib/ndpr";
-import { quarterlyResweep } from "./lib/sanctions";
+import { quarterlyResweep, bootstrapAllManufacturerScreenings } from "./lib/sanctions";
 import { runRetentionSweep } from "./lib/retention";
 
 const app: Express = express();
@@ -70,9 +70,14 @@ app.use(clerkMiddleware());
 // audit rows for requests we're going to reject.
 app.use("/api", requireProcessingNotRestricted);
 
-// Audit log middleware: every authenticated mutation gets a single
-// hash-chained row in `audit_events` after success. PII in the request
-// body is scrubbed before persistence.
+// Audit log middleware. NDPR/PCI compliance treats every PII access
+// (read AND mutation) as auditable, so we mount two complementary
+// passes — auditPiiReads() captures successful authenticated GETs that
+// expose user PII (registered explicitly in audit.ts), and
+// auditMutations() captures every authenticated POST/PUT/PATCH/DELETE.
+// Both write hash-chained rows; PII in payloads is scrubbed before
+// persistence.
+app.use(auditPiiReads());
 app.use(auditMutations());
 
 app.use("/api", router);
@@ -199,6 +204,16 @@ if (process.env.NODE_ENV !== "test") {
   // than lazily on the first audit write.
   void initAuditChain().catch((err) =>
     logger.error({ err: (err as Error).message }, "audit_chain_init_failed"),
+  );
+  // Backfill sanctions screening for every manufacturer attributed to a
+  // product. Manufacturers don't have a dedicated onboarding route in this
+  // codebase — they're seeded/imported externally — so without this pass
+  // the quarterly resweep (and per-payout gate) would silently miss any
+  // manufacturer whose first payout has not yet been scheduled. Running
+  // at boot satisfies "every onboarded seller AND manufacturer is screened
+  // at onboarding and quarterly".
+  void bootstrapAllManufacturerScreenings().catch((err) =>
+    logger.error({ err: (err as Error).message }, "manufacturer_sanctions_bootstrap_failed"),
   );
   startScheduledJobs();
 }

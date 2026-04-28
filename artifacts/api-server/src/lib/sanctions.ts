@@ -192,6 +192,54 @@ export async function manufacturerSanctionsBlocked(userId: string): Promise<bool
   return latest.status === "blocked" || latest.status === "flagged";
 }
 
+/**
+ * Boot-time backfill: ensure every distinct manufacturer referenced by any
+ * product has at least one `sanctions_screenings` row. Manufacturers don't
+ * have a dedicated onboarding route in this codebase — they're attributed
+ * to products at seed/import time — so without this pass the quarterly
+ * resweep would silently skip any manufacturer whose first payout has not
+ * yet been scheduled. Calling this from app boot guarantees the resweep
+ * walks the full population and that the very first payout for any
+ * manufacturer never wires before a screen has happened.
+ *
+ * Idempotent: skips manufacturers that already have a row. We screen with
+ * the same authoritative inputs (users.displayName + countryCode) used by
+ * `manufacturerSanctionsBlocked`, so re-running is cheap.
+ */
+export async function bootstrapAllManufacturerScreenings(): Promise<{ screened: number; blocked: number }> {
+  const rows = await db
+    .selectDistinct({ manufacturerUserId: schema.productsTable.manufacturerUserId })
+    .from(schema.productsTable);
+  let screened = 0;
+  let blocked = 0;
+  for (const r of rows) {
+    const userId = r.manufacturerUserId;
+    if (!userId) continue;
+    const [existing] = await db
+      .select({ id: schema.sanctionsScreeningsTable.id })
+      .from(schema.sanctionsScreeningsTable)
+      .where(eq(schema.sanctionsScreeningsTable.userId, userId))
+      .limit(1);
+    if (existing) continue;
+    const [user] = await db
+      .select({ displayName: schema.usersTable.displayName, countryCode: schema.usersTable.countryCode })
+      .from(schema.usersTable)
+      .where(eq(schema.usersTable.clerkId, userId))
+      .limit(1);
+    const result = await screenSubject({
+      userId,
+      name: user?.displayName?.trim() || `Manufacturer ${userId.slice(-6)}`,
+      country: user?.countryCode || "NG",
+    });
+    screened++;
+    if (result.status === "blocked" || result.status === "flagged") blocked++;
+  }
+  if (screened > 0) {
+    logger.info({ screened, blocked }, "manufacturer_sanctions_bootstrap_completed");
+  }
+  return { screened, blocked };
+}
+
 /** Check whether a seller is currently sanctions-blocked from receiving payouts. */
 export async function sellerSanctionsBlocked(userId: string): Promise<boolean> {
   const [latest] = await db

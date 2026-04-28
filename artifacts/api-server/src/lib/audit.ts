@@ -198,6 +198,104 @@ export async function verifyAuditChain(fromSeq = 0): Promise<number | null> {
 }
 
 /**
+ * Centralized registry of PII-bearing GET endpoints. Compliance requires that
+ * EVERY PII access be auditable. Listing patterns here (rather than wiring a
+ * helper into every route file) keeps coverage in one place where it can be
+ * reviewed against schema changes — when a new endpoint that returns user PII
+ * is added, the corresponding entry must land here too. Each entry maps a
+ * request path to the audit action and the entity it touches; entityIdParam
+ * names a route param that identifies the specific row when applicable.
+ *
+ * "PII" here means anything tied to a specific subject's identity, contact,
+ * payment, location, KYC, or behavioural data — not catalogue/discovery data
+ * (products, streams, replays) or anonymous lookups (countries, vapid key).
+ */
+type PiiReadPattern = {
+  readonly match: (path: string) => boolean;
+  readonly action: string;
+  readonly entity: string;
+  readonly entityIdParam?: string;
+};
+const PII_READ_PATTERNS: readonly PiiReadPattern[] = [
+  { match: (p) => p === "/me", action: "user.me.read", entity: "user" },
+  { match: (p) => p === "/cart", action: "cart.read", entity: "cart" },
+  { match: (p) => p === "/checkout-draft", action: "checkoutDraft.read", entity: "checkoutDraft" },
+  { match: (p) => p === "/wallet", action: "wallet.read", entity: "wallet" },
+  { match: (p) => p === "/onboarding", action: "onboarding.read", entity: "user" },
+  { match: (p) => p === "/notification-prefs", action: "notificationPrefs.read", entity: "user" },
+  { match: (p) => p === "/follows", action: "follows.read", entity: "user" },
+  { match: (p) => p === "/wishlist", action: "wishlist.read", entity: "user" },
+  { match: (p) => p === "/recently-viewed", action: "recentlyViewed.read", entity: "user" },
+  { match: (p) => p === "/recent-searches", action: "recentSearches.read", entity: "user" },
+  { match: (p) => p === "/orders", action: "orders.list.read", entity: "order" },
+  { match: (p) => /^\/orders\/[^/]+$/.test(p), action: "order.read", entity: "order", entityIdParam: "orderId" },
+  { match: (p) => /^\/payments\/intents\/[^/]+$/.test(p), action: "paymentIntent.read", entity: "paymentIntent", entityIdParam: "intentId" },
+  { match: (p) => p === "/seller/me", action: "seller.me.read", entity: "seller" },
+  { match: (p) => p === "/seller/listings", action: "seller.listings.read", entity: "seller" },
+  { match: (p) => p === "/seller/orders", action: "seller.orders.read", entity: "seller" },
+  { match: (p) => p === "/seller/streams", action: "seller.streams.read", entity: "seller" },
+  { match: (p) => p === "/seller/earnings", action: "seller.earnings.read", entity: "seller" },
+  { match: (p) => p === "/referrals/me", action: "referrals.read", entity: "user" },
+  { match: (p) => p === "/returns", action: "returns.list.read", entity: "return" },
+  { match: (p) => /^\/returns\/[^/]+$/.test(p), action: "return.read", entity: "return", entityIdParam: "returnId" },
+  { match: (p) => p === "/safety/reports", action: "safety.reports.read", entity: "user" },
+  { match: (p) => p === "/safety/blocked", action: "safety.blocked.read", entity: "user" },
+  { match: (p) => p === "/kyc/me", action: "kyc.me.read", entity: "kyc" },
+  { match: (p) => /^\/kyc\/documents\/[^/]+$/.test(p), action: "kyc.document.read", entity: "kycDocument", entityIdParam: "id" },
+  { match: (p) => p === "/ndpr/requests", action: "ndpr.requests.list.read", entity: "ndprRequest" },
+  { match: (p) => /^\/ndpr\/requests\/[^/]+$/.test(p), action: "ndpr.request.read", entity: "ndprRequest", entityIdParam: "id" },
+  // Admin reads — extra-sensitive because they expose other users' PII.
+  { match: (p) => p === "/admin/payment-intents", action: "admin.paymentIntents.read", entity: "paymentIntent" },
+  { match: (p) => p === "/admin/kyc/pending", action: "admin.kycPending.read", entity: "kycVerification" },
+  { match: (p) => p === "/admin/reconciliation-runs", action: "admin.reconciliationRuns.read", entity: "reconciliationRun" },
+];
+
+function matchPiiReadPattern(path: string): PiiReadPattern | undefined {
+  return PII_READ_PATTERNS.find((p) => p.match(path));
+}
+
+/**
+ * Express middleware: writes a single audit row for every successful PII
+ * read by an authenticated user. Mounted globally (after authentication)
+ * so coverage cannot drift route-by-route. NDPR/PCI compliance treats every
+ * PII access as auditable, not just mutations.
+ */
+export function auditPiiReads() {
+  return (req: Request, res: Response, next: NextFunction): void => {
+    if (req.method !== "GET") {
+      next();
+      return;
+    }
+    const actorId = getUserId(req);
+    if (!actorId) {
+      next();
+      return;
+    }
+    const path = (req.originalUrl.split("?")[0] ?? "").replace(/^\/api/, "");
+    const pattern = matchPiiReadPattern(path);
+    if (!pattern) {
+      next();
+      return;
+    }
+    res.on("finish", () => {
+      if (res.statusCode < 200 || res.statusCode >= 300) return;
+      const entityId = pattern.entityIdParam
+        ? String(req.params[pattern.entityIdParam] ?? "")
+        : actorId;
+      void recordAudit({
+        actorId,
+        action: pattern.action,
+        entity: pattern.entity,
+        entityId,
+        piiRead: true,
+        payload: { method: req.method, path },
+      });
+    });
+    next();
+  };
+}
+
+/**
  * Express middleware: writes a single audit row per authenticated mutation
  * (POST/PUT/PATCH/DELETE) on success (2xx). The audit action is derived from
  * the route path so all sensitive endpoints are covered automatically.
