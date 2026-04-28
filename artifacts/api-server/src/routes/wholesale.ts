@@ -234,7 +234,13 @@ router.post("/wholesale/orders", async (req, res) => {
       .returning();
     freightBookingId = bookingRow.id;
     etaIso = booking.etaIso;
-    initialStatus = booking.status === "booked" ? "booked" : "booked"; // both flow into "booked" — manual_email starts paperwork
+    // Any successful booking — whether the provider returned "booked"
+    // (instant confirmation) or "pending"/"requested" (manual_email forwarder
+    // that has only kicked off paperwork) — moves the wholesale order to
+    // "booked". The freight_bookings row preserves the provider-reported
+    // sub-state for the back office; the wholesale order itself only cares
+    // that *some* booking exists, so we always promote draft → booked here.
+    initialStatus = "booked";
   } catch (err) {
     logger.error({ err: (err as Error).message, orderId }, "wholesale_freight_book_failed");
   }

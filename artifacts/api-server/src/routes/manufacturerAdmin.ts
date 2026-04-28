@@ -50,10 +50,24 @@ router.post("/admin/manufacturers/:manufacturerId/decide", requireRole(ADMIN_ROL
     return;
   }
   const targetStatus = decision === "approve" ? "approved" : decision === "reject" ? "rejected" : "suspended";
+  const manufacturerId = String(req.params.manufacturerId ?? "");
+  // SELECT first so we can capture the *real* pre-update status for the audit
+  // trail — reading row.status off the .returning() row would only show the
+  // post-update value, making the audit payload misleading.
+  const [pre] = await db
+    .select({ id: schema.manufacturersTable.id, status: schema.manufacturersTable.status })
+    .from(schema.manufacturersTable)
+    .where(eq(schema.manufacturersTable.id, manufacturerId))
+    .limit(1);
+  if (!pre) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  const previousStatus = pre.status;
   const [row] = await db
     .update(schema.manufacturersTable)
     .set({ status: targetStatus })
-    .where(eq(schema.manufacturersTable.id, String(req.params.manufacturerId ?? "")))
+    .where(eq(schema.manufacturersTable.id, manufacturerId))
     .returning();
   if (!row) {
     res.status(404).json({ error: "not_found" });
@@ -64,7 +78,7 @@ router.post("/admin/manufacturers/:manufacturerId/decide", requireRole(ADMIN_ROL
     action: `admin.manufacturer.${decision}`,
     entity: "manufacturer",
     entityId: row.id,
-    payload: { previousStatus: row.status, newStatus: targetStatus },
+    payload: { previousStatus, newStatus: targetStatus },
   });
   res.json({ id: row.id, status: row.status });
 });

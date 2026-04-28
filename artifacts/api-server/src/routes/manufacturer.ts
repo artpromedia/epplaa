@@ -478,8 +478,40 @@ router.get("/manufacturer/orders/:orderId", requireManufacturer, async (req, res
 router.post("/manufacturer/orders/:orderId/ship", requireManufacturer, async (req, res) => {
   const mfr = (req as ManufacturerRequest).manufacturer;
   const orderId = String(req.params.orderId ?? "");
-  // State-machine guard: only "booked" → "in_transit". Idempotent: if the
-  // row is already in_transit/at_customs/etc the call is a no-op success.
+  // Resolve current state under the manufacturer-ownership filter so we can
+  // distinguish "not your order / does not exist" (404) from "wrong state for
+  // ship transition" (409) from "already past this point" (200 idempotent).
+  const [existing] = await db
+    .select()
+    .from(schema.wholesaleOrdersTable)
+    .where(
+      and(
+        eq(schema.wholesaleOrdersTable.manufacturerId, mfr.id),
+        eq(schema.wholesaleOrdersTable.id, orderId),
+      ),
+    )
+    .limit(1);
+  if (!existing) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  // Terminal & post-ship states are treated as a no-op success: re-clicking
+  // "Mark shipped" after the carrier has already picked up (or after the
+  // shipment has reached customs / bonded warehouse / buyer) must not return
+  // an error — the manufacturer's intent is satisfied.
+  const POST_SHIP = new Set(["in_transit", "at_customs", "warehoused", "delivered"]);
+  if (POST_SHIP.has(existing.status)) {
+    res.json(rowToWholesaleOrder(existing));
+    return;
+  }
+  // From draft / cancelled the transition is illegal — a manufacturer cannot
+  // ship an order the seller never finalized (and certainly not a cancelled one).
+  if (existing.status !== "booked") {
+    res.status(409).json({ error: "wrong_state", currentStatus: existing.status });
+    return;
+  }
+  // Conditional UPDATE so a concurrent state change cannot race past the
+  // "booked"-only guard between SELECT and UPDATE.
   const [row] = await db
     .update(schema.wholesaleOrdersTable)
     .set({ status: "in_transit" })
@@ -492,7 +524,17 @@ router.post("/manufacturer/orders/:orderId/ship", requireManufacturer, async (re
     )
     .returning();
   if (!row) {
-    res.status(409).json({ error: "wrong_state" });
+    // Lost the race — re-read and treat post-ship states as idempotent success.
+    const [after] = await db
+      .select()
+      .from(schema.wholesaleOrdersTable)
+      .where(eq(schema.wholesaleOrdersTable.id, orderId))
+      .limit(1);
+    if (after && POST_SHIP.has(after.status)) {
+      res.json(rowToWholesaleOrder(after));
+      return;
+    }
+    res.status(409).json({ error: "wrong_state", currentStatus: after?.status ?? "unknown" });
     return;
   }
   await recordAudit({
@@ -500,6 +542,7 @@ router.post("/manufacturer/orders/:orderId/ship", requireManufacturer, async (re
     action: "manufacturer.order.ship",
     entity: "wholesale_order",
     entityId: row.id,
+    payload: { previousStatus: existing.status },
   });
   // Append a customs/timeline event for buyer visibility.
   try {
