@@ -12,10 +12,15 @@ name: Rehearse stuck-degraded page (staging, weekly)
 #   - If Sentry's "new fatal-level issue" rule gets disabled or its
 #     query is mistuned (e.g. someone renames the
 #     `alert:rate_limit_store_stuck_degraded` tag),
-#   - or the fingerprint stops collapsing iterations into one issue
-#     (and on-call would get N pages per outage instead of one),
+#   - or the per-subsystem fingerprint stops collapsing iterations
+#     into one issue (and on-call would get N pages per outage
+#     instead of one),
+#   - or the probe's per-subsystem JSON shape regresses so the
+#     offending subsystem name is missing from the page body,
 #   - or the probe's JSON line stops surviving Sentry's PII scrubber,
 #   - or the GitHub failure-notification channel rotates,
+#   - or the on-call routing for one subsystem (e.g. `db`) silently
+#     drifts away from the other (e.g. `rateLimitStore`),
 #
 # we wouldn't notice until the first real outage — at which point the
 # page either doesn't fire or fires N times. This workflow injects a
@@ -24,10 +29,20 @@ name: Rehearse stuck-degraded page (staging, weekly)
 # asserts the expected Sentry event lands, and then clears the streak
 # so staging is healthy again.
 #
+# It rehearses both subsystems exposed by `/healthz`'s `subsystems`
+# map — `rateLimitStore` AND `db` — as separate matrix entries with
+# their own per-subsystem Sentry fingerprints (so a regression in one
+# subsystem's pager wiring can't be masked by the other). The matrix
+# entries are serialised (`max-parallel: 1`) so each one has a clean
+# slate when its inject -> probe -> verify -> clear cycle runs — if
+# they overlapped, the probe's "worst offender" pick could
+# non-deterministically attribute the page to the other subsystem and
+# the per-entry assertion would flake.
+#
 # Cadence: weekly is enough — the alerting chain doesn't churn fast
 # enough to need per-day rehearsals, and a weekly cadence keeps the
-# rehearsal noise (one Sentry issue per week in the rehearsal
-# project) negligible.
+# rehearsal noise (one Sentry issue per subsystem per week in the
+# rehearsal project) negligible.
 #
 # Required repo configuration (Settings -> Secrets and variables ->
 # Actions). The workflow degrades safely when these are missing — see
@@ -128,10 +143,52 @@ concurrency:
 
 jobs:
   rehearse:
-    name: Inject -> probe -> verify Sentry -> clear
+    name: "Rehearse ${{ matrix.subsystem }}: inject -> probe -> verify Sentry -> clear"
     if: ${{ vars.HEALTHZ_REHEARSAL_ENABLED == '1' }}
     runs-on: ubuntu-latest
     timeout-minutes: 12
+
+    strategy:
+      # Don't let one subsystem's failure short-circuit the other —
+      # if the `db` rehearsal regresses we still want a fresh signal
+      # for `rateLimitStore` (and vice versa) so on-call knows
+      # exactly which pager chain broke.
+      fail-fast: false
+      # Serialise the matrix entries: each one toggles a subsystem on
+      # the *same* staging api-server's in-process watchers. If both
+      # ran concurrently, after both had injected the probe would see
+      # two stuck subsystems at once and the per-entry assertion that
+      # the probe's "worst offender" subsystem matches THIS entry's
+      # subsystem would flake non-deterministically (the probe ranks
+      # by duration then name to pick the offender). Serialising keeps
+      # each entry's inject -> probe -> clear cycle on a clean slate.
+      max-parallel: 1
+      matrix:
+        include:
+          - subsystem: rateLimitStore
+            # Sentry tag VALUE the production probe uses for the
+            # rate-limit pager. Mirrored here so a Sentry inbound
+            # filter or PII scrubber that drops these tags would be
+            # caught by this rehearsal instead of by a real outage.
+            sentry_subsystem_tag: rate_limit
+            sentry_alert_tag: rate_limit_store_stuck_degraded
+            # Per-subsystem fingerprint so the 5 rehearsal events
+            # collapse into 1 issue per subsystem per run. Renaming
+            # this would re-fragment the production grouping too —
+            # the assertion below catches that.
+            sentry_fingerprint: rate_limit_store_stuck_degraded_rehearsal
+          - subsystem: db
+            # Sentry tag values for the db pager. Distinct from the
+            # rate-limit values above so on-call routing rules can
+            # fan out per subsystem (e.g. db pages -> db on-call,
+            # rate-limit pages -> api on-call) and we'd notice if one
+            # got silently merged into the other.
+            sentry_subsystem_tag: db
+            sentry_alert_tag: db_stuck_degraded
+            # Distinct fingerprint per subsystem so a `db` outage
+            # never collapses with a concurrent `rateLimitStore`
+            # outage in Sentry — on-call needs to see both.
+            sentry_fingerprint: stuck_degraded_rehearsal_db
 
     env:
       STAGING_BASE_URL: ${{ vars.HEALTHZ_REHEARSAL_STAGING_BASE_URL }}
@@ -143,10 +200,22 @@ jobs:
       SENTRY_ORG: ${{ vars.HEALTHZ_REHEARSAL_SENTRY_ORG }}
       SENTRY_PROJECT: ${{ vars.HEALTHZ_REHEARSAL_SENTRY_PROJECT }}
       SENTRY_AUTH_TOKEN: ${{ secrets.HEALTHZ_REHEARSAL_SENTRY_AUTH_TOKEN }}
-      # A unique tag value per run so the verification step can poll
-      # Sentry for events from THIS run only — without it we'd see
-      # last week's rehearsal events and falsely pass.
-      RUN_ID_TAG: ${{ github.run_id }}-${{ github.run_attempt }}
+      # Per-matrix-entry values so the inject/probe/forward/verify
+      # steps stay subsystem-agnostic and the per-subsystem detail
+      # lives in the matrix definition above.
+      SUBSYSTEM: ${{ matrix.subsystem }}
+      SENTRY_SUBSYSTEM_TAG: ${{ matrix.sentry_subsystem_tag }}
+      SENTRY_ALERT_TAG: ${{ matrix.sentry_alert_tag }}
+      SENTRY_FINGERPRINT: ${{ matrix.sentry_fingerprint }}
+      # A unique tag value per run AND per subsystem so the
+      # verification step can poll Sentry for events from THIS
+      # entry only — without the subsystem suffix the two matrix
+      # entries' verify queries would cross-contaminate (and the
+      # "5 events -> 1 issue" assertion would see 10 events / 2
+      # issues and fail spuriously). The subsystem suffix is also
+      # surfaced in the chat heads-up below so on-call can tell
+      # which matrix entry started/finished.
+      RUN_ID_TAG: ${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.subsystem }}
       # Optional chat heads-up. NOTIFY_WEBHOOK is empty when the
       # secret is unset, in which case the notify steps no-op.
       NOTIFY_WEBHOOK: ${{ secrets.HEALTHZ_REHEARSAL_NOTIFY_WEBHOOK }}
@@ -227,7 +296,7 @@ jobs:
             -X POST "$STAGING_BASE_URL/api/_rehearsal/inject-stuck-degraded" \
             -H "Content-Type: application/json" \
             -H "X-Rehearsal-Token: $HEALTHZ_REHEARSAL_TOKEN" \
-            --data "{\"subsystem\":\"rateLimitStore\",\"firstFailureAt\":$first_failure_at,\"failureCount\":3}")
+            --data "{\"subsystem\":\"$SUBSYSTEM\",\"firstFailureAt\":$first_failure_at,\"failureCount\":3}")
           body=$(printf '%s' "$resp" | head -n -1)
           code=$(printf '%s' "$resp" | tail -n 1)
           echo "inject response (HTTP $code): $body"
@@ -267,8 +336,14 @@ jobs:
           subsystem=$(printf '%s' "$out" | jq -r '.subsystem // empty')
           outcome=$(printf '%s' "$out" | jq -r '.outcome // empty')
           duration_ms=$(printf '%s' "$out" | jq -r '.durationMs // 0')
-          if [ "$outcome" != "page" ] || [ "$subsystem" != "rateLimitStore" ]; then
-            echo "::error::probe JSON unexpected: outcome=$outcome subsystem=$subsystem"
+          # Assert the probe attributed the page to THIS matrix
+          # entry's subsystem. If it picked a different one, either
+          # (a) the matrix entries were not actually serialised so the
+          # other entry's inject is still in effect, or (b) the
+          # probe's per-subsystem JSON shape regressed and the
+          # `subsystem` field is no longer the offender's name.
+          if [ "$outcome" != "page" ] || [ "$subsystem" != "$SUBSYSTEM" ]; then
+            echo "::error::probe JSON unexpected: outcome=$outcome subsystem=$subsystem (expected outcome=page subsystem=$SUBSYSTEM)"
             exit 1
           fi
           if [ "$duration_ms" -le "$HEALTHZ_DEGRADED_ALERT_THRESHOLD_MS" ]; then
@@ -287,15 +362,16 @@ jobs:
           # (mirrors the per-minute probe's 5-iteration loop).
           for i in 1 2 3 4 5; do
             sentry-cli send-event \
-              --message "rate_limit_store_stuck_degraded REHEARSAL (iteration $i)" \
+              --message "${SENTRY_ALERT_TAG} REHEARSAL (iteration $i)" \
               --level fatal \
-              --tag "subsystem:rate_limit" \
-              --tag "alert:rate_limit_store_stuck_degraded" \
+              --tag "subsystem:${SENTRY_SUBSYSTEM_TAG}" \
+              --tag "alert:${SENTRY_ALERT_TAG}" \
               --tag "rehearsal:1" \
+              --tag "rehearsal_subsystem:${SUBSYSTEM}" \
               --tag "rehearsal_run_id:$RUN_ID_TAG" \
               --tag "scheduler:github-actions" \
               --tag "workflow:rehearse-healthz-degraded" \
-              --fingerprint "rate_limit_store_stuck_degraded_rehearsal" \
+              --fingerprint "${SENTRY_FINGERPRINT}" \
               --extra "probe_output=$out" \
               --extra "iteration=$i" \
               --extra "rehearsal_run=https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
@@ -329,10 +405,14 @@ jobs:
               alert_tag=$(printf '%s' "$resp" | jq -r '.data[0]["tags[alert]"] // empty')
               subsystem_tag=$(printf '%s' "$resp" | jq -r '.data[0]["tags[subsystem]"] // empty')
               rehearsal_tag=$(printf '%s' "$resp" | jq -r '.data[0]["tags[rehearsal]"] // empty')
-              if [ "$alert_tag" != "rate_limit_store_stuck_degraded" ] \
-                 || [ "$subsystem_tag" != "rate_limit" ] \
+              # Per-matrix-entry expected values — the production
+              # pager rules key off (alert, subsystem) and on-call
+              # routing fans out per subsystem, so we assert the
+              # values for THIS entry instead of a hardcoded pair.
+              if [ "$alert_tag" != "$SENTRY_ALERT_TAG" ] \
+                 || [ "$subsystem_tag" != "$SENTRY_SUBSYSTEM_TAG" ] \
                  || [ "$rehearsal_tag" != "1" ]; then
-                echo "::error::ingested event tags mismatched: alert=$alert_tag subsystem=$subsystem_tag rehearsal=$rehearsal_tag"
+                echo "::error::ingested event tags mismatched: alert=$alert_tag subsystem=$subsystem_tag rehearsal=$rehearsal_tag (expected alert=$SENTRY_ALERT_TAG subsystem=$SENTRY_SUBSYSTEM_TAG rehearsal=1)"
                 exit 1
               fi
               # Assert fingerprint dedup — we sent 5 events with the
@@ -424,14 +504,14 @@ jobs:
             -X POST "$STAGING_BASE_URL/api/_rehearsal/clear-stuck-degraded" \
             -H "Content-Type: application/json" \
             -H "X-Rehearsal-Token: $HEALTHZ_REHEARSAL_TOKEN" \
-            --data '{"subsystem":"rateLimitStore"}')
+            --data "{\"subsystem\":\"$SUBSYSTEM\"}")
           body=$(printf '%s' "$resp" | head -n -1)
           code=$(printf '%s' "$resp" | tail -n 1)
           echo "clear response (HTTP $code): $body"
           if [ "$code" != "200" ]; then
             # A failure to clear is itself page-worthy — surface
             # loudly and fail the job so the cleanup never goes silent.
-            echo "::error::clear endpoint returned HTTP $code — staging may be left in a synthetic degraded state, manually POST clear-stuck-degraded"
+            echo "::error::clear endpoint returned HTTP $code for subsystem=$SUBSYSTEM — staging may be left in a synthetic degraded state, manually POST clear-stuck-degraded with that subsystem"
             exit 1
           fi
 
@@ -490,8 +570,11 @@ jobs:
           MATCHED_ISSUE_SHORT: ${{ steps.verify.outputs.matched_issue_short }}
         run: |
           {
-            echo "## Healthz stuck-degraded rehearsal"
+            echo "## Healthz stuck-degraded rehearsal — subsystem: \`$SUBSYSTEM\`"
             echo ""
+            echo "- Subsystem: \`$SUBSYSTEM\`"
+            echo "- Sentry fingerprint: \`$SENTRY_FINGERPRINT\`"
+            echo "- Sentry alert tag: \`$SENTRY_ALERT_TAG\`"
             echo "- Notify (start) status: ${{ steps.notify_start.outcome || 'skipped' }}"
             echo "- Inject status: ${{ steps.inject.outcome }}"
             echo "- Probe status: ${{ steps.probe.outcome }}"
