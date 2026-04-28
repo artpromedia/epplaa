@@ -646,7 +646,7 @@ function BackupCodeSheet({
   );
 }
 
-function BackupCodeWarningBanner({ remaining }: { remaining: number }) {
+export function BackupCodeWarningBanner({ remaining }: { remaining: number }) {
   if (remaining >= 3) return null;
   if (remaining === 0) {
     return (

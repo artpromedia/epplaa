@@ -772,7 +772,7 @@ function BackupCodeSheet({
   );
 }
 
-function BackupCodeWarningBanner({
+export function BackupCodeWarningBanner({
   remaining,
   isDark,
 }: {
