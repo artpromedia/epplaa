@@ -43,4 +43,5 @@ export type EventType =
   | "promo"
   | "referral_payout"
   | "wallet_credit"
-  | "low_stock";
+  | "low_stock"
+  | "box_reservation_expired";

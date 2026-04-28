@@ -71,3 +71,19 @@ export function newRefundId(): string {
 export function newReconciliationId(): string {
   return `rc_${Date.now().toString(36)}_${rand(3).toLowerCase()}`;
 }
+
+export function newShipmentId(): string {
+  return `shp_${Date.now().toString(36)}_${rand(3).toLowerCase()}`;
+}
+
+export function newShipmentEventId(): string {
+  return `se_${Date.now().toString(36)}_${rand(3).toLowerCase()}`;
+}
+
+export function newBoxReservationId(): string {
+  return `box_${Date.now().toString(36)}_${rand(3).toLowerCase()}`;
+}
+
+export function newManifestRunId(): string {
+  return `mfr_${Date.now().toString(36)}_${rand(3).toLowerCase()}`;
+}

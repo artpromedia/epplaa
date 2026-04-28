@@ -1,19 +1,36 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation } from "wouter";
-import { ChevronRight, MapPin, Crosshair, Check } from "lucide-react";
+import { ChevronRight, MapPin, Crosshair, Check, Truck } from "lucide-react";
 import { useTheme } from "@/lib/theme-context";
 import { useCountry } from "@/lib/country-context";
 import { useCheckout } from "@/lib/checkout-context";
 import { OrderAddress } from "@/lib/orders-context";
+import { useCart } from "@/lib/cart-context";
+import { formatPrice } from "@/lib/format";
 import { PageHeader } from "@/components/page-header";
 import { BottomActions, CheckoutSteps } from "./method";
+import {
+  verifyAddress as apiVerifyAddress,
+  rateShipment as apiRateShipment,
+  type RateQuote,
+} from "@workspace/api-client-react";
 
 export default function CheckoutAddress() {
   const { resolvedTheme } = useTheme();
   const isDark = resolvedTheme === "dark";
   const { country } = useCountry();
   const { draft, set } = useCheckout();
+  const { items } = useCart();
   const [, setLocation] = useLocation();
+  const [verifyState, setVerifyState] = useState<"idle" | "loading" | "ok" | "low">("idle");
+  const [placeId, setPlaceId] = useState<string | null>(null);
+  const [verifySuggestion, setVerifySuggestion] = useState<string | null>(null);
+  const [quotes, setQuotes] = useState<RateQuote[] | null>(null);
+  const [quotesLoading, setQuotesLoading] = useState(false);
+  const [quotesError, setQuotesError] = useState<string | null>(null);
+  const verifyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const ratesTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastRatedKey = useRef<string>("");
 
   useEffect(() => {
     if (!draft.fulfillmentOptionId) {
@@ -75,13 +92,127 @@ export default function CheckoutAddress() {
     }));
   }
 
-  const canContinue = addr.street.trim().length >= 4 && addr.area.trim().length >= 2;
+  // OkHi verify-address debounce. Fires whenever the user has typed enough
+  // for it to be worth checking and the pin has actually moved/been set.
+  // We don't run this on every keystroke — wait 600ms of quiet first.
+  useEffect(() => {
+    if (addr.street.trim().length < 4 || addr.area.trim().length < 2) {
+      setVerifyState("idle");
+      return;
+    }
+    if (verifyTimer.current) clearTimeout(verifyTimer.current);
+    verifyTimer.current = setTimeout(() => {
+      setVerifyState("loading");
+      apiVerifyAddress({
+        countryCode: country.code,
+        line: addr.street,
+        area: addr.area,
+        city: addr.city,
+        lat: addr.lat,
+        lng: addr.lng,
+      })
+        .then((data) => {
+          setPlaceId(data.placeId);
+          setVerifySuggestion(data.suggestion ?? null);
+          setAddr((a) => ({ ...a, confidencePct: data.confidencePct }));
+          setVerifyState(data.confidencePct >= 70 ? "ok" : "low");
+          // Persist placeId on the draft so review.tsx can attach it to
+          // the order's fulfillment payload for the dispatcher.
+          set({ placeId: data.placeId });
+        })
+        .catch(() => setVerifyState("idle"));
+    }, 600);
+    return () => {
+      if (verifyTimer.current) clearTimeout(verifyTimer.current);
+    };
+  }, [addr.street, addr.area, addr.city, addr.lat, addr.lng, country.code]);
+
+  // Carrier-rate quote. Once verification clears the 70% bar we ask the
+  // server for live carrier prices. Memoise the payload key so changing
+  // unrelated state doesn't re-rate.
+  const cartItems = useMemo(
+    () => items.map((it) => ({ productId: it.productId, qty: it.qty })),
+    [items],
+  );
+  useEffect(() => {
+    const key = `${verifyState}|${addr.street}|${addr.area}|${cartItems.length}|${draft.fulfillmentOptionId ?? ""}`;
+    if (verifyState !== "ok") {
+      setQuotes(null);
+      setQuotesError(null);
+      return;
+    }
+    if (cartItems.length === 0) return;
+    if (key === lastRatedKey.current) return;
+    if (ratesTimer.current) clearTimeout(ratesTimer.current);
+    ratesTimer.current = setTimeout(() => {
+      lastRatedKey.current = key;
+      setQuotesLoading(true);
+      setQuotesError(null);
+      apiRateShipment({
+        currencyCode: country.currency.code,
+        optionId: draft.fulfillmentOptionId,
+        destination: {
+          line: addr.street,
+          area: addr.area,
+          city: addr.city,
+          countryCode: country.code,
+          lat: addr.lat,
+          lng: addr.lng,
+          placeId,
+        },
+        items: cartItems,
+      })
+        .then((data) => {
+          setQuotes(data.quotes);
+          // Pre-pick the cheapest if the buyer hasn't picked yet.
+          const sorted = [...data.quotes].sort((a, b) => a.priceMinor - b.priceMinor);
+          if (sorted[0] && !draft.fulfillmentRate) {
+            set({
+              fulfillmentRate: {
+                carrier: sorted[0].carrier,
+                service: sorted[0].service,
+                serviceLabel: sorted[0].serviceLabel,
+                priceMinor: sorted[0].priceMinor,
+                currencyCode: sorted[0].currencyCode,
+                etaLabel: sorted[0].etaLabel,
+                raw: (sorted[0].raw as Record<string, unknown> | undefined) ?? {},
+              },
+            });
+          }
+        })
+        .catch((err) => setQuotesError(err instanceof Error ? err.message : "Could not load rates"))
+        .finally(() => setQuotesLoading(false));
+    }, 400);
+    return () => {
+      if (ratesTimer.current) clearTimeout(ratesTimer.current);
+    };
+  }, [verifyState, addr.street, addr.area, cartItems, country.code, country.currency.code, placeId, draft.fulfillmentOptionId, draft.fulfillmentRate, set]);
+
+  const hasUsableConfidence = verifyState === "ok" || addr.confidencePct >= 70;
+  const canContinue =
+    addr.street.trim().length >= 4 &&
+    addr.area.trim().length >= 2 &&
+    hasUsableConfidence &&
+    !!draft.fulfillmentRate;
+
+  function pickQuote(q: RateQuote) {
+    set({
+      fulfillmentRate: {
+        carrier: q.carrier,
+        service: q.service,
+        serviceLabel: q.serviceLabel,
+        priceMinor: q.priceMinor,
+        currencyCode: q.currencyCode,
+        etaLabel: q.etaLabel,
+        raw: (q.raw as Record<string, unknown> | undefined) ?? {},
+      },
+    });
+  }
 
   function next() {
     if (!canContinue) return;
-    const finalConfidence = Math.max(addr.confidencePct, 35);
     set({
-      deliveryAddress: { ...addr, confidencePct: finalConfidence },
+      deliveryAddress: { ...addr, confidencePct: addr.confidencePct },
     });
     setLocation("/checkout/payment");
   }
@@ -312,6 +443,74 @@ export default function CheckoutAddress() {
           >
             <Check className="w-4 h-4 shrink-0" />
             Great pin. Rider will find you easily.
+          </div>
+        )}
+        {verifySuggestion && (
+          <div className={`p-3 rounded-xl text-xs ${isDark ? "bg-white/5 text-white/70" : "bg-stone-100 text-stone-600"}`}>
+            <span className="font-bold">Did you mean: </span>
+            {verifySuggestion}
+          </div>
+        )}
+
+        {hasUsableConfidence && (
+          <div data-testid="rates-section">
+            <h3 className={`text-xs font-bold uppercase tracking-wider mb-2 ${subtle}`}>
+              Pick a courier
+            </h3>
+            {quotesLoading && (
+              <div className={`p-4 rounded-xl text-center text-xs ${subtle}`}>
+                Fetching live carrier prices…
+              </div>
+            )}
+            {quotesError && (
+              <div className={`p-3 rounded-xl text-xs ${
+                isDark ? "bg-[#FF8855]/10 text-[#FF8855]" : "bg-[#E6502E]/10 text-[#E6502E]"
+              }`}>
+                {quotesError}
+              </div>
+            )}
+            <div className="space-y-2">
+              {(quotes ?? []).map((q) => {
+                const id = `${q.carrier}:${q.service}`;
+                const isPicked = draft.fulfillmentRate?.carrier === q.carrier && draft.fulfillmentRate?.service === q.service;
+                return (
+                  <button
+                    key={id}
+                    onClick={() => pickQuote(q)}
+                    data-testid={`rate-${q.carrier}-${q.service.replace(/[^a-z0-9]/gi, "-")}`}
+                    className={`w-full text-left flex items-center gap-3 rounded-xl border p-3 transition-colors ${
+                      isPicked
+                        ? isDark
+                          ? "border-[#5BA3F5] bg-[#5BA3F5]/10"
+                          : "border-[#1B2A4A] bg-[#1B2A4A]/10"
+                        : isDark
+                          ? "border-white/10 bg-white/5"
+                          : "border-stone-400/35 bg-white"
+                    }`}
+                  >
+                    <div className={`w-9 h-9 rounded-full flex items-center justify-center ${
+                      isPicked
+                        ? isDark ? "bg-[#5BA3F5] text-black" : "bg-[#1B2A4A] text-white"
+                        : isDark ? "bg-white/10 text-white/70" : "bg-stone-200 text-stone-600"
+                    }`}>
+                      <Truck className="w-4 h-4" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-baseline justify-between gap-2">
+                        <p className="font-bold text-sm">{q.serviceLabel}</p>
+                        <p className="text-sm font-bold">
+                          {q.priceMinor === 0 ? "FREE" : formatPrice(q.priceMinor, country)}
+                        </p>
+                      </div>
+                      <p className={`text-[11px] mt-0.5 ${subtle}`}>
+                        {q.carrier.toUpperCase()} · {q.etaLabel}
+                      </p>
+                    </div>
+                    {isPicked && <Check className={`w-4 h-4 shrink-0 ${isDark ? "text-[#5BA3F5]" : "text-[#1B2A4A]"}`} />}
+                  </button>
+                );
+              })}
+            </div>
           </div>
         )}
       </div>

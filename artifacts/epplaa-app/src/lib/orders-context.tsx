@@ -44,6 +44,14 @@ export interface OrderFulfillment {
   locationName?: string;
   locationAddress?: string;
   deliveryAddress?: OrderAddress;
+  // Carrier selection captured from the rates picker so the server can
+  // reproduce the exact quote at dispatch time without re-quoting.
+  carrier?: string;
+  service?: string;
+  serviceLabel?: string;
+  rateMinor?: number;
+  rateRaw?: Record<string, unknown>;
+  placeId?: string;
 }
 
 export interface OrderPayment {
@@ -57,6 +65,28 @@ export interface OrderNotificationPrefs {
   sms: boolean;
   whatsappNumber?: string;
   smsNumber?: string;
+}
+
+export interface ShipmentEventView {
+  id: string;
+  status: string;
+  rawStatus?: string;
+  note?: string;
+  location?: string;
+  occurredAtIso: string;
+}
+
+export interface ShipmentView {
+  id: string;
+  carrier: string;
+  service: string;
+  status: string;
+  carrierRef?: string | null;
+  trackingUrl?: string | null;
+  labelUrl?: string | null;
+  shippedAtIso?: string | null;
+  deliveredAtIso?: string | null;
+  events: ShipmentEventView[];
 }
 
 export interface Order {
@@ -83,6 +113,7 @@ export interface Order {
   pickupOTP?: string;
   etaLabel: string;
   paidAtIso?: string | null;
+  shipment?: ShipmentView | null;
 }
 
 export interface PlacedOrder extends Order {
@@ -124,6 +155,27 @@ function fromApi(o: ApiOrder): Order {
     pickupOTP: o.pickupOtp ?? undefined,
     etaLabel: o.etaLabel,
     paidAtIso: o.paidAtIso ?? null,
+    shipment: o.shipment
+      ? {
+          id: o.shipment.id,
+          carrier: o.shipment.carrier,
+          service: o.shipment.service,
+          status: o.shipment.status,
+          carrierRef: o.shipment.carrierRef ?? null,
+          trackingUrl: o.shipment.trackingUrl ?? null,
+          labelUrl: o.shipment.labelUrl ?? null,
+          shippedAtIso: o.shipment.shippedAtIso ?? null,
+          deliveredAtIso: o.shipment.deliveredAtIso ?? null,
+          events: (o.shipment.events ?? []).map((e) => ({
+            id: e.id,
+            status: e.status,
+            rawStatus: e.rawStatus,
+            note: e.note,
+            location: e.location,
+            occurredAtIso: e.occurredAtIso,
+          })),
+        }
+      : null,
   };
 }
 

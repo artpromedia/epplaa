@@ -3,6 +3,9 @@ import { eq, and, desc } from "drizzle-orm";
 import { db, schema } from "../lib/db";
 import { requireUserId } from "../lib/auth";
 import { newReturnId, newWalletTxnId } from "../lib/ids";
+import { logger } from "../lib/logger";
+import { getCarrier } from "../lib/fulfillment";
+import type { DispatchRequest, ShippingAddress } from "../lib/fulfillment";
 
 const router: IRouter = Router();
 
@@ -34,6 +37,9 @@ function rowToReturn(r: typeof schema.returnsTable.$inferSelect) {
     status: r.status,
     timeline: r.timeline,
     dispute: r.dispute,
+    pickupLabelUrl: r.pickupLabelUrl || null,
+    pickupCarrierRef: r.pickupCarrierRef || null,
+    pickupCarrier: r.pickupCarrier || null,
     createdAtIso: r.createdAt.toISOString(),
   };
 }
@@ -142,6 +148,135 @@ router.post("/returns/:returnId/transitions", async (req, res) => {
     .returning();
   await maybeRefundWallet(userId, row);
   res.json(rowToReturn(row));
+});
+
+/**
+ * POST /returns/:returnId/pickup-label
+ *
+ * Issue a reverse-pickup label for a return. The original shipment's
+ * carrier is used by default (so the buyer drops the parcel back where
+ * the rider can collect it most easily). Idempotent: a return that
+ * already has a label returns the existing one rather than creating a
+ * second waybill.
+ */
+router.post("/returns/:returnId/pickup-label", async (req, res) => {
+  const userId = requireUserId(req, res);
+  if (!userId) return;
+  const [ret] = await db
+    .select()
+    .from(schema.returnsTable)
+    .where(and(eq(schema.returnsTable.userId, userId), eq(schema.returnsTable.id, req.params.returnId)))
+    .limit(1);
+  if (!ret) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  // Idempotent reuse.
+  if (ret.pickupLabelUrl && ret.pickupCarrierRef) {
+    res.json({
+      labelUrl: ret.pickupLabelUrl,
+      carrierRef: ret.pickupCarrierRef,
+      carrier: ret.pickupCarrier,
+      reused: true,
+    });
+    return;
+  }
+
+  const [order] = await db
+    .select()
+    .from(schema.ordersTable)
+    .where(eq(schema.ordersTable.id, ret.orderId))
+    .limit(1);
+  if (!order) {
+    res.status(404).json({ error: "order_not_found" });
+    return;
+  }
+  const [shipment] = await db
+    .select()
+    .from(schema.shipmentsTable)
+    .where(eq(schema.shipmentsTable.orderId, ret.orderId))
+    .limit(1);
+  // Fall back to Shipbubble when the original shipment is missing (legacy
+  // orders) so the buyer can still get a return label.
+  const carrierCode = shipment?.carrier ?? "shipbubble";
+  const carrier = getCarrier(carrierCode);
+
+  const fulfillment = (order.fulfillment as Record<string, unknown>) ?? {};
+  const da = (fulfillment.deliveryAddress as Record<string, unknown> | undefined) ?? {};
+  const pickupAddress: ShippingAddress = {
+    line: String(da.street ?? ""),
+    area: String(da.area ?? ""),
+    city: String(da.city ?? ""),
+    countryCode: order.countryCode,
+    lat: typeof da.lat === "number" ? (da.lat as number) : undefined,
+    lng: typeof da.lng === "number" ? (da.lng as number) : undefined,
+    placeId: typeof da.placeId === "string" ? (da.placeId as string) : undefined,
+  };
+
+  const dispatchReq: DispatchRequest = {
+    orderId: order.id,
+    service: shipment?.service ?? `${carrierCode}:standard`,
+    rate: {
+      carrier: carrierCode,
+      service: shipment?.service ?? `${carrierCode}:standard`,
+      serviceLabel: "Reverse pickup",
+      priceMinor: 0,
+      currencyCode: order.currencyCode,
+      etaLabel: "1-3 business days",
+      etaDaysMin: 1,
+      etaDaysMax: 3,
+      raw: {},
+    },
+    origin: pickupAddress,
+    destination: {
+      line: "Epplaa Returns Hub",
+      area: "Ikoyi",
+      city: "Lagos",
+      countryCode: "NG",
+    },
+    items: ((order.items as Array<{ productId: string; qty: number; priceMinor: number }>) ?? []).map((it) => ({
+      productId: it.productId,
+      qty: it.qty,
+      valueMinor: it.priceMinor * it.qty,
+    })),
+    currencyCode: order.currencyCode,
+  };
+
+  let label;
+  try {
+    label = await carrier.reverse(dispatchReq);
+  } catch (err) {
+    logger.error({ err: (err as Error).message, returnId: ret.id }, "reverse_label_failed");
+    res.status(502).json({ error: "carrier_failed", detail: (err as Error).message });
+    return;
+  }
+
+  const timeline = ([...(ret.timeline as TimelineEvent[])]).concat([
+    { status: "label_issued", atIso: new Date().toISOString(), note: `Reverse pickup ${label.carrierRef}` },
+  ]);
+  const [updated] = await db
+    .update(schema.returnsTable)
+    .set({
+      pickupLabelUrl: label.labelUrl,
+      pickupCarrierRef: label.carrierRef,
+      pickupCarrier: carrierCode,
+      timeline,
+    })
+    .where(eq(schema.returnsTable.id, ret.id))
+    .returning();
+  if (shipment) {
+    await db
+      .update(schema.shipmentsTable)
+      .set({ reverseLabelUrl: label.labelUrl, reverseCarrierRef: label.carrierRef })
+      .where(eq(schema.shipmentsTable.id, shipment.id));
+  }
+  res.json({
+    labelUrl: updated.pickupLabelUrl,
+    carrierRef: updated.pickupCarrierRef,
+    carrier: updated.pickupCarrier,
+    trackingUrl: label.trackingUrl,
+    reused: false,
+  });
 });
 
 router.post("/returns/:returnId/messages", async (req, res) => {

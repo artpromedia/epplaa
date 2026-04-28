@@ -188,6 +188,34 @@ export type OrderTotalsMinor = { [key: string]: unknown };
 
 export type OrderPromo = { [key: string]: unknown };
 
+export interface ShipmentEvent {
+  id: string;
+  status: string;
+  rawStatus?: string;
+  note?: string;
+  location?: string;
+  occurredAtIso: string;
+}
+
+export interface Shipment {
+  id: string;
+  orderId: string;
+  carrier: string;
+  service: string;
+  /** @nullable */
+  carrierRef?: string | null;
+  /** @nullable */
+  trackingUrl?: string | null;
+  /** @nullable */
+  labelUrl?: string | null;
+  status: string;
+  /** @nullable */
+  shippedAtIso?: string | null;
+  /** @nullable */
+  deliveredAtIso?: string | null;
+  events: ShipmentEvent[];
+}
+
 export interface Order {
   id: string;
   userId: string;
@@ -216,6 +244,70 @@ export interface Order {
   /** @nullable */
   settledAtIso?: string | null;
   createdAtIso: string;
+  shipment?: Shipment | null;
+}
+
+export interface VerifyAddressBody {
+  countryCode: string;
+  line: string;
+  area?: string;
+  city?: string;
+  lat?: number;
+  lng?: number;
+}
+
+export type AddressVerificationNormalized = { [key: string]: unknown };
+
+export interface AddressVerification {
+  ok: boolean;
+  placeId: string;
+  confidencePct: number;
+  /** @nullable */
+  suggestion?: string | null;
+  normalized?: AddressVerificationNormalized;
+}
+
+export type RateShipmentBodyDestination = { [key: string]: unknown };
+
+export type RateShipmentBodyItemsItem = {
+  productId: string;
+  qty: number;
+};
+
+export interface RateShipmentBody {
+  currencyCode?: string;
+  optionId?: string;
+  destination: RateShipmentBodyDestination;
+  items: RateShipmentBodyItemsItem[];
+}
+
+export type RateQuoteRaw = { [key: string]: unknown };
+
+export interface RateQuote {
+  carrier: string;
+  service: string;
+  serviceLabel: string;
+  priceMinor: number;
+  currencyCode: string;
+  etaLabel: string;
+  etaDaysMin?: number;
+  etaDaysMax?: number;
+  raw?: RateQuoteRaw;
+}
+
+export interface RateShipmentResponse {
+  quotes: RateQuote[];
+}
+
+export interface BoxUnlockBody {
+  reservationId: string;
+  otp: string;
+}
+
+export interface BoxUnlockResponse {
+  ok: boolean;
+  reservationId: string;
+  collectedAtIso: string;
 }
 
 export interface PlaceOrderBody {

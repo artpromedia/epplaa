@@ -4,12 +4,14 @@ import pinoHttp from "pino-http";
 import { clerkMiddleware } from "@clerk/express";
 import router from "./routes";
 import webhooksRouter from "./routes/webhooks";
+import fulfillmentWebhooksRouter from "./routes/fulfillmentWebhooks";
 import { logger } from "./lib/logger";
 import { CLERK_PROXY_PATH, clerkProxyMiddleware } from "./middlewares/clerkProxyMiddleware";
 import { seedDatabaseIfEmpty } from "./lib/seed";
 import { runDailyReconciliation, recoverStuckRefundLocks } from "./lib/reconciliation";
 import { processDuePayouts } from "./lib/payments";
 import { drainOutbox } from "./lib/notifications";
+import { autoReturnExpiredBoxReservations } from "./routes/box";
 
 const app: Express = express();
 
@@ -22,6 +24,15 @@ app.use(CLERK_PROXY_PATH, clerkProxyMiddleware());
 // using secret key; Flutterwave: equality check of `verif-hash` header;
 // DevMock: sha256 of body using a static dev secret).
 app.use("/api/webhooks", express.raw({ type: "*/*", limit: "1mb" }), webhooksRouter);
+
+// Carrier tracking webhooks ALSO need the raw body for HMAC SHA256 checks.
+// Mounted before express.json() so the signature verification sees the
+// exact bytes the carrier signed.
+app.use(
+  "/api/fulfillment/webhooks",
+  express.raw({ type: "*/*", limit: "1mb" }),
+  fulfillmentWebhooksRouter,
+);
 
 app.use(
   pinoHttp({
@@ -108,6 +119,20 @@ function startScheduledJobs(): void {
       );
     }, OUTBOX_INTERVAL_MS);
   }, 15_000);
+  // Box reservation auto-return: every 15 minutes. The default hold window
+  // is 72h (BOX_RESERVATION_HOURS), and the WHERE clause + status guard
+  // makes overlapping ticks a no-op.
+  const BOX_AUTO_RETURN_INTERVAL_MS = 15 * 60 * 1000;
+  setTimeout(() => {
+    void autoReturnExpiredBoxReservations().catch((err) =>
+      logger.error({ err: (err as Error).message }, "box_auto_return_failed"),
+    );
+    setInterval(() => {
+      void autoReturnExpiredBoxReservations().catch((err) =>
+        logger.error({ err: (err as Error).message }, "box_auto_return_failed"),
+      );
+    }, BOX_AUTO_RETURN_INTERVAL_MS);
+  }, 120_000);
 }
 
 if (process.env.NODE_ENV !== "test") {

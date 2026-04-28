@@ -236,6 +236,41 @@ paths:
             application/json:
               schema: { type: array, items: { $ref: "#/components/schemas/FulfillmentLocation" } }
 
+  /fulfillment/verify-address:
+    post:
+      operationId: verifyAddress
+      tags: [fulfillment]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/VerifyAddressBody" } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/AddressVerification" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+
+  /fulfillment/rates:
+    post:
+      operationId: rateShipment
+      tags: [fulfillment]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/RateShipmentBody" } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/RateShipmentResponse" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+
+  /box/unlock:
+    post:
+      operationId: unlockBoxReservation
+      tags: [fulfillment]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/BoxUnlockBody" } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/BoxUnlockResponse" } } } }
+        "403": { description: Wrong OTP }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { description: Reservation closed }
+
   /promo-codes/apply:
     post:
       operationId: applyPromoCode
@@ -1376,6 +1411,107 @@ components:
         holdUntilIso: { type: ["string", "null"] }
         settledAtIso: { type: ["string", "null"] }
         createdAtIso: { type: string }
+        shipment: { oneOf: [ { $ref: "#/components/schemas/Shipment" }, { type: "null" } ] }
+    Shipment:
+      type: object
+      required: [id, orderId, carrier, service, status, events]
+      properties:
+        id: { type: string }
+        orderId: { type: string }
+        carrier: { type: string }
+        service: { type: string }
+        carrierRef: { type: ["string", "null"] }
+        trackingUrl: { type: ["string", "null"] }
+        labelUrl: { type: ["string", "null"] }
+        status: { type: string }
+        shippedAtIso: { type: ["string", "null"] }
+        deliveredAtIso: { type: ["string", "null"] }
+        events:
+          type: array
+          items: { $ref: "#/components/schemas/ShipmentEvent" }
+    ShipmentEvent:
+      type: object
+      required: [id, status, occurredAtIso]
+      properties:
+        id: { type: string }
+        status: { type: string }
+        rawStatus: { type: string }
+        note: { type: string }
+        location: { type: string }
+        occurredAtIso: { type: string }
+    VerifyAddressBody:
+      type: object
+      required: [countryCode, line]
+      properties:
+        countryCode: { type: string }
+        line: { type: string }
+        area: { type: string }
+        city: { type: string }
+        lat: { type: number }
+        lng: { type: number }
+    AddressVerification:
+      type: object
+      required: [ok, placeId, confidencePct]
+      properties:
+        ok: { type: boolean }
+        placeId: { type: string }
+        confidencePct: { type: integer }
+        suggestion: { type: ["string", "null"] }
+        normalized:
+          type: object
+          additionalProperties: true
+    RateShipmentBody:
+      type: object
+      required: [destination, items]
+      properties:
+        currencyCode: { type: string }
+        optionId: { type: string }
+        destination:
+          type: object
+          additionalProperties: true
+        items:
+          type: array
+          items:
+            type: object
+            required: [productId, qty]
+            properties:
+              productId: { type: string }
+              qty: { type: integer }
+    RateQuote:
+      type: object
+      required: [carrier, service, serviceLabel, priceMinor, currencyCode, etaLabel]
+      properties:
+        carrier: { type: string }
+        service: { type: string }
+        serviceLabel: { type: string }
+        priceMinor: { type: integer }
+        currencyCode: { type: string }
+        etaLabel: { type: string }
+        etaDaysMin: { type: integer }
+        etaDaysMax: { type: integer }
+        raw:
+          type: object
+          additionalProperties: true
+    RateShipmentResponse:
+      type: object
+      required: [quotes]
+      properties:
+        quotes:
+          type: array
+          items: { $ref: "#/components/schemas/RateQuote" }
+    BoxUnlockBody:
+      type: object
+      required: [reservationId, otp]
+      properties:
+        reservationId: { type: string }
+        otp: { type: string }
+    BoxUnlockResponse:
+      type: object
+      required: [ok, reservationId, collectedAtIso]
+      properties:
+        ok: { type: boolean }
+        reservationId: { type: string }
+        collectedAtIso: { type: string }
     PlaceOrderBody:
       type: object
       additionalProperties: true

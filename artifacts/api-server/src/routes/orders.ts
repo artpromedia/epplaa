@@ -46,10 +46,52 @@ function rowToOrder(r: typeof schema.ordersTable.$inferSelect) {
     gateway: r.gateway,
     gatewayReference: r.gatewayReference,
     paymentIntentId: r.paymentIntentId,
+    shipmentId: r.shipmentId ?? null,
+    trackingUrl: r.trackingUrl ?? null,
     paidAtIso: r.paidAt?.toISOString() ?? null,
     holdUntilIso: r.holdUntil?.toISOString() ?? null,
     settledAtIso: r.settledAt?.toISOString() ?? null,
     createdAtIso: r.createdAt.toISOString(),
+  };
+}
+
+/**
+ * Project a shipment + its events into the order detail payload. Returned
+ * as `shipment` on `GET /orders/:id`. Null when the order has not been
+ * dispatched yet (e.g. cash on delivery, unpaid).
+ */
+async function loadShipmentForOrder(orderId: string) {
+  const [shipment] = await db
+    .select()
+    .from(schema.shipmentsTable)
+    .where(eq(schema.shipmentsTable.orderId, orderId))
+    .limit(1);
+  if (!shipment) return null;
+  const events = await db
+    .select()
+    .from(schema.shipmentEventsTable)
+    .where(eq(schema.shipmentEventsTable.shipmentId, shipment.id))
+    .orderBy(desc(schema.shipmentEventsTable.occurredAt));
+  return {
+    id: shipment.id,
+    carrier: shipment.carrier,
+    service: shipment.service,
+    carrierRef: shipment.carrierRef,
+    trackingUrl: shipment.trackingUrl,
+    labelUrl: shipment.labelUrl,
+    status: shipment.status,
+    quotedPriceMinor: shipment.quotedPriceMinor,
+    currencyCode: shipment.currencyCode,
+    dispatchedAtIso: shipment.dispatchedAt?.toISOString() ?? null,
+    deliveredAtIso: shipment.deliveredAt?.toISOString() ?? null,
+    events: events.map((e) => ({
+      id: e.id,
+      status: e.status,
+      rawStatus: e.rawStatus,
+      note: e.note,
+      location: e.location,
+      occurredAtIso: e.occurredAt.toISOString(),
+    })),
   };
 }
 
@@ -201,7 +243,8 @@ router.get("/orders/:orderId", async (req, res) => {
     res.status(404).json({ error: "not_found" });
     return;
   }
-  res.json(rowToOrder(row));
+  const shipment = await loadShipmentForOrder(row.id);
+  res.json({ ...rowToOrder(row), shipment });
 });
 
 /**

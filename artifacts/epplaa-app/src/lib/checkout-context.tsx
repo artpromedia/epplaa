@@ -7,10 +7,24 @@ import {
 import { useQueryClient } from "@tanstack/react-query";
 import { OrderAddress } from "./orders-context";
 
+export interface FulfillmentRatePick {
+  carrier: string;
+  service: string;
+  serviceLabel: string;
+  priceMinor: number;
+  currencyCode: string;
+  etaLabel: string;
+  raw?: Record<string, unknown>;
+}
+
 export interface CheckoutDraft {
   fulfillmentOptionId?: string;
   locationId?: string;
   deliveryAddress?: OrderAddress;
+  /** Carrier+service chosen from /fulfillment/rates after the address is verified. */
+  fulfillmentRate?: FulfillmentRatePick;
+  /** OkHi/verify-address result captured for the buyer's chosen address. */
+  placeId?: string;
   paymentMethodId?: string;
   channelOverrides?: {
     whatsapp?: boolean;

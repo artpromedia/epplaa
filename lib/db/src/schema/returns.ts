@@ -15,6 +15,12 @@ export const returnsTable = pgTable("returns", {
   status: text("status").notNull().default("requested"),
   timeline: jsonb("timeline").notNull().default([]),
   dispute: jsonb("dispute").notNull().default([]),
+  /** Reverse-pickup label url issued by the carrier (PDF). */
+  pickupLabelUrl: text("pickup_label_url").notNull().default(""),
+  /** Carrier waybill / tracking id for the reverse pickup. */
+  pickupCarrierRef: text("pickup_carrier_ref").notNull().default(""),
+  /** Carrier code that issued the reverse label. */
+  pickupCarrier: text("pickup_carrier").notNull().default(""),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 

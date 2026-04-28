@@ -1,5 +1,6 @@
 import { eq, sql, and, inArray, ne } from "drizzle-orm";
 import { enqueueNotification } from "./notifications";
+import { dispatchShipmentForOrder } from "./fulfillment/dispatch";
 import {
   DevMockGateway,
   FlutterwaveGateway,
@@ -478,6 +479,14 @@ async function finalizeOrderAfterPayment(
       orderId,
     },
   }).catch(() => undefined);
+
+  // Carrier dispatch — creates the shipment row, calls the chosen carrier,
+  // creates the box reservation if it's a locker order, and seeds the
+  // tracking timeline. Errors here MUST NOT roll back the payment, so we
+  // log and move on; an admin can retry via the seller dashboard.
+  await dispatchShipmentForOrder(orderId).catch((err) => {
+    logger.error({ err: (err as Error).message, orderId }, "post_payment_dispatch_failed");
+  });
 
   // ---- Compute split per seller ----
   const items = (order.items as Array<{ productId: string; qty: number; priceMinor: number }>) ?? [];

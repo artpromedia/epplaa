@@ -173,10 +173,11 @@ export default function CheckoutReview() {
     if (isHomeDelivery && !addr) return;
     if (!isHomeDelivery && !loc) return;
 
+    const pickedRate = draft.fulfillmentRate;
     const fulfillment: OrderFulfillment = {
       optionId: fOpt.id,
       optionLabel: fOpt.label,
-      feeMinor: fOpt.feeMinor,
+      feeMinor: pickedRate?.priceMinor ?? fOpt.feeMinor,
       ...(loc
         ? {
             locationId: loc.id,
@@ -185,6 +186,16 @@ export default function CheckoutReview() {
           }
         : {}),
       ...(addr ? { deliveryAddress: addr } : {}),
+      ...(pickedRate
+        ? {
+            carrier: pickedRate.carrier,
+            service: pickedRate.service,
+            serviceLabel: pickedRate.serviceLabel,
+            rateMinor: pickedRate.priceMinor,
+            rateRaw: pickedRate.raw,
+          }
+        : {}),
+      ...(draft.placeId ? { placeId: draft.placeId } : {}),
     };
 
     const draftOrder: Omit<Order, "id" | "createdAtIso"> = {

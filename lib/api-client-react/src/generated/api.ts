@@ -18,6 +18,7 @@ import type {
 
 import type {
   AddRecentSearchBody,
+  AddressVerification,
   AdminRunDuePayouts200,
   AdminRunReconciliation200,
   AppendReturnMessageBody,
@@ -25,6 +26,8 @@ import type {
   BadRequestResponse,
   BlockSellerBody,
   BlockedSeller,
+  BoxUnlockBody,
+  BoxUnlockResponse,
   Cart,
   CartItemUpsertBody,
   CheckoutDraft,
@@ -65,6 +68,8 @@ import type {
   PromoApplyResult,
   PushTokenBody,
   PushTokenRegistered,
+  RateShipmentBody,
+  RateShipmentResponse,
   ReconciliationRun,
   ReferralHub,
   RefundOrderBody,
@@ -91,6 +96,7 @@ import type {
   UpgradeSellerTierBody,
   User,
   VapidPublicKey,
+  VerifyAddressBody,
   Wallet,
   WalletRefundBody,
   WalletSpendBody,
@@ -1590,6 +1596,247 @@ export function useListFulfillmentLocations<
 
   return { ...query, queryKey: queryOptions.queryKey };
 }
+
+export const getVerifyAddressUrl = () => {
+  return `/api/fulfillment/verify-address`;
+};
+
+export const verifyAddress = async (
+  verifyAddressBody: VerifyAddressBody,
+  options?: RequestInit,
+): Promise<AddressVerification> => {
+  return customFetch<AddressVerification>(getVerifyAddressUrl(), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(verifyAddressBody),
+  });
+};
+
+export const getVerifyAddressMutationOptions = <
+  TError = ErrorType<BadRequestResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof verifyAddress>>,
+    TError,
+    { data: BodyType<VerifyAddressBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof verifyAddress>>,
+  TError,
+  { data: BodyType<VerifyAddressBody> },
+  TContext
+> => {
+  const mutationKey = ["verifyAddress"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof verifyAddress>>,
+    { data: BodyType<VerifyAddressBody> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return verifyAddress(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type VerifyAddressMutationResult = NonNullable<
+  Awaited<ReturnType<typeof verifyAddress>>
+>;
+export type VerifyAddressMutationBody = BodyType<VerifyAddressBody>;
+export type VerifyAddressMutationError = ErrorType<BadRequestResponse>;
+
+export const useVerifyAddress = <
+  TError = ErrorType<BadRequestResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof verifyAddress>>,
+    TError,
+    { data: BodyType<VerifyAddressBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof verifyAddress>>,
+  TError,
+  { data: BodyType<VerifyAddressBody> },
+  TContext
+> => {
+  return useMutation(getVerifyAddressMutationOptions(options));
+};
+
+export const getRateShipmentUrl = () => {
+  return `/api/fulfillment/rates`;
+};
+
+export const rateShipment = async (
+  rateShipmentBody: RateShipmentBody,
+  options?: RequestInit,
+): Promise<RateShipmentResponse> => {
+  return customFetch<RateShipmentResponse>(getRateShipmentUrl(), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(rateShipmentBody),
+  });
+};
+
+export const getRateShipmentMutationOptions = <
+  TError = ErrorType<BadRequestResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof rateShipment>>,
+    TError,
+    { data: BodyType<RateShipmentBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof rateShipment>>,
+  TError,
+  { data: BodyType<RateShipmentBody> },
+  TContext
+> => {
+  const mutationKey = ["rateShipment"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof rateShipment>>,
+    { data: BodyType<RateShipmentBody> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return rateShipment(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type RateShipmentMutationResult = NonNullable<
+  Awaited<ReturnType<typeof rateShipment>>
+>;
+export type RateShipmentMutationBody = BodyType<RateShipmentBody>;
+export type RateShipmentMutationError = ErrorType<BadRequestResponse>;
+
+export const useRateShipment = <
+  TError = ErrorType<BadRequestResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof rateShipment>>,
+    TError,
+    { data: BodyType<RateShipmentBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof rateShipment>>,
+  TError,
+  { data: BodyType<RateShipmentBody> },
+  TContext
+> => {
+  return useMutation(getRateShipmentMutationOptions(options));
+};
+
+export const getUnlockBoxReservationUrl = () => {
+  return `/api/box/unlock`;
+};
+
+export const unlockBoxReservation = async (
+  boxUnlockBody: BoxUnlockBody,
+  options?: RequestInit,
+): Promise<BoxUnlockResponse> => {
+  return customFetch<BoxUnlockResponse>(getUnlockBoxReservationUrl(), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(boxUnlockBody),
+  });
+};
+
+export const getUnlockBoxReservationMutationOptions = <
+  TError = ErrorType<void | NotFoundResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof unlockBoxReservation>>,
+    TError,
+    { data: BodyType<BoxUnlockBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof unlockBoxReservation>>,
+  TError,
+  { data: BodyType<BoxUnlockBody> },
+  TContext
+> => {
+  const mutationKey = ["unlockBoxReservation"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof unlockBoxReservation>>,
+    { data: BodyType<BoxUnlockBody> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return unlockBoxReservation(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type UnlockBoxReservationMutationResult = NonNullable<
+  Awaited<ReturnType<typeof unlockBoxReservation>>
+>;
+export type UnlockBoxReservationMutationBody = BodyType<BoxUnlockBody>;
+export type UnlockBoxReservationMutationError =
+  ErrorType<void | NotFoundResponse>;
+
+export const useUnlockBoxReservation = <
+  TError = ErrorType<void | NotFoundResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof unlockBoxReservation>>,
+    TError,
+    { data: BodyType<BoxUnlockBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof unlockBoxReservation>>,
+  TError,
+  { data: BodyType<BoxUnlockBody> },
+  TContext
+> => {
+  return useMutation(getUnlockBoxReservationMutationOptions(options));
+};
 
 export const getApplyPromoCodeUrl = () => {
   return `/api/promo-codes/apply`;

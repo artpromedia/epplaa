@@ -48,6 +48,10 @@ export const ordersTable = pgTable("orders", {
    * row available for retry.
    */
   refundStartedAt: timestamp("refund_started_at", { withTimezone: true }),
+  /** Linked shipment id (set by dispatch on payment captured). */
+  shipmentId: text("shipment_id"),
+  /** Carrier-specific tracking URL (set when shipment dispatched). */
+  trackingUrl: text("tracking_url"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 

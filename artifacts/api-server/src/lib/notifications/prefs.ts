@@ -21,6 +21,7 @@ const EVENT_CHANNEL_DEFAULTS: Record<EventType, ChannelKind[]> = {
   referral_payout: ["push", "whatsapp"],
   wallet_credit: ["push", "whatsapp"],
   low_stock: ["push", "email"],
+  box_reservation_expired: ["whatsapp", "sms", "push"],
 };
 
 /**
@@ -41,6 +42,7 @@ const EVENT_CATEGORY: Record<EventType, "orderUpdates" | "liveDrops" | "promos" 
   referral_payout: "referrals",
   wallet_credit: "walletCredits",
   low_stock: "orderUpdates",
+  box_reservation_expired: "orderUpdates",
 };
 
 const COUNTRY_TZ: Record<string, string> = {

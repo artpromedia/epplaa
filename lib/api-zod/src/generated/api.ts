@@ -285,6 +285,62 @@ export const ListFulfillmentLocationsResponse = zod.array(
   ListFulfillmentLocationsResponseItem,
 );
 
+export const VerifyAddressBody = zod.object({
+  countryCode: zod.string(),
+  line: zod.string(),
+  area: zod.string().optional(),
+  city: zod.string().optional(),
+  lat: zod.number().optional(),
+  lng: zod.number().optional(),
+});
+
+export const VerifyAddressResponse = zod.object({
+  ok: zod.boolean(),
+  placeId: zod.string(),
+  confidencePct: zod.number(),
+  suggestion: zod.string().nullish(),
+  normalized: zod.record(zod.string(), zod.unknown()).optional(),
+});
+
+export const RateShipmentBody = zod.object({
+  currencyCode: zod.string().optional(),
+  optionId: zod.string().optional(),
+  destination: zod.record(zod.string(), zod.unknown()),
+  items: zod.array(
+    zod.object({
+      productId: zod.string(),
+      qty: zod.number(),
+    }),
+  ),
+});
+
+export const RateShipmentResponse = zod.object({
+  quotes: zod.array(
+    zod.object({
+      carrier: zod.string(),
+      service: zod.string(),
+      serviceLabel: zod.string(),
+      priceMinor: zod.number(),
+      currencyCode: zod.string(),
+      etaLabel: zod.string(),
+      etaDaysMin: zod.number().optional(),
+      etaDaysMax: zod.number().optional(),
+      raw: zod.record(zod.string(), zod.unknown()).optional(),
+    }),
+  ),
+});
+
+export const UnlockBoxReservationBody = zod.object({
+  reservationId: zod.string(),
+  otp: zod.string(),
+});
+
+export const UnlockBoxReservationResponse = zod.object({
+  ok: zod.boolean(),
+  reservationId: zod.string(),
+  collectedAtIso: zod.string(),
+});
+
 export const ApplyPromoCodeBody = zod.object({
   code: zod.string(),
   subtotalMinor: zod.number(),
@@ -371,6 +427,33 @@ export const ListOrdersResponseItem = zod.object({
   holdUntilIso: zod.string().nullish(),
   settledAtIso: zod.string().nullish(),
   createdAtIso: zod.string(),
+  shipment: zod
+    .union([
+      zod.object({
+        id: zod.string(),
+        orderId: zod.string(),
+        carrier: zod.string(),
+        service: zod.string(),
+        carrierRef: zod.string().nullish(),
+        trackingUrl: zod.string().nullish(),
+        labelUrl: zod.string().nullish(),
+        status: zod.string(),
+        shippedAtIso: zod.string().nullish(),
+        deliveredAtIso: zod.string().nullish(),
+        events: zod.array(
+          zod.object({
+            id: zod.string(),
+            status: zod.string(),
+            rawStatus: zod.string().optional(),
+            note: zod.string().optional(),
+            location: zod.string().optional(),
+            occurredAtIso: zod.string(),
+          }),
+        ),
+      }),
+      zod.null(),
+    ])
+    .optional(),
 });
 export const ListOrdersResponse = zod.array(ListOrdersResponseItem);
 
@@ -411,6 +494,33 @@ export const GetOrderResponse = zod.object({
   holdUntilIso: zod.string().nullish(),
   settledAtIso: zod.string().nullish(),
   createdAtIso: zod.string(),
+  shipment: zod
+    .union([
+      zod.object({
+        id: zod.string(),
+        orderId: zod.string(),
+        carrier: zod.string(),
+        service: zod.string(),
+        carrierRef: zod.string().nullish(),
+        trackingUrl: zod.string().nullish(),
+        labelUrl: zod.string().nullish(),
+        status: zod.string(),
+        shippedAtIso: zod.string().nullish(),
+        deliveredAtIso: zod.string().nullish(),
+        events: zod.array(
+          zod.object({
+            id: zod.string(),
+            status: zod.string(),
+            rawStatus: zod.string().optional(),
+            note: zod.string().optional(),
+            location: zod.string().optional(),
+            occurredAtIso: zod.string(),
+          }),
+        ),
+      }),
+      zod.null(),
+    ])
+    .optional(),
 });
 
 export const CancelOrderParams = zod.object({
@@ -438,6 +548,33 @@ export const CancelOrderResponse = zod.object({
   holdUntilIso: zod.string().nullish(),
   settledAtIso: zod.string().nullish(),
   createdAtIso: zod.string(),
+  shipment: zod
+    .union([
+      zod.object({
+        id: zod.string(),
+        orderId: zod.string(),
+        carrier: zod.string(),
+        service: zod.string(),
+        carrierRef: zod.string().nullish(),
+        trackingUrl: zod.string().nullish(),
+        labelUrl: zod.string().nullish(),
+        status: zod.string(),
+        shippedAtIso: zod.string().nullish(),
+        deliveredAtIso: zod.string().nullish(),
+        events: zod.array(
+          zod.object({
+            id: zod.string(),
+            status: zod.string(),
+            rawStatus: zod.string().optional(),
+            note: zod.string().optional(),
+            location: zod.string().optional(),
+            occurredAtIso: zod.string(),
+          }),
+        ),
+      }),
+      zod.null(),
+    ])
+    .optional(),
 });
 
 export const RefundOrderParams = zod.object({

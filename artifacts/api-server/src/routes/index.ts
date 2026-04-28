@@ -26,6 +26,9 @@ import adminRouter from "./admin";
 import authRouter from "./auth";
 import pushTokensRouter from "./pushTokens";
 import promosRouter from "./promos";
+import fulfillmentRouter from "./fulfillment";
+import boxRouter from "./box";
+import pudoRouter from "./pudo";
 
 const router: IRouter = Router();
 
@@ -56,5 +59,8 @@ router.use(adminRouter);
 router.use(authRouter);
 router.use(pushTokensRouter);
 router.use(promosRouter);
+router.use(fulfillmentRouter);
+router.use(boxRouter);
+router.use(pudoRouter);
 
 export default router;

@@ -11,6 +11,10 @@ export const fulfillmentLocationsTable = pgTable("fulfillment_locations", {
   distanceLabel: text("distance_label").notNull().default(""),
   mapX: real("map_x").notNull().default(50),
   mapY: real("map_y").notNull().default(50),
+  /** "box" (Epplaa-owned smart locker) | "pudo" (third-party shop) | "store". */
+  kind: text("kind").notNull().default("pudo"),
+  /** Foreign key into pudo_partners.code when kind="pudo". Null for boxes. */
+  partnerCode: text("partner_code"),
 });
 
 export type FulfillmentLocation = typeof fulfillmentLocationsTable.$inferSelect;

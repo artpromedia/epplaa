@@ -101,6 +101,66 @@ export default function OrderDetail() {
           </p>
         </div>
 
+        {order.shipment && order.shipment.events.length > 0 && (
+          <div
+            className={`rounded-2xl p-4 border ${cardBorder}`}
+            data-testid="shipment-timeline-card"
+          >
+            <div className="flex items-center justify-between mb-3">
+              <p className={`text-[11px] font-bold uppercase tracking-wider ${subtle}`}>
+                Shipment tracking
+              </p>
+              <span className={`text-[10px] font-bold uppercase tracking-wider ${subtle}`}>
+                {order.shipment.carrier}
+              </span>
+            </div>
+            <div className="space-y-2">
+              {order.shipment.events
+                .slice()
+                .sort((a, b) => new Date(b.occurredAtIso).getTime() - new Date(a.occurredAtIso).getTime())
+                .map((ev, idx) => {
+                  const isLatest = idx === 0;
+                  return (
+                    <div
+                      key={ev.id}
+                      className="flex items-start gap-2 text-xs"
+                      data-testid={`shipment-event-${ev.status}`}
+                    >
+                      <span
+                        className={`mt-1 w-2.5 h-2.5 rounded-full shrink-0 ${
+                          isLatest
+                            ? isDark ? "bg-[#FF8855] animate-pulse" : "bg-[#E6502E] animate-pulse"
+                            : isDark ? "bg-emerald-400" : "bg-emerald-600"
+                        }`}
+                      />
+                      <div className="flex-1">
+                        <p className="font-bold capitalize">{ev.status.replace(/_/g, " ")}</p>
+                        {ev.note && <p className={subtle}>{ev.note}</p>}
+                        <p className={`text-[10px] ${subtle}`}>
+                          {ev.location ? `${ev.location} · ` : ""}
+                          {relativeDate(ev.occurredAtIso)}
+                        </p>
+                      </div>
+                    </div>
+                  );
+                })}
+            </div>
+            {order.shipment.trackingUrl && (
+              <a
+                href={order.shipment.trackingUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                data-testid="link-tracking"
+                className={`mt-3 inline-block text-xs font-bold underline ${
+                  isDark ? "text-[#5BA3F5]" : "text-[#1B2A4A]"
+                }`}
+              >
+                Open carrier tracking →
+              </a>
+            )}
+          </div>
+        )}
+
         {(() => {
           const importItem = order.items.find((it) => {
             const p = SEED_PRODUCTS.find((sp) => sp.id === it.productId);
