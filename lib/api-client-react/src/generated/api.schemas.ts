@@ -516,7 +516,8 @@ export interface PushTokenBody {
 }
 
 export interface VapidPublicKey {
-  publicKey: string;
+  /** Base64url VAPID public key, or null when web push is not configured on the server. */
+  publicKey: string | null;
 }
 
 export interface GoLiveResponse {

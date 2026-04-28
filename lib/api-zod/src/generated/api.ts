@@ -84,7 +84,12 @@ export const VerifyOtpResponse = zod.object({
 });
 
 export const GetVapidPublicKeyResponse = zod.object({
-  publicKey: zod.string(),
+  publicKey: zod
+    .string()
+    .nullable()
+    .describe(
+      "Base64url VAPID public key, or null when web push is not configured on the server.",
+    ),
 });
 
 export const RegisterPushTokenBody = zod.object({

@@ -170,6 +170,13 @@ router.patch("/seller/listings/:listingId", async (req, res) => {
     res.status(400).json({ error: "no_fields" });
     return;
   }
+  // Snapshot pre-update inventory so we only fire low_stock on the
+  // crossing edge (avoid spamming on every PATCH while already low).
+  const [before] = await db
+    .select({ inventory: schema.sellerListingsTable.inventory })
+    .from(schema.sellerListingsTable)
+    .where(and(eq(schema.sellerListingsTable.userId, userId), eq(schema.sellerListingsTable.id, req.params.listingId)))
+    .limit(1);
   const [row] = await db
     .update(schema.sellerListingsTable)
     .set(patch)
@@ -178,6 +185,33 @@ router.patch("/seller/listings/:listingId", async (req, res) => {
   if (!row) {
     res.status(404).json({ error: "not_found" });
     return;
+  }
+  // low_stock producer: fire when inventory drops to (0, LOW_STOCK_THRESHOLD]
+  // and was previously above the threshold. Restocks above the threshold do
+  // not fire. Zero (out of stock) is intentionally still notified — it's
+  // the most actionable case for the seller.
+  const LOW_STOCK_THRESHOLD = 5;
+  const prev = before?.inventory ?? Infinity;
+  if (
+    typeof patch.inventory === "number" &&
+    row.inventory <= LOW_STOCK_THRESHOLD &&
+    prev > LOW_STOCK_THRESHOLD
+  ) {
+    try {
+      await enqueueNotification({
+        userId,
+        eventType: "low_stock",
+        payload: {
+          title: row.inventory === 0 ? "Out of stock" : "Low stock",
+          body: `${row.title} — ${row.inventory} left`,
+          url: `/seller/listings/${row.id}`,
+          listingId: row.id,
+          inventory: row.inventory,
+        },
+      });
+    } catch (err) {
+      logger.error({ err: (err as Error).message, listingId: row.id }, "notify_low_stock_failed");
+    }
   }
   res.json({
     id: row.id,

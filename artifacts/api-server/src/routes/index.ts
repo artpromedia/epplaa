@@ -25,6 +25,7 @@ import paymentsRouter from "./payments";
 import adminRouter from "./admin";
 import authRouter from "./auth";
 import pushTokensRouter from "./pushTokens";
+import promosRouter from "./promos";
 
 const router: IRouter = Router();
 
@@ -54,5 +55,6 @@ router.use(paymentsRouter);
 router.use(adminRouter);
 router.use(authRouter);
 router.use(pushTokensRouter);
+router.use(promosRouter);
 
 export default router;

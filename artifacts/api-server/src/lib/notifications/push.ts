@@ -1,6 +1,61 @@
-import { createHmac, createSign } from "node:crypto";
+import { createCipheriv, createECDH, createHmac, createSign, randomBytes } from "node:crypto";
 import { logger } from "../logger";
 import type { ChannelKind, NotificationChannel, NotificationMessage, SendResult } from "./types";
+
+/**
+ * RFC 5869 HKDF-SHA256 (extract + expand). Returns the first `length` bytes
+ * of the expanded output. Used to derive the AES key and nonce for RFC 8291
+ * Web Push payload encryption.
+ */
+function hkdf(salt: Buffer, ikm: Buffer, info: Buffer, length: number): Buffer {
+  const prk = createHmac("sha256", salt).update(ikm).digest();
+  let prev = Buffer.alloc(0);
+  let out = Buffer.alloc(0);
+  let counter = 1;
+  while (out.length < length) {
+    prev = createHmac("sha256", prk)
+      .update(Buffer.concat([prev, info, Buffer.from([counter])]))
+      .digest();
+    out = Buffer.concat([out, prev]);
+    counter++;
+  }
+  return out.subarray(0, length);
+}
+
+/**
+ * Encrypt a Web Push payload per RFC 8291 (aes128gcm content encoding,
+ * RFC 8188 framing). Returns the binary body to POST to the push endpoint.
+ * Caller is responsible for setting Content-Encoding: aes128gcm and the
+ * VAPID Authorization header.
+ */
+function encryptAes128gcm(payload: Buffer, p256dhBase64Url: string, authBase64Url: string): Buffer {
+  const ua_pub = Buffer.from(p256dhBase64Url, "base64url");
+  const auth = Buffer.from(authBase64Url, "base64url");
+  const ecdh = createECDH("prime256v1");
+  const as_pub = ecdh.generateKeys();
+  const shared = ecdh.computeSecret(ua_pub);
+  const salt = randomBytes(16);
+
+  // PRK_key = HKDF(auth, shared, "WebPush: info\0" || ua_pub || as_pub, 32)
+  const keyInfo = Buffer.concat([Buffer.from("WebPush: info\0", "utf8"), ua_pub, as_pub]);
+  const ikm = hkdf(auth, shared, keyInfo, 32);
+  const cek = hkdf(salt, ikm, Buffer.from("Content-Encoding: aes128gcm\0", "utf8"), 16);
+  const nonce = hkdf(salt, ikm, Buffer.from("Content-Encoding: nonce\0", "utf8"), 12);
+
+  // RFC 8188 record: payload || 0x02 (last-record delimiter) — no extra padding.
+  const padded = Buffer.concat([payload, Buffer.from([0x02])]);
+  const cipher = createCipheriv("aes-128-gcm", cek, nonce);
+  const ct = Buffer.concat([cipher.update(padded), cipher.final(), cipher.getAuthTag()]);
+
+  // Header: salt(16) || rs(4 BE = 4096) || idlen(1) || keyid(as_pub).
+  const header = Buffer.concat([
+    salt,
+    Buffer.from([0x00, 0x00, 0x10, 0x00]),
+    Buffer.from([as_pub.length]),
+    as_pub,
+  ]);
+  return Buffer.concat([header, ct]);
+}
 
 /**
  * FCM adapter for native push (Android / iOS / web with FCM SDK).
@@ -123,8 +178,6 @@ export class WebPushChannel implements NotificationChannel {
       return { ok: false, errorMessage: "invalid_subscription" };
     }
     if (!sub?.endpoint) return { ok: false, errorMessage: "no_endpoint" };
-    // Minimal VAPID header (no payload encryption). Browsers will receive
-    // a "push received" event the SW handles to fetch the actual notification.
     const audience = new URL(sub.endpoint).origin;
     const subject = process.env.VAPID_SUBJECT || "mailto:notifications@epplaa.app";
     const exp = Math.floor(Date.now() / 1000) + 12 * 3600;
@@ -147,15 +200,41 @@ export class WebPushChannel implements NotificationChannel {
       signature = createHmac("sha256", pk).update(`${header}.${claims}`).digest("base64url");
     }
     const jwt = `${header}.${claims}.${signature}`;
+
+    // RFC 8291 encrypted payload: title/body/url/payload travel inside the
+    // push so the SW can render a contextual notification without a
+    // round-trip back to the API.
+    let body: Buffer | undefined;
+    const headers: Record<string, string> = {
+      authorization: `vapid t=${jwt}, k=${process.env.VAPID_PUBLIC_KEY}`,
+      ttl: "86400",
+      topic: msg.payload?.topic ? String(msg.payload.topic) : "default",
+    };
+    if (sub.keys?.p256dh && sub.keys?.auth) {
+      try {
+        const json = JSON.stringify({
+          title: msg.title,
+          body: msg.body,
+          url: msg.url,
+          payload: msg.payload ?? {},
+        });
+        body = encryptAes128gcm(Buffer.from(json, "utf8"), sub.keys.p256dh, sub.keys.auth);
+        headers["content-encoding"] = "aes128gcm";
+        headers["content-type"] = "application/octet-stream";
+        headers["content-length"] = String(body.length);
+      } catch (err) {
+        logger.warn({ err: (err as Error).message }, "webpush_encrypt_failed_sending_empty");
+        body = undefined;
+        headers["content-length"] = "0";
+      }
+    } else {
+      headers["content-length"] = "0";
+    }
     try {
       const res = await fetch(sub.endpoint, {
         method: "POST",
-        headers: {
-          authorization: `vapid t=${jwt}, k=${process.env.VAPID_PUBLIC_KEY}`,
-          ttl: "86400",
-          topic: msg.payload?.topic ? String(msg.payload.topic) : "default",
-          "content-length": "0",
-        },
+        headers,
+        body,
       });
       if (!res.ok && res.status !== 201) {
         return { ok: false, errorCode: String(res.status), errorMessage: await res.text() };

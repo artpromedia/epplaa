@@ -1685,7 +1685,10 @@ components:
       type: object
       required: [publicKey]
       properties:
-        publicKey: { type: string }
+        publicKey:
+          type: string
+          nullable: true
+          description: Base64url VAPID public key, or null when web push is not configured on the server.
     GoLiveResponse:
       type: object
       required: [ok, fanout]
