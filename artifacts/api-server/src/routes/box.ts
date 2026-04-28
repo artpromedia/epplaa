@@ -1,4 +1,4 @@
-import { Router, type IRouter } from "express";
+import { Router, type IRouter, type Request } from "express";
 import { eq, and, lt, sql } from "drizzle-orm";
 import { db, schema } from "../lib/db";
 import { logger } from "../lib/logger";
@@ -6,6 +6,63 @@ import { newShipmentEventId } from "../lib/ids";
 import { enqueueNotification } from "../lib/notifications";
 
 const router: IRouter = Router();
+
+/**
+ * In-process anti-bruteforce throttle for /box/unlock.
+ *
+ *  - Per-reservation: lock out for 15 minutes after 5 wrong OTPs.
+ *  - Per-IP: max 30 attempts per minute (covers scanner-style abuse where
+ *    one attacker iterates many reservations).
+ *
+ * This is a best-effort guard. A multi-replica deployment should swap this
+ * for Redis-backed counters; the limits chosen are conservative enough
+ * that legitimate buyers never hit them.
+ */
+const RESV_MAX_ATTEMPTS = 5;
+const RESV_LOCKOUT_MS = 15 * 60 * 1000;
+const IP_WINDOW_MS = 60 * 1000;
+const IP_MAX_ATTEMPTS = 30;
+const reservationAttempts = new Map<string, { count: number; firstAt: number; lockedUntil: number }>();
+const ipAttempts = new Map<string, { count: number; windowStart: number }>();
+
+function clientIp(req: Request): string {
+  const xff = req.header("x-forwarded-for");
+  if (xff) return xff.split(",")[0]!.trim();
+  return req.ip ?? req.socket.remoteAddress ?? "unknown";
+}
+
+function checkAndRecordAttempt(reservationId: string, ip: string, now: number): { ok: true } | { ok: false; reason: string; retryAfterSec: number } {
+  const ipRow = ipAttempts.get(ip);
+  if (!ipRow || now - ipRow.windowStart > IP_WINDOW_MS) {
+    ipAttempts.set(ip, { count: 1, windowStart: now });
+  } else {
+    ipRow.count++;
+    if (ipRow.count > IP_MAX_ATTEMPTS) {
+      return { ok: false, reason: "ip_rate_limited", retryAfterSec: Math.ceil((ipRow.windowStart + IP_WINDOW_MS - now) / 1000) };
+    }
+  }
+  const r = reservationAttempts.get(reservationId);
+  if (r && r.lockedUntil > now) {
+    return { ok: false, reason: "reservation_locked", retryAfterSec: Math.ceil((r.lockedUntil - now) / 1000) };
+  }
+  return { ok: true };
+}
+
+function recordOtpFailure(reservationId: string, now: number): void {
+  const r = reservationAttempts.get(reservationId);
+  if (!r) {
+    reservationAttempts.set(reservationId, { count: 1, firstAt: now, lockedUntil: 0 });
+    return;
+  }
+  r.count++;
+  if (r.count >= RESV_MAX_ATTEMPTS) {
+    r.lockedUntil = now + RESV_LOCKOUT_MS;
+  }
+}
+
+function clearOtpAttempts(reservationId: string): void {
+  reservationAttempts.delete(reservationId);
+}
 
 /**
  * POST /box/unlock
@@ -29,12 +86,22 @@ router.post("/box/unlock", async (req, res) => {
     res.status(400).json({ error: "bad_request", detail: "reservationId and otp required" });
     return;
   }
+  const ip = clientIp(req);
+  const nowMs = Date.now();
+  const gate = checkAndRecordAttempt(reservationId, ip, nowMs);
+  if (!gate.ok) {
+    logger.warn({ reservationId, ip, reason: gate.reason }, "box_unlock_throttled");
+    res.setHeader("retry-after", String(gate.retryAfterSec));
+    res.status(429).json({ error: gate.reason, retryAfterSec: gate.retryAfterSec });
+    return;
+  }
   const [reservation] = await db
     .select()
     .from(schema.boxReservationsTable)
     .where(eq(schema.boxReservationsTable.id, reservationId))
     .limit(1);
   if (!reservation) {
+    recordOtpFailure(reservationId, nowMs);
     res.status(404).json({ error: "not_found" });
     return;
   }
@@ -52,13 +119,17 @@ router.post("/box/unlock", async (req, res) => {
     .where(eq(schema.ordersTable.id, reservation.orderId))
     .limit(1);
   if (!order) {
+    recordOtpFailure(reservationId, nowMs);
     res.status(404).json({ error: "order_not_found" });
     return;
   }
   if (!order.pickupOtp || order.pickupOtp.toLowerCase() !== otp.toLowerCase()) {
+    recordOtpFailure(reservationId, nowMs);
+    logger.warn({ reservationId, ip }, "box_unlock_wrong_otp");
     res.status(403).json({ error: "wrong_otp" });
     return;
   }
+  clearOtpAttempts(reservationId);
 
   const now = new Date();
   await db

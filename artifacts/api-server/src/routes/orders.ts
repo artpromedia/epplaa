@@ -74,6 +74,7 @@ async function loadShipmentForOrder(orderId: string) {
     .orderBy(desc(schema.shipmentEventsTable.occurredAt));
   return {
     id: shipment.id,
+    orderId: shipment.orderId,
     carrier: shipment.carrier,
     service: shipment.service,
     carrierRef: shipment.carrierRef,
@@ -82,7 +83,7 @@ async function loadShipmentForOrder(orderId: string) {
     status: shipment.status,
     quotedPriceMinor: shipment.quotedPriceMinor,
     currencyCode: shipment.currencyCode,
-    dispatchedAtIso: shipment.dispatchedAt?.toISOString() ?? null,
+    shippedAtIso: shipment.dispatchedAt?.toISOString() ?? null,
     deliveredAtIso: shipment.deliveredAt?.toISOString() ?? null,
     events: events.map((e) => ({
       id: e.id,
@@ -275,6 +276,23 @@ router.post("/orders", async (req, res) => {
   if (isCod && !isPickup) {
     res.status(400).json({ error: "cod_not_allowed", detail: "Pay on collection is only available for Box/PUDO pickups." });
     return;
+  }
+
+  // Server-side address verification gate. Home delivery requires a
+  // verified address (placeId from /fulfillment/verify-address) with
+  // confidence >= 70. Buyers without a verified address are steered
+  // toward Box/PUDO. Pickup-only options skip this gate.
+  if (!isPickup) {
+    const placeId = String(fulfillment.placeId ?? "").trim();
+    const deliveryAddress = (fulfillment.deliveryAddress as { confidencePct?: unknown } | undefined) ?? {};
+    const confidencePct = Number(deliveryAddress.confidencePct ?? 0);
+    if (!placeId || !Number.isFinite(confidencePct) || confidencePct < 70) {
+      res.status(400).json({
+        error: "address_not_verified",
+        detail: "Home delivery requires a verified address. Please re-verify or choose Box/PUDO pickup.",
+      });
+      return;
+    }
   }
 
   // Resolve totals + line snapshot server-side. Client-supplied priceMinor
