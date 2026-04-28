@@ -28,6 +28,14 @@ export const productsTable = pgTable("products", {
   manufacturerShareBp: integer("manufacturer_share_bp").notNull().default(0),
   freeShipping: boolean("free_shipping").notNull().default(false),
   viewCount: integer("view_count").notNull().default(0),
+  // search_vector tsvector GENERATED ALWAYS AS (
+  //   to_tsvector('simple', coalesce(title,'') || ' ' || coalesce(seller_name,'')
+  //     || ' ' || coalesce(category,'') || ' ' || coalesce(origin_label,'')
+  //     || ' ' || coalesce(origin_country,''))
+  // ) STORED -- backed by GIN index `products_search_vector_gin`.
+  // Drizzle has no first-class tsvector type; the column is managed at the DB
+  // level (additive ADD COLUMN IF NOT EXISTS) and read only via raw SQL in
+  // artifacts/api-server/src/lib/search.ts.
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 

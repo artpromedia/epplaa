@@ -158,7 +158,9 @@ async function categoryFacets(f: ProductSearchFilters): Promise<{ categories: Ca
   };
 }
 
-// Postgres FTS is the always-on path; fallback runs only if the FTS query itself errors.
+// Postgres FTS is the always-on path; fallback runs only if the FTS query
+// itself errors. The fallback honors the same filter set as the primary path
+// so degraded results still respect the user's criteria.
 async function fallbackProducts(f: ProductSearchFilters): Promise<SearchProductsResult> {
   const like = f.q ? `%${f.q.toLowerCase()}%` : null;
   const rows = await db.execute(sql`
@@ -177,20 +179,57 @@ async function fallbackProducts(f: ProductSearchFilters): Promise<SearchProducts
       ${like ? sql`AND lower(p.title) LIKE ${like}` : sql``}
       ${f.countryCode ? sql`AND p.country_code = ${f.countryCode}` : sql``}
       ${f.category ? sql`AND lower(p.category) = lower(${f.category})` : sql``}
+      ${f.minPriceMinor !== null ? sql`AND p.price_minor >= ${f.minPriceMinor}` : sql``}
+      ${f.maxPriceMinor !== null ? sql`AND p.price_minor <= ${f.maxPriceMinor}` : sql``}
+      ${f.freeShippingOnly ? sql`AND p.free_shipping = true` : sql``}
+      ${f.liveOnly ? sql`AND p.is_live_now = true` : sql``}
+      ${f.minRating !== null ? sql`AND p.rating >= ${f.minRating}` : sql``}
+    ),
+    facets AS (
+      SELECT category, COUNT(*)::int AS count
+      FROM base
+      GROUP BY category
+      ORDER BY count DESC
     )
-    SELECT *, COUNT(*) OVER() AS total_count FROM base
-    ORDER BY "soldCount" DESC LIMIT ${f.limit} OFFSET ${f.offset}
+    SELECT b.*, (SELECT COUNT(*) FROM base) AS total_count
+    FROM base b
+    ORDER BY b."soldCount" DESC
+    LIMIT ${f.limit} OFFSET ${f.offset}
   `);
   const items = (rows.rows as unknown as Array<SearchProductRow & { total_count: number | string }>)
     .map(stripTotal);
   const totalCount = rows.rows.length > 0
     ? Number((rows.rows[0] as Record<string, unknown>).total_count)
     : 0;
+  // Compute facets in a separate query to keep the row shape stable.
+  const facets = await safeFallbackFacets(f).catch(() => ({ categories: [] }));
   return {
     items,
     totalCount,
-    facets: { categories: [] },
+    facets,
     degraded: true,
+  };
+}
+
+async function safeFallbackFacets(f: ProductSearchFilters): Promise<SearchProductsResult["facets"]> {
+  const like = f.q ? `%${f.q.toLowerCase()}%` : null;
+  const rows = await db.execute<{ category: string; count: number | string }>(sql`
+    SELECT p.category AS category, COUNT(*)::int AS count
+    FROM products p
+    WHERE 1=1
+    ${like ? sql`AND lower(p.title) LIKE ${like}` : sql``}
+    ${f.countryCode ? sql`AND p.country_code = ${f.countryCode}` : sql``}
+    ${f.minPriceMinor !== null ? sql`AND p.price_minor >= ${f.minPriceMinor}` : sql``}
+    ${f.maxPriceMinor !== null ? sql`AND p.price_minor <= ${f.maxPriceMinor}` : sql``}
+    ${f.freeShippingOnly ? sql`AND p.free_shipping = true` : sql``}
+    ${f.liveOnly ? sql`AND p.is_live_now = true` : sql``}
+    ${f.minRating !== null ? sql`AND p.rating >= ${f.minRating}` : sql``}
+    GROUP BY p.category
+    ORDER BY count DESC
+    LIMIT 20
+  `);
+  return {
+    categories: rows.rows.map((r) => ({ category: r.category, count: Number(r.count) })),
   };
 }
 
