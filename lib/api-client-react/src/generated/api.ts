@@ -48,9 +48,13 @@ import type {
   ForbiddenResponse,
   FulfillmentLocation,
   GatewayHealthSnapshot,
+  GetForYou200,
+  GetForYouParams,
   GetKycDocument200,
   GetPaymentsMode200,
   GetSellerEarningsParams,
+  GetTrendingStreams200,
+  GetTrendingStreamsParams,
   GoLiveResponse,
   HealthStatus,
   KycStatus,
@@ -96,6 +100,13 @@ import type {
   ReturnRecord,
   Review,
   SafetyReport,
+  SearchProductsParams,
+  SearchProductsResponse,
+  SearchProviderInfo,
+  SearchSellers200,
+  SearchSellersParams,
+  SearchStreams200,
+  SearchStreamsParams,
   SellerGoLiveBroadcastBody,
   SellerListing,
   SellerOrder,
@@ -7296,6 +7307,515 @@ export const useClearRecentSearches = <
 > => {
   return useMutation(getClearRecentSearchesMutationOptions(options));
 };
+
+export const getGetSearchProviderInfoUrl = () => {
+  return `/api/search/_provider/info`;
+};
+
+export const getSearchProviderInfo = async (
+  options?: RequestInit,
+): Promise<SearchProviderInfo> => {
+  return customFetch<SearchProviderInfo>(getGetSearchProviderInfoUrl(), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetSearchProviderInfoQueryKey = () => {
+  return [`/api/search/_provider/info`] as const;
+};
+
+export const getGetSearchProviderInfoQueryOptions = <
+  TData = Awaited<ReturnType<typeof getSearchProviderInfo>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getSearchProviderInfo>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetSearchProviderInfoQueryKey();
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getSearchProviderInfo>>
+  > = ({ signal }) => getSearchProviderInfo({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getSearchProviderInfo>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetSearchProviderInfoQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getSearchProviderInfo>>
+>;
+export type GetSearchProviderInfoQueryError = ErrorType<unknown>;
+
+export function useGetSearchProviderInfo<
+  TData = Awaited<ReturnType<typeof getSearchProviderInfo>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getSearchProviderInfo>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetSearchProviderInfoQueryOptions(options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+export const getSearchProductsUrl = (params?: SearchProductsParams) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : value.toString());
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/api/search/products?${stringifiedParams}`
+    : `/api/search/products`;
+};
+
+export const searchProducts = async (
+  params?: SearchProductsParams,
+  options?: RequestInit,
+): Promise<SearchProductsResponse> => {
+  return customFetch<SearchProductsResponse>(getSearchProductsUrl(params), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getSearchProductsQueryKey = (params?: SearchProductsParams) => {
+  return [`/api/search/products`, ...(params ? [params] : [])] as const;
+};
+
+export const getSearchProductsQueryOptions = <
+  TData = Awaited<ReturnType<typeof searchProducts>>,
+  TError = ErrorType<unknown>,
+>(
+  params?: SearchProductsParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof searchProducts>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getSearchProductsQueryKey(params);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof searchProducts>>> = ({
+    signal,
+  }) => searchProducts(params, { signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof searchProducts>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type SearchProductsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof searchProducts>>
+>;
+export type SearchProductsQueryError = ErrorType<unknown>;
+
+export function useSearchProducts<
+  TData = Awaited<ReturnType<typeof searchProducts>>,
+  TError = ErrorType<unknown>,
+>(
+  params?: SearchProductsParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof searchProducts>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getSearchProductsQueryOptions(params, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+export const getSearchSellersUrl = (params?: SearchSellersParams) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : value.toString());
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/api/search/sellers?${stringifiedParams}`
+    : `/api/search/sellers`;
+};
+
+export const searchSellers = async (
+  params?: SearchSellersParams,
+  options?: RequestInit,
+): Promise<SearchSellers200> => {
+  return customFetch<SearchSellers200>(getSearchSellersUrl(params), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getSearchSellersQueryKey = (params?: SearchSellersParams) => {
+  return [`/api/search/sellers`, ...(params ? [params] : [])] as const;
+};
+
+export const getSearchSellersQueryOptions = <
+  TData = Awaited<ReturnType<typeof searchSellers>>,
+  TError = ErrorType<unknown>,
+>(
+  params?: SearchSellersParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof searchSellers>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getSearchSellersQueryKey(params);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof searchSellers>>> = ({
+    signal,
+  }) => searchSellers(params, { signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof searchSellers>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type SearchSellersQueryResult = NonNullable<
+  Awaited<ReturnType<typeof searchSellers>>
+>;
+export type SearchSellersQueryError = ErrorType<unknown>;
+
+export function useSearchSellers<
+  TData = Awaited<ReturnType<typeof searchSellers>>,
+  TError = ErrorType<unknown>,
+>(
+  params?: SearchSellersParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof searchSellers>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getSearchSellersQueryOptions(params, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+export const getSearchStreamsUrl = (params?: SearchStreamsParams) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : value.toString());
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/api/search/streams?${stringifiedParams}`
+    : `/api/search/streams`;
+};
+
+export const searchStreams = async (
+  params?: SearchStreamsParams,
+  options?: RequestInit,
+): Promise<SearchStreams200> => {
+  return customFetch<SearchStreams200>(getSearchStreamsUrl(params), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getSearchStreamsQueryKey = (params?: SearchStreamsParams) => {
+  return [`/api/search/streams`, ...(params ? [params] : [])] as const;
+};
+
+export const getSearchStreamsQueryOptions = <
+  TData = Awaited<ReturnType<typeof searchStreams>>,
+  TError = ErrorType<unknown>,
+>(
+  params?: SearchStreamsParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof searchStreams>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getSearchStreamsQueryKey(params);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof searchStreams>>> = ({
+    signal,
+  }) => searchStreams(params, { signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof searchStreams>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type SearchStreamsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof searchStreams>>
+>;
+export type SearchStreamsQueryError = ErrorType<unknown>;
+
+export function useSearchStreams<
+  TData = Awaited<ReturnType<typeof searchStreams>>,
+  TError = ErrorType<unknown>,
+>(
+  params?: SearchStreamsParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof searchStreams>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getSearchStreamsQueryOptions(params, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+export const getGetForYouUrl = (params?: GetForYouParams) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : value.toString());
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/api/discovery/for-you?${stringifiedParams}`
+    : `/api/discovery/for-you`;
+};
+
+export const getForYou = async (
+  params?: GetForYouParams,
+  options?: RequestInit,
+): Promise<GetForYou200> => {
+  return customFetch<GetForYou200>(getGetForYouUrl(params), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetForYouQueryKey = (params?: GetForYouParams) => {
+  return [`/api/discovery/for-you`, ...(params ? [params] : [])] as const;
+};
+
+export const getGetForYouQueryOptions = <
+  TData = Awaited<ReturnType<typeof getForYou>>,
+  TError = ErrorType<UnauthorizedResponse>,
+>(
+  params?: GetForYouParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getForYou>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetForYouQueryKey(params);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof getForYou>>> = ({
+    signal,
+  }) => getForYou(params, { signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getForYou>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetForYouQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getForYou>>
+>;
+export type GetForYouQueryError = ErrorType<UnauthorizedResponse>;
+
+export function useGetForYou<
+  TData = Awaited<ReturnType<typeof getForYou>>,
+  TError = ErrorType<UnauthorizedResponse>,
+>(
+  params?: GetForYouParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getForYou>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetForYouQueryOptions(params, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+export const getGetTrendingStreamsUrl = (params?: GetTrendingStreamsParams) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : value.toString());
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/api/discovery/trending-streams?${stringifiedParams}`
+    : `/api/discovery/trending-streams`;
+};
+
+export const getTrendingStreams = async (
+  params?: GetTrendingStreamsParams,
+  options?: RequestInit,
+): Promise<GetTrendingStreams200> => {
+  return customFetch<GetTrendingStreams200>(getGetTrendingStreamsUrl(params), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetTrendingStreamsQueryKey = (
+  params?: GetTrendingStreamsParams,
+) => {
+  return [
+    `/api/discovery/trending-streams`,
+    ...(params ? [params] : []),
+  ] as const;
+};
+
+export const getGetTrendingStreamsQueryOptions = <
+  TData = Awaited<ReturnType<typeof getTrendingStreams>>,
+  TError = ErrorType<unknown>,
+>(
+  params?: GetTrendingStreamsParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getTrendingStreams>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getGetTrendingStreamsQueryKey(params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getTrendingStreams>>
+  > = ({ signal }) => getTrendingStreams(params, { signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getTrendingStreams>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetTrendingStreamsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getTrendingStreams>>
+>;
+export type GetTrendingStreamsQueryError = ErrorType<unknown>;
+
+export function useGetTrendingStreams<
+  TData = Awaited<ReturnType<typeof getTrendingStreams>>,
+  TError = ErrorType<unknown>,
+>(
+  params?: GetTrendingStreamsParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getTrendingStreams>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetTrendingStreamsQueryOptions(params, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
 
 export const getGetSellerMeUrl = () => {
   return `/api/seller/me`;

@@ -8,6 +8,7 @@ import {
   Clock,
   Heart,
   Radio,
+  AlertTriangle,
 } from "lucide-react";
 import { useTheme } from "@/lib/theme-context";
 import { useCountry } from "@/lib/country-context";
@@ -16,7 +17,6 @@ import { formatPrice } from "@/lib/format";
 import { useWishlist } from "@/lib/wishlist-context";
 import { useRecentlyViewed } from "@/lib/recently-viewed";
 import {
-  searchProducts,
   CATEGORIES,
   DEFAULT_FILTERS,
   SearchFilters,
@@ -27,6 +27,8 @@ import {
   useListRecentSearches,
   useAddRecentSearch,
   useClearRecentSearches,
+  useSearchProducts,
+  useGetSearchProviderInfo,
 } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
 
@@ -68,7 +70,40 @@ export default function Search() {
   const [filters, setFilters] = useState<SearchFilters>(DEFAULT_FILTERS);
   const [showFilters, setShowFilters] = useState(false);
 
-  const results = useMemo(() => searchProducts(filters), [filters]);
+  const isEmptyStateInputs =
+    !filters.query.trim() &&
+    !filters.category &&
+    filters.minPriceMinor === null &&
+    filters.maxPriceMinor === null &&
+    filters.minRating === null &&
+    !filters.freeShippingOnly &&
+    !filters.liveNowOnly;
+
+  const searchQuery = useSearchProducts(
+    {
+      q: filters.query,
+      countryCode: country.code,
+      category: filters.category ?? undefined,
+      minPriceMinor: filters.minPriceMinor ?? undefined,
+      maxPriceMinor: filters.maxPriceMinor ?? undefined,
+      minRating: filters.minRating ?? undefined,
+      freeShippingOnly: filters.freeShippingOnly,
+      liveOnly: filters.liveNowOnly,
+      sort: filters.sort,
+      limit: 24,
+      offset: 0,
+    },
+    // Orval-generated UseQueryOptions requires queryKey; the hook fills it in
+    // automatically when omitted, so cast away the strict TS shape here.
+    { query: { enabled: !isEmptyStateInputs } as never },
+  );
+  const results = (searchQuery.data?.items ?? []) as SearchProductCard[];
+  const totalCount = searchQuery.data?.totalCount ?? 0;
+  const facetCategories = searchQuery.data?.facets?.categories ?? [];
+
+  const providerInfo = useGetSearchProviderInfo();
+  const isDegraded =
+    !!providerInfo.data?.degraded || !!searchQuery.data?.degraded;
 
   const recentlyViewedProducts = useMemo(
     () =>
@@ -78,14 +113,7 @@ export default function Search() {
     [recentlyViewedIds],
   );
 
-  const isEmptyState =
-    !filters.query.trim() &&
-    !filters.category &&
-    filters.minPriceMinor === null &&
-    filters.maxPriceMinor === null &&
-    filters.minRating === null &&
-    !filters.freeShippingOnly &&
-    !filters.liveNowOnly;
+  const isEmptyState = isEmptyStateInputs;
 
   const subtle = isDark ? "text-white/55" : "text-stone-500";
   const cardBorder = isDark
@@ -364,6 +392,19 @@ export default function Search() {
       )}
 
       <div className="flex-1 overflow-y-auto px-4 pb-24 pt-3 space-y-4">
+        {isDegraded && (
+          <div
+            className={`flex items-center gap-2 px-3 py-2 rounded-lg text-xs ${
+              isDark
+                ? "bg-[#FF8855]/10 border border-[#FF8855]/30 text-[#FF8855]"
+                : "bg-[#E6502E]/10 border border-[#E6502E]/30 text-[#E6502E]"
+            }`}
+            data-testid="banner-search-degraded"
+          >
+            <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+            <span>Search is in fallback mode — relevance ranking may be limited.</span>
+          </div>
+        )}
         {isEmptyState ? (
           <>
             {queries.length > 0 && (
@@ -467,8 +508,40 @@ export default function Search() {
         ) : (
           <div>
             <p className={`text-xs mb-2 ${subtle}`}>
-              {results.length} result{results.length === 1 ? "" : "s"}
+              {totalCount > results.length
+                ? `${totalCount.toLocaleString()} results`
+                : `${results.length} result${results.length === 1 ? "" : "s"}`}
             </p>
+            {facetCategories.length > 1 && (
+              <div className="flex gap-1.5 overflow-x-auto no-scrollbar mb-2">
+                {facetCategories.slice(0, 8).map((f) => {
+                  const active = filters.category === f.category;
+                  return (
+                    <button
+                      key={f.category}
+                      onClick={() =>
+                        setFilters((prev) => ({
+                          ...prev,
+                          category: active ? null : f.category,
+                        }))
+                      }
+                      data-testid={`facet-${f.category}`}
+                      className={`whitespace-nowrap px-2.5 py-1 rounded-full text-[11px] font-bold border ${
+                        active
+                          ? isDark
+                            ? "bg-[#5BA3F5] text-black border-transparent"
+                            : "bg-[#1B2A4A] text-white border-transparent"
+                          : isDark
+                            ? "border-white/10 text-white/70"
+                            : "border-stone-400/55 text-stone-600"
+                      }`}
+                    >
+                      {f.category} · {f.count}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
             <div className="grid grid-cols-2 gap-2">
               {results.map((p) => (
                 <ProductCard
@@ -523,6 +596,15 @@ function ToggleFilter({
   );
 }
 
+export type SearchProductCard = {
+  id: string;
+  title: string;
+  priceMinor: number;
+  rating: number;
+  isLiveNow: boolean;
+  images: string[];
+};
+
 function ProductCard({
   product,
   country,
@@ -530,7 +612,7 @@ function ProductCard({
   isWishlisted,
   onToggleWishlist,
 }: {
-  product: (typeof SEED_PRODUCTS)[number];
+  product: SearchProductCard;
   country: ReturnType<typeof useCountry>["country"];
   isDark: boolean;
   isWishlisted: boolean;

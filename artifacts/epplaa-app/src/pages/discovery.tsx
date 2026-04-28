@@ -1,4 +1,4 @@
-import { Search, Play, ChevronRight, Clock } from "lucide-react";
+import { Search, Play, ChevronRight, Clock, Flame, Sparkles } from "lucide-react";
 import { Link } from "wouter";
 import { useTheme } from "@/lib/theme-context";
 import { SEED_PRODUCTS, SEED_STREAMS } from "@/lib/seed";
@@ -6,11 +6,20 @@ import { SEED_REPLAYS } from "@/lib/replays";
 import { useCountry } from "@/lib/country-context";
 import { formatPrice } from "@/lib/format";
 import { ThemeToggle } from "@/components/theme-toggle";
+import {
+  useGetForYou,
+  useGetTrendingStreams,
+} from "@workspace/api-client-react";
 
 export default function Discovery() {
   const { resolvedTheme } = useTheme();
   const isDark = resolvedTheme === "dark";
   const { country } = useCountry();
+
+  const forYou = useGetForYou({ country: country.code, limit: 8 });
+  const trending = useGetTrendingStreams({ limit: 8 });
+  const forYouItems = forYou.data?.items ?? [];
+  const trendingItems = trending.data?.items ?? [];
   
   const categories = ["For You", "Beauty", "Phones", "Fashion", "Home", "Imports", "Electronics"];
 
@@ -57,6 +66,98 @@ export default function Discovery() {
 
       {/* Feed Grid */}
       <div className="flex-1 overflow-y-auto px-2 pb-6 no-scrollbar">
+        {/* For You — personalized product picks */}
+        {forYouItems.length > 0 && (
+          <div className="px-2 mb-3" data-testid="rail-for-you">
+            <div className="flex items-center justify-between mb-2">
+              <h2 className="text-sm font-black tracking-tight flex items-center gap-1">
+                <Sparkles className={`w-3.5 h-3.5 ${isDark ? "text-[#5BA3F5]" : "text-[#1B2A4A]"}`} />
+                For You
+              </h2>
+            </div>
+            <div className="flex gap-2 overflow-x-auto no-scrollbar -mx-2 px-2 pb-1">
+              {forYouItems.map((p) => (
+                <Link
+                  key={p.id}
+                  href={`/product/${p.id}`}
+                  data-testid={`for-you-${p.id}`}
+                  className={`relative shrink-0 w-32 aspect-[3/4] rounded-xl overflow-hidden block ${
+                    isDark ? "bg-[#171C30]" : "bg-[#fbeed3] border border-stone-400/35"
+                  }`}
+                >
+                  <img
+                    src={p.images?.[0] ?? ""}
+                    alt={p.title}
+                    className="w-full h-full object-cover"
+                  />
+                  <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-transparent to-transparent" />
+                  {p.reasons?.[0] && (
+                    <div className="absolute top-1.5 left-1.5 bg-black/60 backdrop-blur text-white text-[9px] font-bold px-1.5 py-0.5 rounded">
+                      {labelReason(p.reasons[0])}
+                    </div>
+                  )}
+                  <div className="absolute bottom-1.5 left-1.5 right-1.5">
+                    <p className="text-[10px] text-white font-medium leading-tight line-clamp-2 mb-0.5">
+                      {p.title}
+                    </p>
+                    <p className={`text-[11px] font-black ${isDark ? "text-[#5BA3F5]" : "text-white"}`}>
+                      {formatPrice(p.priceMinor, country)}
+                    </p>
+                  </div>
+                </Link>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Trending Now — live streams ranked by viewer growth */}
+        {trendingItems.length > 0 && (
+          <div className="px-2 mb-3" data-testid="rail-trending-streams">
+            <div className="flex items-center justify-between mb-2">
+              <h2 className="text-sm font-black tracking-tight flex items-center gap-1">
+                <Flame className={`w-3.5 h-3.5 ${isDark ? "text-[#FF8855]" : "text-[#E6502E]"}`} />
+                Trending Now
+              </h2>
+            </div>
+            <div className="flex gap-2 overflow-x-auto no-scrollbar -mx-2 px-2 pb-1">
+              {trendingItems.map((s) => (
+                <Link
+                  key={s.id}
+                  href={`/live/${s.id}`}
+                  data-testid={`trending-stream-${s.id}`}
+                  className="relative shrink-0 w-32 aspect-[3/4] rounded-xl overflow-hidden block"
+                >
+                  <img
+                    src={s.posterImage}
+                    alt={s.title}
+                    className="w-full h-full object-cover"
+                  />
+                  <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-black/20" />
+                  {s.isLive && (
+                    <div
+                      className={`absolute top-1.5 left-1.5 text-white text-[9px] font-black px-1.5 py-0.5 rounded flex items-center gap-1 ${
+                        isDark ? "bg-[#FF8855]" : "bg-[#E6502E]"
+                      } animate-pulse`}
+                    >
+                      <span className="w-1 h-1 rounded-full bg-white" />
+                      LIVE
+                    </div>
+                  )}
+                  <div className="absolute top-1.5 right-1.5 bg-black/60 backdrop-blur text-white text-[9px] font-bold px-1.5 py-0.5 rounded">
+                    {formatViewers(s.currentViewers)}
+                  </div>
+                  <div className="absolute bottom-1.5 left-1.5 right-1.5">
+                    <p className="text-[10px] text-white font-bold leading-tight line-clamp-2">
+                      {s.title}
+                    </p>
+                    <p className="text-[9px] text-white/85 mt-0.5">{s.hostName}</p>
+                  </div>
+                </Link>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* Replays rail — horizontal scroll of recently-ended streams */}
         <div className="px-2 mb-3">
           <div className="flex items-center justify-between mb-2">
@@ -211,4 +312,21 @@ export default function Discovery() {
       </div>
     </div>
   );
+}
+
+function labelReason(reason: string): string {
+  switch (reason) {
+    case "follows": return "From a seller you follow";
+    case "wishlist": return "Like your wishlist";
+    case "recently_viewed": return "Based on recent views";
+    case "country": return "Popular near you";
+    case "trending": return "Trending";
+    default: return reason;
+  }
+}
+
+function formatViewers(n: number): string {
+  if (!Number.isFinite(n)) return "0";
+  if (n >= 1000) return `${(n / 1000).toFixed(1)}K`;
+  return String(n);
 }

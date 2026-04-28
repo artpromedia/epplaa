@@ -26,6 +26,8 @@ export const productsTable = pgTable("products", {
    */
   manufacturerUserId: text("manufacturer_user_id"),
   manufacturerShareBp: integer("manufacturer_share_bp").notNull().default(0),
+  freeShipping: boolean("free_shipping").notNull().default(false),
+  viewCount: integer("view_count").notNull().default(0),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 

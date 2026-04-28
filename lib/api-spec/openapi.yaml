@@ -1134,6 +1134,104 @@ paths:
         "204": { description: Cleared }
         "401": { $ref: "#/components/responses/Unauthorized" }
 
+  /search/_provider/info:
+    get:
+      operationId: getSearchProviderInfo
+      tags: [search]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/SearchProviderInfo" } } } }
+
+  /search/products:
+    get:
+      operationId: searchProducts
+      tags: [search]
+      parameters:
+        - { in: query, name: q, schema: { type: string } }
+        - { in: query, name: countryCode, schema: { type: string } }
+        - { in: query, name: category, schema: { type: string } }
+        - { in: query, name: minPriceMinor, schema: { type: integer } }
+        - { in: query, name: maxPriceMinor, schema: { type: integer } }
+        - { in: query, name: minRating, schema: { type: number } }
+        - { in: query, name: freeShippingOnly, schema: { type: boolean } }
+        - { in: query, name: liveOnly, schema: { type: boolean } }
+        - { in: query, name: sort, schema: { type: string, enum: [relevance, price_asc, price_desc, rating, popular] } }
+        - { in: query, name: limit, schema: { type: integer } }
+        - { in: query, name: offset, schema: { type: integer } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/SearchProductsResponse" } } } }
+
+  /search/sellers:
+    get:
+      operationId: searchSellers
+      tags: [search]
+      parameters:
+        - { in: query, name: q, schema: { type: string } }
+        - { in: query, name: limit, schema: { type: integer } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/SellerHit" } }
+
+  /search/streams:
+    get:
+      operationId: searchStreams
+      tags: [search]
+      parameters:
+        - { in: query, name: q, schema: { type: string } }
+        - { in: query, name: limit, schema: { type: integer } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/StreamHit" } }
+
+  /discovery/for-you:
+    get:
+      operationId: getForYou
+      tags: [discovery]
+      parameters:
+        - { in: query, name: country, schema: { type: string } }
+        - { in: query, name: limit, schema: { type: integer } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/ForYouProduct" } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /discovery/trending-streams:
+    get:
+      operationId: getTrendingStreams
+      tags: [discovery]
+      parameters:
+        - { in: query, name: limit, schema: { type: integer } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/TrendingStream" } }
+
   /seller/me:
     get:
       operationId: getSellerMe
@@ -1756,6 +1854,92 @@ components:
         title: { type: string }
         currentProductId: { type: ["string", "null"] }
         isLive: { type: boolean }
+
+    SearchProviderInfo:
+      type: object
+      required: [provider, degraded]
+      properties:
+        provider: { type: string }
+        degraded: { type: boolean }
+
+    SearchProductHit:
+      allOf:
+        - $ref: "#/components/schemas/Product"
+        - type: object
+          required: [freeShipping, rank]
+          properties:
+            freeShipping: { type: boolean }
+            rank: { type: number }
+
+    CategoryFacet:
+      type: object
+      required: [category, count]
+      properties:
+        category: { type: string }
+        count: { type: integer }
+
+    SearchProductsResponse:
+      type: object
+      required: [items, totalCount, facets, degraded]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/SearchProductHit" }
+        totalCount: { type: integer }
+        facets:
+          type: object
+          required: [categories]
+          properties:
+            categories:
+              type: array
+              items: { $ref: "#/components/schemas/CategoryFacet" }
+        degraded: { type: boolean }
+
+    SellerHit:
+      type: object
+      required: [sellerName, sellerAvatar, productCount, totalSold]
+      properties:
+        sellerName: { type: string }
+        sellerAvatar: { type: string }
+        productCount: { type: integer }
+        totalSold: { type: integer }
+
+    StreamHit:
+      type: object
+      required: [id, title, hostName, hostAvatar, posterImage, isLive, currentViewers]
+      properties:
+        id: { type: string }
+        title: { type: string }
+        hostName: { type: string }
+        hostAvatar: { type: string }
+        posterImage: { type: string }
+        isLive: { type: boolean }
+        currentViewers: { type: integer }
+
+    ForYouProduct:
+      allOf:
+        - $ref: "#/components/schemas/SearchProductHit"
+        - type: object
+          required: [score, reasons]
+          properties:
+            score: { type: number }
+            reasons:
+              type: array
+              items: { type: string }
+
+    TrendingStream:
+      type: object
+      required: [id, title, hostName, hostAvatar, posterImage, isLive, currentViewers, peakViewers, score]
+      properties:
+        id: { type: string }
+        title: { type: string }
+        hostName: { type: string }
+        hostAvatar: { type: string }
+        posterImage: { type: string }
+        isLive: { type: boolean }
+        currentViewers: { type: integer }
+        peakViewers: { type: integer }
+        score: { type: number }
 
     Replay:
       type: object

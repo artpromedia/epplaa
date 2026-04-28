@@ -1384,6 +1384,161 @@ export const AddRecentSearchBody = zod.object({
 export const AddRecentSearchResponseItem = zod.string();
 export const AddRecentSearchResponse = zod.array(AddRecentSearchResponseItem);
 
+export const GetSearchProviderInfoResponse = zod.object({
+  provider: zod.string(),
+  degraded: zod.boolean(),
+});
+
+export const SearchProductsQueryParams = zod.object({
+  q: zod.coerce.string().optional(),
+  countryCode: zod.coerce.string().optional(),
+  category: zod.coerce.string().optional(),
+  minPriceMinor: zod.coerce.number().optional(),
+  maxPriceMinor: zod.coerce.number().optional(),
+  minRating: zod.coerce.number().optional(),
+  freeShippingOnly: zod.coerce.boolean().optional(),
+  liveOnly: zod.coerce.boolean().optional(),
+  sort: zod
+    .enum(["relevance", "price_asc", "price_desc", "rating", "popular"])
+    .optional(),
+  limit: zod.coerce.number().optional(),
+  offset: zod.coerce.number().optional(),
+});
+
+export const SearchProductsResponse = zod.object({
+  items: zod.array(
+    zod
+      .object({
+        id: zod.string(),
+        title: zod.string(),
+        priceMinor: zod.number(),
+        originalPriceMinor: zod.number().nullish(),
+        originCountry: zod.string(),
+        originLabel: zod.string(),
+        sellerName: zod.string(),
+        sellerAvatar: zod.string().optional(),
+        rating: zod.number(),
+        soldCount: zod.number(),
+        isLiveNow: zod.boolean(),
+        images: zod.array(zod.string()),
+        variants: zod.array(zod.record(zod.string(), zod.unknown())),
+        category: zod.string(),
+        countryCode: zod.string(),
+      })
+      .and(
+        zod.object({
+          freeShipping: zod.boolean(),
+          rank: zod.number(),
+        }),
+      ),
+  ),
+  totalCount: zod.number(),
+  facets: zod.object({
+    categories: zod.array(
+      zod.object({
+        category: zod.string(),
+        count: zod.number(),
+      }),
+    ),
+  }),
+  degraded: zod.boolean(),
+});
+
+export const SearchSellersQueryParams = zod.object({
+  q: zod.coerce.string().optional(),
+  limit: zod.coerce.number().optional(),
+});
+
+export const SearchSellersResponse = zod.object({
+  items: zod.array(
+    zod.object({
+      sellerName: zod.string(),
+      sellerAvatar: zod.string(),
+      productCount: zod.number(),
+      totalSold: zod.number(),
+    }),
+  ),
+});
+
+export const SearchStreamsQueryParams = zod.object({
+  q: zod.coerce.string().optional(),
+  limit: zod.coerce.number().optional(),
+});
+
+export const SearchStreamsResponse = zod.object({
+  items: zod.array(
+    zod.object({
+      id: zod.string(),
+      title: zod.string(),
+      hostName: zod.string(),
+      hostAvatar: zod.string(),
+      posterImage: zod.string(),
+      isLive: zod.boolean(),
+      currentViewers: zod.number(),
+    }),
+  ),
+});
+
+export const GetForYouQueryParams = zod.object({
+  country: zod.coerce.string().optional(),
+  limit: zod.coerce.number().optional(),
+});
+
+export const GetForYouResponse = zod.object({
+  items: zod.array(
+    zod
+      .object({
+        id: zod.string(),
+        title: zod.string(),
+        priceMinor: zod.number(),
+        originalPriceMinor: zod.number().nullish(),
+        originCountry: zod.string(),
+        originLabel: zod.string(),
+        sellerName: zod.string(),
+        sellerAvatar: zod.string().optional(),
+        rating: zod.number(),
+        soldCount: zod.number(),
+        isLiveNow: zod.boolean(),
+        images: zod.array(zod.string()),
+        variants: zod.array(zod.record(zod.string(), zod.unknown())),
+        category: zod.string(),
+        countryCode: zod.string(),
+      })
+      .and(
+        zod.object({
+          freeShipping: zod.boolean(),
+          rank: zod.number(),
+        }),
+      )
+      .and(
+        zod.object({
+          score: zod.number(),
+          reasons: zod.array(zod.string()),
+        }),
+      ),
+  ),
+});
+
+export const GetTrendingStreamsQueryParams = zod.object({
+  limit: zod.coerce.number().optional(),
+});
+
+export const GetTrendingStreamsResponse = zod.object({
+  items: zod.array(
+    zod.object({
+      id: zod.string(),
+      title: zod.string(),
+      hostName: zod.string(),
+      hostAvatar: zod.string(),
+      posterImage: zod.string(),
+      isLive: zod.boolean(),
+      currentViewers: zod.number(),
+      peakViewers: zod.number(),
+      score: zod.number(),
+    }),
+  ),
+});
+
 export const GetSellerMeResponse = zod.object({
   status: zod.string(),
   tier: zod.string(),

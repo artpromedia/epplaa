@@ -2,6 +2,7 @@ import { Router, type IRouter } from "express";
 import { eq, desc, sql } from "drizzle-orm";
 import { db, schema } from "../lib/db";
 import { requireUserId } from "../lib/auth";
+import { forYouProducts, trendingStreams } from "../lib/recommender";
 
 const router: IRouter = Router();
 
@@ -84,5 +85,24 @@ router.post("/recent-searches", async (req, res) => {
   await db.insert(schema.recentSearchesTable).values({ userId, query });
   res.json(await listRecentSearches(userId));
 });
+
+router.get("/discovery/for-you", async (req, res) => {
+  const userId = requireUserId(req, res);
+  if (!userId) return;
+  const country = typeof req.query.country === "string" ? req.query.country.trim() : "";
+  const items = await forYouProducts(userId, country || null, clampLimit(req.query.limit, 12, 50));
+  res.json({ items });
+});
+
+router.get("/discovery/trending-streams", async (req, res) => {
+  const items = await trendingStreams(clampLimit(req.query.limit, 10, 50));
+  res.json({ items });
+});
+
+function clampLimit(raw: unknown, def: number, max: number): number {
+  const n = Number(raw ?? def);
+  if (!Number.isFinite(n)) return def;
+  return Math.min(Math.max(Math.trunc(n), 1), max);
+}
 
 export default router;

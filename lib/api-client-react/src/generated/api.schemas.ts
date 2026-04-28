@@ -110,6 +110,66 @@ export interface Stream {
   isLive: boolean;
 }
 
+export interface SearchProviderInfo {
+  provider: string;
+  degraded: boolean;
+}
+
+export type SearchProductHit = Product & {
+  freeShipping: boolean;
+  rank: number;
+};
+
+export interface CategoryFacet {
+  category: string;
+  count: number;
+}
+
+export type SearchProductsResponseFacets = {
+  categories: CategoryFacet[];
+};
+
+export interface SearchProductsResponse {
+  items: SearchProductHit[];
+  totalCount: number;
+  facets: SearchProductsResponseFacets;
+  degraded: boolean;
+}
+
+export interface SellerHit {
+  sellerName: string;
+  sellerAvatar: string;
+  productCount: number;
+  totalSold: number;
+}
+
+export interface StreamHit {
+  id: string;
+  title: string;
+  hostName: string;
+  hostAvatar: string;
+  posterImage: string;
+  isLive: boolean;
+  currentViewers: number;
+}
+
+export type ForYouProduct = SearchProductHit & {
+  score: number;
+  reasons: string[];
+};
+
+export interface TrendingStream {
+  id: string;
+  title: string;
+  hostName: string;
+  hostAvatar: string;
+  posterImage: string;
+  isLive: boolean;
+  currentViewers: number;
+  peakViewers: number;
+  score: number;
+}
+
 export interface Replay {
   id: string;
   hostName: string;
@@ -1141,6 +1201,66 @@ export type CreateReviewBody = {
 
 export type AddRecentSearchBody = {
   query: string;
+};
+
+export type SearchProductsParams = {
+  q?: string;
+  countryCode?: string;
+  category?: string;
+  minPriceMinor?: number;
+  maxPriceMinor?: number;
+  minRating?: number;
+  freeShippingOnly?: boolean;
+  liveOnly?: boolean;
+  sort?: SearchProductsSort;
+  limit?: number;
+  offset?: number;
+};
+
+export type SearchProductsSort =
+  (typeof SearchProductsSort)[keyof typeof SearchProductsSort];
+
+export const SearchProductsSort = {
+  relevance: "relevance",
+  price_asc: "price_asc",
+  price_desc: "price_desc",
+  rating: "rating",
+  popular: "popular",
+} as const;
+
+export type SearchSellersParams = {
+  q?: string;
+  limit?: number;
+};
+
+export type SearchSellers200 = {
+  items: SellerHit[];
+};
+
+export type SearchStreamsParams = {
+  q?: string;
+  limit?: number;
+};
+
+export type SearchStreams200 = {
+  items: StreamHit[];
+};
+
+export type GetForYouParams = {
+  country?: string;
+  limit?: number;
+};
+
+export type GetForYou200 = {
+  items: ForYouProduct[];
+};
+
+export type GetTrendingStreamsParams = {
+  limit?: number;
+};
+
+export type GetTrendingStreams200 = {
+  items: TrendingStream[];
 };
 
 export type ApplySellerBody = { [key: string]: unknown };
