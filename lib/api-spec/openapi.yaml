@@ -1784,6 +1784,16 @@ paths:
         "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Ok" } } } }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
+  /mfa/totp/regenerate-backup-codes:
+    post:
+      operationId: regenerateMfaBackupCodes
+      tags: [mfa]
+      summary: Issue a fresh batch of 10 single-use backup codes, replacing the existing ones. Requires a recent assertion; otherwise returns 403.
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/MfaBackupCodesResult" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
 
   # --- Admin operator console -------------------------------------------------
   /admin/dashboard:
@@ -3000,6 +3010,14 @@ components:
       required: [code]
       properties:
         code: { type: string }
+    MfaBackupCodesResult:
+      type: object
+      required: [backupCodes]
+      properties:
+        backupCodes:
+          type: array
+          items: { type: string }
+          description: "Plaintext single-use backup codes. Returned ONCE; not recoverable after this response."
 
     ReferralActivity:
       type: object

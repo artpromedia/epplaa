@@ -7,6 +7,7 @@ import {
   disableMfa,
   getMfaStatus,
   hasRecentChallenge,
+  regenerateBackupCodes,
   setupTotp,
   thirtyDayVelocityNgnMinor,
   verifyTotpAndActivate,
@@ -120,6 +121,43 @@ router.post("/mfa/totp/disable", async (req: Request, res: Response) => {
   await disableMfa(userId);
   res.json({ ok: true });
 });
+
+router.post(
+  "/mfa/totp/regenerate-backup-codes",
+  async (req: Request, res: Response) => {
+    const userId = requireUserId(req, res);
+    if (!userId) return;
+    // Same gate as /disable: a fresh assertion (last 15 min) is required
+    // so a stolen primary cookie can't burn through the existing codes
+    // by minting a new sheet.
+    if (!(await hasRecentChallenge(userId))) {
+      res.status(403).json({
+        error: "mfa_challenge_required",
+        detail:
+          "Re-verify your authenticator code before regenerating backup codes.",
+      });
+      return;
+    }
+    try {
+      const codes = await regenerateBackupCodes(userId);
+      if (!codes) {
+        res.status(404).json({
+          error: "mfa_not_enrolled",
+          detail:
+            "No active TOTP enrolment found. Enrol an authenticator first.",
+        });
+        return;
+      }
+      res.json({ backupCodes: codes });
+    } catch (err) {
+      logger.error(
+        { err: (err as Error).message, userId },
+        "mfa_regen_backup_codes_failed",
+      );
+      res.status(500).json({ error: "mfa_regen_backup_codes_failed" });
+    }
+  },
+);
 
 /**
  * Express middleware factory. Mount on routes that move money or change

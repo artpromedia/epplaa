@@ -17,6 +17,7 @@ import {
   useSetupMfaTotp,
   useVerifyMfaTotp,
   useDisableMfaTotp,
+  useRegenerateMfaBackupCodes,
 } from "@workspace/api-client-react";
 import { useTheme } from "@/lib/theme-context";
 import { PageHeader } from "@/components/page-header";
@@ -73,8 +74,14 @@ export default function Security() {
   const [setupResult, setSetupResult] = useState<MfaSetupResult | null>(null);
   const [activateCode, setActivateCode] = useState("");
   const [disableCode, setDisableCode] = useState("");
+  const [regenCode, setRegenCode] = useState("");
+  const [regenOpen, setRegenOpen] = useState(false);
+  const [regeneratedCodes, setRegeneratedCodes] = useState<string[] | null>(
+    null,
+  );
   const [copiedSecret, setCopiedSecret] = useState(false);
   const [copiedCodes, setCopiedCodes] = useState(false);
+  const [copiedRegen, setCopiedRegen] = useState(false);
 
   const invalidate = () => qc.invalidateQueries({ queryKey: MFA_STATUS_KEY });
 
@@ -132,6 +139,37 @@ export default function Security() {
   const reAssertMut = useVerifyMfaTotp({
     mutation: {
       onSuccess: () => disableMut.mutate(),
+      onError: () =>
+        toast({
+          title: "Code rejected",
+          description: "That code didn't match — try a fresh one.",
+        }),
+    },
+  });
+
+  const regenMut = useRegenerateMfaBackupCodes({
+    mutation: {
+      onSuccess: (data) => {
+        invalidate();
+        setRegenCode("");
+        setRegenOpen(false);
+        setRegeneratedCodes(data.backupCodes);
+        toast({
+          title: "New backup codes ready",
+          description: "Save them now — your old codes no longer work.",
+        });
+      },
+      onError: () =>
+        toast({
+          title: "Couldn't regenerate codes",
+          description: "Verify a fresh authenticator code first.",
+        }),
+    },
+  });
+
+  const regenAssertMut = useVerifyMfaTotp({
+    mutation: {
+      onSuccess: () => regenMut.mutate(),
       onError: () =>
         toast({
           title: "Code rejected",
@@ -313,6 +351,7 @@ export default function Security() {
 
             <BackupCodeSheet
               isDark={isDark}
+              step="Step 3"
               codes={setupResult.backupCodes}
               copied={copiedCodes}
               onCopy={async () => {
@@ -364,6 +403,128 @@ export default function Security() {
                 {formatDate(status.lastUsedAt)}
               </Row>
             </dl>
+
+            <BackupCodeWarningBanner
+              remaining={status.backupCodesRemaining}
+              isDark={isDark}
+            />
+
+            {regeneratedCodes && (
+              <BackupCodeSheet
+                isDark={isDark}
+                heading="Save your new backup codes (shown once)"
+                codes={regeneratedCodes}
+                copied={copiedRegen}
+                onCopy={async () => {
+                  try {
+                    await navigator.clipboard.writeText(
+                      regeneratedCodes.join("\n"),
+                    );
+                    setCopiedRegen(true);
+                    setTimeout(() => setCopiedRegen(false), 1500);
+                  } catch {
+                    // ignore
+                  }
+                }}
+                onDismiss={() => {
+                  setRegeneratedCodes(null);
+                  setCopiedRegen(false);
+                }}
+              />
+            )}
+
+            {!regeneratedCodes && (
+              <div
+                className={`pt-3 border-t space-y-2 ${
+                  isDark ? "border-white/10" : "border-stone-200"
+                }`}
+              >
+                {!regenOpen ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setRegenOpen(true);
+                      setRegenCode("");
+                    }}
+                    className={`text-sm font-medium underline ${
+                      isDark ? "text-white" : "text-stone-900"
+                    }`}
+                    data-testid="button-mfa-regenerate-open"
+                  >
+                    Regenerate backup codes
+                  </button>
+                ) : (
+                  <>
+                    <p className={`text-xs ${subtle}`}>
+                      Generating a new sheet immediately invalidates your
+                      existing backup codes. Enter a fresh 6-digit code to
+                      confirm.
+                    </p>
+                    <form
+                      className="flex gap-2 items-center"
+                      onSubmit={(e) => {
+                        e.preventDefault();
+                        const code = regenCode.replace(/\D/g, "").slice(0, 6);
+                        if (code.length !== 6) return;
+                        regenAssertMut.mutate({
+                          data: { code, mode: "assert" },
+                        });
+                      }}
+                    >
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        pattern="[0-9]*"
+                        maxLength={6}
+                        placeholder="6-digit code"
+                        value={regenCode}
+                        onChange={(e) =>
+                          setRegenCode(
+                            e.target.value.replace(/\D/g, "").slice(0, 6),
+                          )
+                        }
+                        className={`flex-1 max-w-[180px] font-mono tracking-widest rounded-lg px-3 py-2 ${
+                          isDark
+                            ? "bg-white/10 border border-white/10 text-white"
+                            : "bg-white border border-stone-300 text-stone-900"
+                        }`}
+                        data-testid="input-mfa-regenerate-code"
+                      />
+                      <button
+                        type="submit"
+                        disabled={
+                          regenAssertMut.isPending ||
+                          regenMut.isPending ||
+                          regenCode.length !== 6
+                        }
+                        className={`px-4 py-2 rounded-full font-bold flex items-center gap-2 ${
+                          isDark
+                            ? "bg-[#FF8855] text-white"
+                            : "bg-[#E6502E] text-white"
+                        } disabled:opacity-50`}
+                        data-testid="button-mfa-regenerate"
+                      >
+                        {(regenAssertMut.isPending || regenMut.isPending) && (
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                        )}
+                        Regenerate
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setRegenOpen(false);
+                          setRegenCode("");
+                        }}
+                        className={`text-sm ${subtle} underline`}
+                        data-testid="button-mfa-regenerate-cancel"
+                      >
+                        Cancel
+                      </button>
+                    </form>
+                  </>
+                )}
+              </div>
+            )}
 
             <div
               className={`pt-3 border-t space-y-2 ${
@@ -517,18 +678,29 @@ function BackupCodeSheet({
   codes,
   copied,
   onCopy,
+  heading,
+  step,
+  onDismiss,
 }: {
   isDark: boolean;
   codes: string[];
   copied: boolean;
   onCopy: () => void;
+  heading?: string;
+  step?: string;
+  onDismiss?: () => void;
 }) {
   return (
     <div
       className={`pt-4 border-t ${isDark ? "border-white/10" : "border-stone-200"}`}
+      data-testid="backup-code-sheet"
     >
-      <p className="text-xs uppercase tracking-wider font-bold">Step 3</p>
-      <h2 className="font-bold mb-2">Save your backup codes (shown once)</h2>
+      {step && (
+        <p className="text-xs uppercase tracking-wider font-bold">{step}</p>
+      )}
+      <h2 className="font-bold mb-2">
+        {heading ?? "Save your backup codes (shown once)"}
+      </h2>
       <div
         className={`rounded-lg border p-3 ${
           isDark
@@ -551,7 +723,7 @@ function BackupCodeSheet({
             </li>
           ))}
         </ul>
-        <div className="flex gap-2 mt-3">
+        <div className="flex flex-wrap gap-2 mt-3">
           <button
             type="button"
             onClick={() => downloadBackupCodes(codes)}
@@ -580,7 +752,64 @@ function BackupCodeSheet({
             )}
             {copied ? "Copied" : "Copy all"}
           </button>
+          {onDismiss && (
+            <button
+              type="button"
+              onClick={onDismiss}
+              className={`text-sm font-medium px-3 py-1.5 rounded ml-auto ${
+                isDark
+                  ? "bg-white/10 hover:bg-white/15"
+                  : "bg-stone-200 hover:bg-stone-300"
+              }`}
+              data-testid="button-dismiss-backup-codes"
+            >
+              I've saved them
+            </button>
+          )}
         </div>
+      </div>
+    </div>
+  );
+}
+
+function BackupCodeWarningBanner({
+  remaining,
+  isDark,
+}: {
+  remaining: number;
+  isDark: boolean;
+}) {
+  if (remaining >= 3) return null;
+  if (remaining === 0) {
+    return (
+      <div
+        className="rounded-lg border border-red-500/40 bg-red-500/10 p-3 flex items-start gap-2"
+        data-testid="backup-codes-banner-empty"
+      >
+        <ShieldAlert className="w-4 h-4 text-red-500 mt-0.5 shrink-0" />
+        <div className="text-sm">
+          <p className="font-bold">You're out of backup codes</p>
+          <p className={isDark ? "text-white/70" : "text-stone-600"}>
+            If you lose access to your authenticator app you won't be able to
+            sign back in. Generate a fresh sheet now.
+          </p>
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div
+      className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 flex items-start gap-2"
+      data-testid="backup-codes-banner-low"
+    >
+      <ShieldAlert className="w-4 h-4 text-amber-500 mt-0.5 shrink-0" />
+      <div className="text-sm">
+        <p className="font-bold">
+          Only {remaining} backup {remaining === 1 ? "code" : "codes"} left
+        </p>
+        <p className={isDark ? "text-white/70" : "text-stone-600"}>
+          Generate a new sheet so you have plenty of spares for recovery.
+        </p>
       </div>
     </div>
   );

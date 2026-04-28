@@ -17,6 +17,7 @@ import {
   useSetupMfaTotp,
   useVerifyMfaTotp,
   useDisableMfaTotp,
+  useRegenerateMfaBackupCodes,
 } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
@@ -69,6 +70,11 @@ export function MfaSetup() {
   const [setupResult, setSetupResult] = useState<MfaSetupResult | null>(null);
   const [activateCode, setActivateCode] = useState("");
   const [disableCode, setDisableCode] = useState("");
+  const [regenCode, setRegenCode] = useState("");
+  const [regenOpen, setRegenOpen] = useState(false);
+  const [regeneratedCodes, setRegeneratedCodes] = useState<string[] | null>(
+    null,
+  );
   const [copiedSecret, setCopiedSecret] = useState(false);
 
   const invalidate = () => qc.invalidateQueries({ queryKey: MFA_STATUS_KEY });
@@ -131,6 +137,41 @@ export function MfaSetup() {
     mutation: {
       onSuccess: () => {
         disableMut.mutate();
+      },
+      onError: () => {
+        toast({
+          title: "Code rejected",
+          description: "That code didn't match — try a fresh one.",
+        });
+      },
+    },
+  });
+
+  const regenMut = useRegenerateMfaBackupCodes({
+    mutation: {
+      onSuccess: (data) => {
+        invalidate();
+        setRegenCode("");
+        setRegenOpen(false);
+        setRegeneratedCodes(data.backupCodes);
+        toast({
+          title: "New backup codes ready",
+          description: "Save them now — your old codes no longer work.",
+        });
+      },
+      onError: () => {
+        toast({
+          title: "Couldn't regenerate codes",
+          description: "Verify a fresh authenticator code first.",
+        });
+      },
+    },
+  });
+
+  const regenAssertMut = useVerifyMfaTotp({
+    mutation: {
+      onSuccess: () => {
+        regenMut.mutate();
       },
       onError: () => {
         toast({
@@ -329,6 +370,97 @@ export function MfaSetup() {
               <Row label="Last used">{formatDate(status.lastUsedAt)}</Row>
             </dl>
 
+            <BackupCodeWarningBanner
+              remaining={status.backupCodesRemaining}
+            />
+
+            {regeneratedCodes && (
+              <BackupCodeSheet
+                heading="Save your new backup codes (shown once)"
+                codes={regeneratedCodes}
+                onDismiss={() => setRegeneratedCodes(null)}
+              />
+            )}
+
+            {!regeneratedCodes && (
+              <div className="border-t border-border pt-3 space-y-2">
+                {!regenOpen ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      setRegenOpen(true);
+                      setRegenCode("");
+                    }}
+                    data-testid="button-mfa-regenerate-open"
+                  >
+                    Regenerate backup codes
+                  </Button>
+                ) : (
+                  <>
+                    <p className="text-xs text-muted-foreground">
+                      Generating a new sheet immediately invalidates your
+                      existing backup codes. Re-verify a fresh 6-digit code
+                      below.
+                    </p>
+                    <form
+                      className="flex flex-col sm:flex-row gap-2 sm:items-center"
+                      onSubmit={(e) => {
+                        e.preventDefault();
+                        const code = regenCode.replace(/\D/g, "").slice(0, 6);
+                        if (code.length !== 6) return;
+                        regenAssertMut.mutate({
+                          data: { code, mode: "assert" },
+                        });
+                      }}
+                    >
+                      <Input
+                        inputMode="numeric"
+                        pattern="[0-9]*"
+                        maxLength={6}
+                        placeholder="6-digit code"
+                        value={regenCode}
+                        onChange={(e) =>
+                          setRegenCode(
+                            e.target.value.replace(/\D/g, "").slice(0, 6),
+                          )
+                        }
+                        className="font-mono tracking-widest sm:max-w-[180px]"
+                        data-testid="input-mfa-regenerate-code"
+                      />
+                      <Button
+                        type="submit"
+                        disabled={
+                          regenAssertMut.isPending ||
+                          regenMut.isPending ||
+                          regenCode.length !== 6
+                        }
+                        data-testid="button-mfa-regenerate"
+                      >
+                        {(regenAssertMut.isPending || regenMut.isPending) && (
+                          <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                        )}
+                        Regenerate
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => {
+                          setRegenOpen(false);
+                          setRegenCode("");
+                        }}
+                        data-testid="button-mfa-regenerate-cancel"
+                      >
+                        Cancel
+                      </Button>
+                    </form>
+                  </>
+                )}
+              </div>
+            )}
+
             <div className="border-t border-border pt-3 space-y-2">
               <p className="text-xs text-muted-foreground">
                 Removing your authenticator weakens your account. Re-verify a
@@ -435,12 +567,24 @@ function StatusSummary({ status }: { status: MfaStatus }) {
   );
 }
 
-function BackupCodeSheet({ codes }: { codes: string[] }) {
+function BackupCodeSheet({
+  codes,
+  heading,
+  onDismiss,
+}: {
+  codes: string[];
+  heading?: string;
+  onDismiss?: () => void;
+}) {
   const [acknowledged, setAcknowledged] = useState(false);
   return (
-    <div className="rounded-md border border-amber-500/40 bg-amber-500/5 p-3 space-y-2">
+    <div
+      className="rounded-md border border-amber-500/40 bg-amber-500/5 p-3 space-y-2"
+      data-testid="backup-code-sheet"
+    >
       <h3 className="text-sm font-medium flex items-center gap-2">
-        <Download className="w-4 h-4" /> 3. Save your backup codes (shown once)
+        <Download className="w-4 h-4" />
+        {heading ?? "3. Save your backup codes (shown once)"}
       </h3>
       <p className="text-xs text-muted-foreground">
         Each code works exactly once if you lose your authenticator. Store them
@@ -485,7 +629,49 @@ function BackupCodeSheet({ codes }: { codes: string[] }) {
           <Copy className="w-4 h-4 mr-1" />
           {acknowledged ? "Copied" : "Copy all"}
         </Button>
+        {onDismiss && (
+          <Button
+            type="button"
+            size="sm"
+            variant="secondary"
+            className="ml-auto"
+            onClick={onDismiss}
+            data-testid="button-dismiss-backup-codes"
+          >
+            I've saved them
+          </Button>
+        )}
       </div>
     </div>
+  );
+}
+
+function BackupCodeWarningBanner({ remaining }: { remaining: number }) {
+  if (remaining >= 3) return null;
+  if (remaining === 0) {
+    return (
+      <Alert variant="destructive" data-testid="backup-codes-banner-empty">
+        <ShieldAlert className="h-4 w-4" />
+        <AlertTitle>You're out of backup codes</AlertTitle>
+        <AlertDescription>
+          If you lose your authenticator app you won't be able to satisfy MFA
+          challenges. Generate a fresh sheet now.
+        </AlertDescription>
+      </Alert>
+    );
+  }
+  return (
+    <Alert
+      className="border-amber-500/50 [&>svg]:text-amber-500"
+      data-testid="backup-codes-banner-low"
+    >
+      <ShieldAlert className="h-4 w-4" />
+      <AlertTitle>
+        Only {remaining} backup {remaining === 1 ? "code" : "codes"} left
+      </AlertTitle>
+      <AlertDescription>
+        Generate a new sheet so you have plenty of spares for recovery.
+      </AlertDescription>
+    </Alert>
   );
 }

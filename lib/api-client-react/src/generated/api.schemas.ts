@@ -937,6 +937,11 @@ export interface MfaBackupCodeBody {
   code: string;
 }
 
+export interface MfaBackupCodesResult {
+  /** Plaintext single-use backup codes. Returned ONCE; not recoverable after this response. */
+  backupCodes: string[];
+}
+
 export interface ReferralActivity {
   id: string;
   inviteeHandle: string;

@@ -85,6 +85,7 @@ import type {
   ListStreamMessages200,
   ListStreamMessagesParams,
   MfaBackupCodeBody,
+  MfaBackupCodesResult,
   MfaSetupBody,
   MfaSetupResult,
   MfaStatus,
@@ -10772,6 +10773,93 @@ export const useDisableMfaTotp = <
   TContext
 > => {
   return useMutation(getDisableMfaTotpMutationOptions(options));
+};
+
+/**
+ * @summary Issue a fresh batch of 10 single-use backup codes, replacing the existing ones. Requires a recent assertion; otherwise returns 403.
+ */
+export const getRegenerateMfaBackupCodesUrl = () => {
+  return `/api/mfa/totp/regenerate-backup-codes`;
+};
+
+export const regenerateMfaBackupCodes = async (
+  options?: RequestInit,
+): Promise<MfaBackupCodesResult> => {
+  return customFetch<MfaBackupCodesResult>(getRegenerateMfaBackupCodesUrl(), {
+    ...options,
+    method: "POST",
+  });
+};
+
+export const getRegenerateMfaBackupCodesMutationOptions = <
+  TError = ErrorType<
+    UnauthorizedResponse | ForbiddenResponse | NotFoundResponse
+  >,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof regenerateMfaBackupCodes>>,
+    TError,
+    void,
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof regenerateMfaBackupCodes>>,
+  TError,
+  void,
+  TContext
+> => {
+  const mutationKey = ["regenerateMfaBackupCodes"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof regenerateMfaBackupCodes>>,
+    void
+  > = () => {
+    return regenerateMfaBackupCodes(requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type RegenerateMfaBackupCodesMutationResult = NonNullable<
+  Awaited<ReturnType<typeof regenerateMfaBackupCodes>>
+>;
+
+export type RegenerateMfaBackupCodesMutationError = ErrorType<
+  UnauthorizedResponse | ForbiddenResponse | NotFoundResponse
+>;
+
+/**
+ * @summary Issue a fresh batch of 10 single-use backup codes, replacing the existing ones. Requires a recent assertion; otherwise returns 403.
+ */
+export const useRegenerateMfaBackupCodes = <
+  TError = ErrorType<
+    UnauthorizedResponse | ForbiddenResponse | NotFoundResponse
+  >,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof regenerateMfaBackupCodes>>,
+    TError,
+    void,
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof regenerateMfaBackupCodes>>,
+  TError,
+  void,
+  TContext
+> => {
+  return useMutation(getRegenerateMfaBackupCodesMutationOptions(options));
 };
 
 export const getAdminDashboardUrl = () => {

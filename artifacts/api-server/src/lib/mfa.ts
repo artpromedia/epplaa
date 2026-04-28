@@ -213,6 +213,33 @@ export async function consumeBackupCode(
 }
 
 /**
+ * Issue a fresh batch of 10 backup codes for an already-active TOTP
+ * enrolment, replacing the stored hashes. Returns the plaintext codes
+ * exactly once. Returns null when the user has no active enrolment so
+ * the caller can return a 404 (the regenerate flow is meaningless
+ * without an existing factor).
+ *
+ * The UPDATE is gated on `status = 'active'` so a stale `pending` row
+ * cannot be used to mint codes for an unverified secret.
+ */
+export async function regenerateBackupCodes(
+  userId: string,
+): Promise<string[] | null> {
+  const codes = generateBackupCodes();
+  const hashed = codes.map(hashBackupCode);
+  const codesLiteral = `{${hashed.join(",")}}`;
+  const upd = await db.execute<{ id: string }>(sql`
+    UPDATE mfa_enrollments
+    SET backup_codes_hashed = ${codesLiteral}::text[],
+        updated_at = now()
+    WHERE user_id = ${userId} AND kind = 'totp' AND status = 'active'
+    RETURNING id;
+  `);
+  if (upd.rows.length === 0) return null;
+  return codes;
+}
+
+/**
  * Default window after which an unconfirmed `pending` enrolment is
  * considered stale and reaped. The QR code is shown to the user once
  * and the SPA expects them to type the 6-digit code within a couple of

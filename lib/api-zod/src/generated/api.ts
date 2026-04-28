@@ -2101,6 +2101,17 @@ export const DisableMfaTotpResponse = zod.object({
   ok: zod.boolean(),
 });
 
+/**
+ * @summary Issue a fresh batch of 10 single-use backup codes, replacing the existing ones. Requires a recent assertion; otherwise returns 403.
+ */
+export const RegenerateMfaBackupCodesResponse = zod.object({
+  backupCodes: zod
+    .array(zod.string())
+    .describe(
+      "Plaintext single-use backup codes. Returned ONCE; not recoverable after this response.",
+    ),
+});
+
 export const AdminDashboardResponse = zod.object({
   openCases: zod.number(),
   dueSoon: zod.number(),
