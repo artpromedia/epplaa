@@ -1,43 +1,56 @@
 import React from "react";
-import { StyleSheet, Text, View } from "react-native";
+import {
+  Image,
+  StyleSheet,
+  Text,
+  useColorScheme,
+  View,
+} from "react-native";
 
 import { useColors } from "@/hooks/useColors";
 
 interface BrandLogoProps {
   size?: "sm" | "md" | "lg";
   tagline?: string | null;
+  /**
+   * Force a specific variant. Defaults to following the active color scheme:
+   * white wordmark on dark backgrounds, full-color wordmark on light.
+   */
+  variant?: "auto" | "color" | "white";
 }
 
 const SIZES = {
-  sm: { word: 22, dot: 6, gap: 4 },
-  md: { word: 34, dot: 9, gap: 6 },
-  lg: { word: 48, dot: 12, gap: 8 },
+  sm: { height: 22 },
+  md: { height: 34 },
+  lg: { height: 48 },
 } as const;
 
-export function BrandLogo({ size = "md", tagline = null }: BrandLogoProps) {
+const ASPECT_RATIO = 1024 / 320;
+
+const COLOR_SRC = require("@/assets/images/logo-color.png");
+const WHITE_SRC = require("@/assets/images/logo-white.png");
+
+export function BrandLogo({
+  size = "md",
+  tagline = null,
+  variant = "auto",
+}: BrandLogoProps) {
   const colors = useColors();
+  const scheme = useColorScheme();
   const s = SIZES[size];
+
+  const resolved =
+    variant === "auto" ? (scheme === "dark" ? "white" : "color") : variant;
+  const source = resolved === "white" ? WHITE_SRC : COLOR_SRC;
+
   return (
     <View style={styles.wrap}>
-      <View style={[styles.row, { gap: s.gap }]}>
-        <Text
-          style={[
-            styles.word,
-            { color: colors.primary, fontSize: s.word, lineHeight: s.word * 1.05 },
-          ]}
-        >
-          Epplaa
-        </Text>
-        <View
-          style={{
-            width: s.dot,
-            height: s.dot,
-            borderRadius: s.dot / 2,
-            backgroundColor: colors.secondary,
-            marginTop: s.word * 0.55,
-          }}
-        />
-      </View>
+      <Image
+        source={source}
+        accessibilityLabel="Epplaa"
+        resizeMode="contain"
+        style={{ height: s.height, width: s.height * ASPECT_RATIO }}
+      />
       {tagline ? (
         <Text style={[styles.tagline, { color: colors.mutedForeground }]}>
           {tagline}
@@ -50,15 +63,6 @@ export function BrandLogo({ size = "md", tagline = null }: BrandLogoProps) {
 const styles = StyleSheet.create({
   wrap: {
     alignItems: "center",
-  },
-  row: {
-    flexDirection: "row",
-    alignItems: "flex-end",
-  },
-  word: {
-    fontFamily: "Inter_700Bold",
-    fontWeight: "800",
-    letterSpacing: -0.5,
   },
   tagline: {
     marginTop: 8,
