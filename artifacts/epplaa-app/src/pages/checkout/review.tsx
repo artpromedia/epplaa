@@ -67,7 +67,10 @@ export default function CheckoutReview() {
     }
   }, [resolved.length, fOpt, isHomeDeliveryOpt, addr, loc, pm, setLocation]);
 
-  const shipping = fOpt?.feeMinor ?? 0;
+  // Buyer-selected live carrier quote (Shipbubble/GIG) wins over the
+  // static catalog fee so what's displayed, what's quoted by the server,
+  // and what's actually charged at payment all match the chosen rate.
+  const shipping = draft.fulfillmentRate?.priceMinor ?? fOpt?.feeMinor ?? 0;
 
   // Promo handling — keep input local so typing doesn't churn the rest of the
   // page, but persist the *applied* code to the checkout draft.

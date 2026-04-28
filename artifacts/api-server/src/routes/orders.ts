@@ -285,11 +285,21 @@ router.post("/orders", async (req, res) => {
   // deliveryAddress. This makes the check tamper-proof: a client cannot
   // fabricate a placeId / confidencePct without a real OkHi round-trip.
   if (!isPickup) {
+    // Frontend OrderAddress uses `street`; legacy/mobile callers may send
+    // `line`. Accept either so the canonical key drift doesn't block
+    // verified buyers.
     const deliveryAddress =
       (fulfillment.deliveryAddress as
-        | { line?: unknown; area?: unknown; city?: unknown; lat?: unknown; lng?: unknown }
+        | {
+            street?: unknown;
+            line?: unknown;
+            area?: unknown;
+            city?: unknown;
+            lat?: unknown;
+            lng?: unknown;
+          }
         | undefined) ?? {};
-    const addrLine = String(deliveryAddress.line ?? "").trim();
+    const addrLine = String(deliveryAddress.street ?? deliveryAddress.line ?? "").trim();
     const addrArea = String(deliveryAddress.area ?? "").trim();
     const addrCity = String(deliveryAddress.city ?? "").trim();
     const addrLat = typeof deliveryAddress.lat === "number" ? deliveryAddress.lat : undefined;
@@ -315,10 +325,12 @@ router.post("/orders", async (req, res) => {
       });
       return;
     }
-    // Persist the verified placeId on the fulfillment payload (don't
-    // trust the client's copy) so dispatch + downstream auditing read
-    // the server-validated value.
+    // Persist the verified placeId on the fulfillment payload AND on the
+    // delivery address snapshot (downstream dispatch reads
+    // deliveryAddress.placeId). Don't trust the client's copy — the
+    // server-validated value from the signed token wins.
     fulfillment.placeId = verdict.placeId;
+    (deliveryAddress as Record<string, unknown>).placeId = verdict.placeId;
     (deliveryAddress as Record<string, unknown>).confidencePct = verdict.confidencePct;
   }
 
