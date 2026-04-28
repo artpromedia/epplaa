@@ -1,0 +1,206 @@
+name: Healthz degraded probe (per-minute)
+
+# Runs the `check-healthz-degraded` CLI probe against the production
+# /api/healthz URL on a per-minute cadence and pages on-call (via
+# Sentry, level=fatal) when the probe exits non-zero.
+#
+# Why this workflow exists (see docs/runbooks/rate-limit-store.md
+# Step 5): the Sentry rate-based alert
+# `rate_limit_redis_failure_threshold_breached` only fires on failure
+# *rate* — >N per rolling minute. A slow trickle of failures can keep
+# the rate-limit watcher in `degraded` for many minutes without ever
+# crossing the per-minute threshold. The CLI probe complements it by
+# alerting on streak *duration*, but only fires if something is
+# *running* it on a schedule. This workflow is that schedule.
+#
+# Cadence: GitHub Actions cron has a 5-minute minimum interval, so we
+# schedule every 5 minutes and run an inner loop of 5 iterations spaced
+# 60 seconds apart inside each run. With the workflow's ~30s boot time,
+# the resulting per-iteration cadence is ~60s end-to-end, satisfying
+# the "at least once per minute" requirement without paying for an
+# external uptime monitor.
+#
+# Required repo variables / secrets (configured in the GitHub repo
+# Settings → Secrets and variables → Actions):
+#
+#   vars.HEALTHZ_PROBE_ENABLED                — must equal "1" to opt in.
+#                                               Acts as a kill switch — set
+#                                               to anything else to silence
+#                                               the workflow without
+#                                               removing the file.
+#   vars.HEALTHZ_URL                          — full URL to /api/healthz on
+#                                               the production deployment
+#                                               (e.g. https://api.epplaa.com/api/healthz).
+#                                               REQUIRED — the workflow
+#                                               fails fast if missing.
+#   vars.HEALTHZ_DEGRADED_ALERT_THRESHOLD_MS  — streak duration that pages.
+#                                               Defaults to 300000 (5 min)
+#                                               when unset; matches the
+#                                               script's own default.
+#   vars.HEALTHZ_PROBE_TIMEOUT_MS             — per-request fetch timeout.
+#                                               Defaults to 5000.
+#   vars.SENTRY_ORG, vars.SENTRY_PROJECT      — Sentry destination. Reused
+#                                               from the release workflow
+#                                               so on-call sees these
+#                                               events in the same project.
+#   secrets.HEALTHZ_PROBE_SENTRY_DSN          — DSN used by sentry-cli to
+#                                               post the page event. May be
+#                                               the same DSN as the api-server
+#                                               so the alert lands in the
+#                                               same project; kept as a
+#                                               separate secret so you can
+#                                               rotate it independently of
+#                                               the runtime DSN.
+#
+# When secrets/vars are missing the workflow degrades safely:
+#   - HEALTHZ_PROBE_ENABLED != "1"            -> job is skipped entirely.
+#   - HEALTHZ_URL missing                     -> the probe itself exits 1
+#                                                with a clear stderr line,
+#                                                workflow fails (which
+#                                                pages via the GitHub
+#                                                "Failed workflow run"
+#                                                notification).
+#   - HEALTHZ_PROBE_SENTRY_DSN missing        -> Sentry forwarding is
+#                                                skipped but the workflow
+#                                                still fails on non-zero
+#                                                probe exit, so on-call
+#                                                still sees the failure
+#                                                in GitHub.
+#
+# Manual ad-hoc runs are supported via workflow_dispatch — useful when
+# tuning the threshold or verifying alerting end-to-end.
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  # Cap the queue at "one running + at most one pending" so a slow run
+  # (e.g. install cache miss) can't fan out into a backlog of overlapping
+  # invocations. With `cancel-in-progress: false`, GitHub queues the
+  # next scheduled tick behind the in-flight run rather than cancelling
+  # it; older pending runs in the same group are dropped automatically.
+  # Net effect: at most one extra cron-driven run waits behind a slow
+  # one, after which the schedule re-aligns. The 5-iteration inner
+  # loop already provides per-minute cadence within each run, so a
+  # slipped tick widens the worst-case gap to ~minutes (acceptable
+  # given the 5-minute streak threshold) rather than dropping coverage
+  # entirely.
+  group: check-healthz-degraded
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    name: Run /healthz degraded probe loop
+    if: ${{ vars.HEALTHZ_PROBE_ENABLED == '1' }}
+    runs-on: ubuntu-latest
+    # 5 iterations × 60s sleep ≈ 5 min, plus install/boot. Leave
+    # generous headroom so a slow runner doesn't kill us mid-loop.
+    timeout-minutes: 8
+
+    env:
+      HEALTHZ_URL: ${{ vars.HEALTHZ_URL }}
+      HEALTHZ_DEGRADED_ALERT_THRESHOLD_MS: ${{ vars.HEALTHZ_DEGRADED_ALERT_THRESHOLD_MS || '300000' }}
+      HEALTHZ_PROBE_TIMEOUT_MS: ${{ vars.HEALTHZ_PROBE_TIMEOUT_MS || '5000' }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # sentry-cli is a single static binary; fetching it inline keeps
+      # the workflow self-contained without adding a workspace dep.
+      # If Sentry isn't configured the install still succeeds — we just
+      # never invoke it in the loop below.
+      - name: Install sentry-cli
+        run: curl -sL https://sentry.io/get-cli/ | INSTALL_DIR=/usr/local/bin sh
+
+      - name: Probe loop (5 iterations, ~60s apart)
+        env:
+          # Used by sentry-cli send-event to know which project to
+          # ingest into. SENTRY_ORG / SENTRY_PROJECT are not strictly
+          # required for DSN-based ingestion but are passed through so
+          # operators can grep for them in failed-workflow audits.
+          SENTRY_DSN: ${{ secrets.HEALTHZ_PROBE_SENTRY_DSN }}
+          SENTRY_ORG: ${{ vars.SENTRY_ORG }}
+          SENTRY_PROJECT: ${{ vars.SENTRY_PROJECT }}
+        run: |
+          set +e
+          fails=0
+          last_output=""
+          last_code=0
+          for i in 1 2 3 4 5; do
+            echo "::group::iteration $i (UTC $(date -u +%FT%TZ))"
+            out=$(pnpm --silent --filter @workspace/api-server run check-healthz-degraded 2>&1)
+            code=$?
+            # Always echo the probe's structured line into the GH log
+            # so operators can see the full sequence even when the
+            # iteration didn't fail.
+            printf '%s\n' "$out"
+            if [ "$code" -ne 0 ]; then
+              fails=$((fails+1))
+              last_output="$out"
+              last_code="$code"
+              echo "::error::probe iteration $i exited $code"
+              if [ -n "$SENTRY_DSN" ]; then
+                # Forward the probe's JSON line to Sentry as a
+                # fatal-level message. The fingerprint groups all
+                # iterations of this alert into a single Sentry issue
+                # so on-call gets one page, not five.
+                #
+                # `set +e` above ensures a sentry-cli failure (DSN typo,
+                # network blip) doesn't abort the rest of the loop.
+                sentry-cli send-event \
+                  --message "rate_limit_store_stuck_degraded (probe exit $code)" \
+                  --level fatal \
+                  --tag "subsystem:rate_limit" \
+                  --tag "alert:rate_limit_store_stuck_degraded" \
+                  --tag "exit_code:$code" \
+                  --tag "scheduler:github-actions" \
+                  --tag "workflow:check-healthz-degraded" \
+                  --fingerprint "rate_limit_store_stuck_degraded" \
+                  --extra "probe_output=$out" \
+                  --extra "exit_code=$code" \
+                  --extra "iteration=$i" \
+                  --extra "workflow_run=https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+                  || echo "::warning::sentry-cli send-event failed (Sentry forwarder error, not the probe itself)"
+              else
+                echo "::warning::HEALTHZ_PROBE_SENTRY_DSN not configured; relying on GitHub workflow-failure notification"
+              fi
+            fi
+            echo "::endgroup::"
+            # Don't sleep after the last iteration so the run finishes
+            # promptly; this also keeps the next scheduled tick close
+            # to a 60s gap from this one.
+            if [ "$i" -lt 5 ]; then sleep 60; fi
+          done
+          if [ "$fails" -gt 0 ]; then
+            # Echo the last failing JSON line into the failure summary
+            # so the GitHub failed-run notification body is useful even
+            # without clicking through to logs.
+            {
+              echo "## Healthz degraded probe failed"
+              echo ""
+              echo "$fails of 5 iterations exited non-zero. Last failing iteration:"
+              echo ""
+              echo '```json'
+              printf '%s\n' "$last_output"
+              echo '```'
+              echo ""
+              echo "Exit code: $last_code"
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
