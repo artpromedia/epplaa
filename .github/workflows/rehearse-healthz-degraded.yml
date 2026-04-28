@@ -1,0 +1,414 @@
+name: Rehearse stuck-degraded page (staging, weekly)
+
+# Weekly end-to-end rehearsal of the `checkHealthzDegraded` -> Sentry
+# pager chain against staging. Catches silent regressions in the alert
+# wiring *before* they hide a real outage.
+#
+# Why this workflow exists (see docs/runbooks/rate-limit-store.md
+# Step 5 — "Rehearsal"): the per-minute probe workflow
+# `check-healthz-degraded.yml` only fires the pager when staging or
+# prod is *actually* degraded. That means:
+#
+#   - If Sentry's "new fatal-level issue" rule gets disabled or its
+#     query is mistuned (e.g. someone renames the
+#     `alert:rate_limit_store_stuck_degraded` tag),
+#   - or the fingerprint stops collapsing iterations into one issue
+#     (and on-call would get N pages per outage instead of one),
+#   - or the probe's JSON line stops surviving Sentry's PII scrubber,
+#   - or the GitHub failure-notification channel rotates,
+#
+# we wouldn't notice until the first real outage — at which point the
+# page either doesn't fire or fires N times. This workflow injects a
+# synthetic stuck-degraded streak into staging via the guarded
+# `/api/_rehearsal/inject-stuck-degraded` endpoint, runs the probe,
+# asserts the expected Sentry event lands, and then clears the streak
+# so staging is healthy again.
+#
+# Cadence: weekly is enough — the alerting chain doesn't churn fast
+# enough to need per-day rehearsals, and a weekly cadence keeps the
+# rehearsal noise (one Sentry issue per week in the rehearsal
+# project) negligible.
+#
+# Required repo configuration (Settings -> Secrets and variables ->
+# Actions). The workflow degrades safely when these are missing — see
+# the `if:` gate and the `Verify config` step.
+#
+#   vars.HEALTHZ_REHEARSAL_ENABLED              — must equal "1" to opt in.
+#                                                 Acts as a kill switch — set
+#                                                 to anything else to silence
+#                                                 the workflow without
+#                                                 removing the file.
+#   vars.HEALTHZ_REHEARSAL_STAGING_BASE_URL     — base URL of the staging
+#                                                 api (e.g.
+#                                                 https://api.staging.epplaa.com).
+#                                                 The workflow appends
+#                                                 /api/_rehearsal/* and
+#                                                 /api/healthz to it.
+#   vars.HEALTHZ_REHEARSAL_THRESHOLD_MS         — threshold the probe is
+#                                                 invoked with. Defaults to
+#                                                 60000 (1 min) — the
+#                                                 rehearsal injects a 10-min
+#                                                 streak so this comfortably
+#                                                 trips a page.
+#   vars.HEALTHZ_REHEARSAL_INJECT_DURATION_MS   — how far in the past to
+#                                                 stamp firstFailureAt.
+#                                                 Defaults to 600000 (10 min).
+#   vars.HEALTHZ_REHEARSAL_SENTRY_PROJECT       — Sentry project SLUG used
+#                                                 to query the events API
+#                                                 for verification (NOT the
+#                                                 numeric ID). Should be a
+#                                                 dedicated `alerts-rehearsal`
+#                                                 project so production
+#                                                 alerts stay clean.
+#   vars.HEALTHZ_REHEARSAL_SENTRY_ORG           — Sentry org SLUG.
+#
+#   secrets.HEALTHZ_REHEARSAL_TOKEN             — bearer token forwarded as
+#                                                 X-Rehearsal-Token. Must
+#                                                 match the staging api
+#                                                 server's
+#                                                 HEALTHZ_REHEARSAL_TOKEN
+#                                                 env var.
+#   secrets.HEALTHZ_REHEARSAL_SENTRY_DSN        — DSN that sentry-cli posts
+#                                                 the rehearsal event to.
+#                                                 Must point at the
+#                                                 dedicated alerts-rehearsal
+#                                                 project to avoid polluting
+#                                                 production alerts.
+#   secrets.HEALTHZ_REHEARSAL_SENTRY_AUTH_TOKEN — Sentry auth token with
+#                                                 `event:read` scope on the
+#                                                 rehearsal project. Used to
+#                                                 poll the events API for
+#                                                 the verification step.
+
+on:
+  schedule:
+    # Sundays 04:17 UTC — off-peak so the rehearsal can't be confused
+    # with a real outage during business hours, and odd-minute-offset
+    # so it doesn't pile up with the per-minute probe at the top of
+    # the hour.
+    - cron: "17 4 * * 0"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  # At most one rehearsal at a time, and never overlap with another
+  # ad-hoc workflow_dispatch run — the inject endpoint mutates a
+  # shared in-process watcher and a parallel run would race on the
+  # cleanup phase.
+  group: rehearse-healthz-degraded
+  cancel-in-progress: false
+
+jobs:
+  rehearse:
+    name: Inject -> probe -> verify Sentry -> clear
+    if: ${{ vars.HEALTHZ_REHEARSAL_ENABLED == '1' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+
+    env:
+      STAGING_BASE_URL: ${{ vars.HEALTHZ_REHEARSAL_STAGING_BASE_URL }}
+      HEALTHZ_REHEARSAL_TOKEN: ${{ secrets.HEALTHZ_REHEARSAL_TOKEN }}
+      HEALTHZ_DEGRADED_ALERT_THRESHOLD_MS: ${{ vars.HEALTHZ_REHEARSAL_THRESHOLD_MS || '60000' }}
+      HEALTHZ_PROBE_TIMEOUT_MS: '5000'
+      INJECT_DURATION_MS: ${{ vars.HEALTHZ_REHEARSAL_INJECT_DURATION_MS || '600000' }}
+      SENTRY_DSN: ${{ secrets.HEALTHZ_REHEARSAL_SENTRY_DSN }}
+      SENTRY_ORG: ${{ vars.HEALTHZ_REHEARSAL_SENTRY_ORG }}
+      SENTRY_PROJECT: ${{ vars.HEALTHZ_REHEARSAL_SENTRY_PROJECT }}
+      SENTRY_AUTH_TOKEN: ${{ secrets.HEALTHZ_REHEARSAL_SENTRY_AUTH_TOKEN }}
+      # A unique tag value per run so the verification step can poll
+      # Sentry for events from THIS run only — without it we'd see
+      # last week's rehearsal events and falsely pass.
+      RUN_ID_TAG: ${{ github.run_id }}-${{ github.run_attempt }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Install sentry-cli
+        run: curl -sL https://sentry.io/get-cli/ | INSTALL_DIR=/usr/local/bin sh
+
+      - name: Verify required config is present
+        run: |
+          set -e
+          missing=()
+          [ -n "$STAGING_BASE_URL" ] || missing+=("vars.HEALTHZ_REHEARSAL_STAGING_BASE_URL")
+          [ -n "$HEALTHZ_REHEARSAL_TOKEN" ] || missing+=("secrets.HEALTHZ_REHEARSAL_TOKEN")
+          [ -n "$SENTRY_DSN" ] || missing+=("secrets.HEALTHZ_REHEARSAL_SENTRY_DSN")
+          [ -n "$SENTRY_AUTH_TOKEN" ] || missing+=("secrets.HEALTHZ_REHEARSAL_SENTRY_AUTH_TOKEN")
+          [ -n "$SENTRY_ORG" ] || missing+=("vars.HEALTHZ_REHEARSAL_SENTRY_ORG")
+          [ -n "$SENTRY_PROJECT" ] || missing+=("vars.HEALTHZ_REHEARSAL_SENTRY_PROJECT")
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::error::missing required config: ${missing[*]}"
+            exit 1
+          fi
+          echo "ok"
+
+      - name: Inject synthetic stuck-degraded streak into staging
+        id: inject
+        run: |
+          set -e
+          # Stamp firstFailureAt INJECT_DURATION_MS ms in the past so
+          # the streak is comfortably older than the threshold the
+          # probe will be invoked with. The api server validates that
+          # firstFailureAt is in the past so this can't silently no-op.
+          now_ms=$(($(date +%s%N) / 1000000))
+          first_failure_at=$((now_ms - INJECT_DURATION_MS))
+          echo "first_failure_at=$first_failure_at" >> "$GITHUB_OUTPUT"
+          resp=$(curl -sS -w '\n%{http_code}' \
+            -X POST "$STAGING_BASE_URL/api/_rehearsal/inject-stuck-degraded" \
+            -H "Content-Type: application/json" \
+            -H "X-Rehearsal-Token: $HEALTHZ_REHEARSAL_TOKEN" \
+            --data "{\"subsystem\":\"rateLimitStore\",\"firstFailureAt\":$first_failure_at,\"failureCount\":3}")
+          body=$(printf '%s' "$resp" | head -n -1)
+          code=$(printf '%s' "$resp" | tail -n 1)
+          echo "inject response (HTTP $code): $body"
+          if [ "$code" != "200" ]; then
+            echo "::error::inject endpoint returned HTTP $code"
+            exit 1
+          fi
+          # Sanity: assert the server confirms a durationMs > threshold
+          # — guards against clock-skew between the runner and staging
+          # silently producing a too-small synthetic streak.
+          duration_ms=$(printf '%s' "$body" | jq -r '.durationMs // 0')
+          if [ "$duration_ms" -le "$HEALTHZ_DEGRADED_ALERT_THRESHOLD_MS" ]; then
+            echo "::error::injected durationMs=$duration_ms is not > threshold $HEALTHZ_DEGRADED_ALERT_THRESHOLD_MS — clock skew?"
+            exit 1
+          fi
+
+      - name: Run probe and assert it pages (exit code 2)
+        id: probe
+        env:
+          HEALTHZ_URL: ${{ vars.HEALTHZ_REHEARSAL_STAGING_BASE_URL }}/api/healthz
+        run: |
+          set +e
+          out=$(pnpm --silent --filter @workspace/api-server run check-healthz-degraded 2>&1)
+          code=$?
+          set -e
+          printf '%s\n' "$out"
+          # Persist the probe JSON so subsequent steps can include it
+          # in the Sentry payload AND in GITHUB_STEP_SUMMARY.
+          printf '%s' "$out" > probe_output.txt
+          if [ "$code" -ne 2 ]; then
+            echo "::error::probe exited $code, expected 2 (page). The synthetic streak isn't reaching the probe — has the inject endpoint, /healthz schema, or threshold drifted?"
+            exit 1
+          fi
+          # Assert the probe JSON has the expected shape so a regression
+          # in the response schema (or in the probe itself) is caught
+          # here, not when on-call gets a malformed page body.
+          subsystem=$(printf '%s' "$out" | jq -r '.subsystem // empty')
+          outcome=$(printf '%s' "$out" | jq -r '.outcome // empty')
+          duration_ms=$(printf '%s' "$out" | jq -r '.durationMs // 0')
+          if [ "$outcome" != "page" ] || [ "$subsystem" != "rateLimitStore" ]; then
+            echo "::error::probe JSON unexpected: outcome=$outcome subsystem=$subsystem"
+            exit 1
+          fi
+          if [ "$duration_ms" -le "$HEALTHZ_DEGRADED_ALERT_THRESHOLD_MS" ]; then
+            echo "::error::probe reports durationMs=$duration_ms not > threshold $HEALTHZ_DEGRADED_ALERT_THRESHOLD_MS"
+            exit 1
+          fi
+          echo "probe paged correctly (subsystem=$subsystem durationMs=$duration_ms)"
+
+      - name: Forward 5 page events to the rehearsal Sentry project
+        id: forward
+        run: |
+          set -e
+          out=$(cat probe_output.txt)
+          # Five events with the SAME fingerprint so we can verify
+          # downstream that they collapse into a single Sentry issue
+          # (mirrors the per-minute probe's 5-iteration loop).
+          for i in 1 2 3 4 5; do
+            sentry-cli send-event \
+              --message "rate_limit_store_stuck_degraded REHEARSAL (iteration $i)" \
+              --level fatal \
+              --tag "subsystem:rate_limit" \
+              --tag "alert:rate_limit_store_stuck_degraded" \
+              --tag "rehearsal:1" \
+              --tag "rehearsal_run_id:$RUN_ID_TAG" \
+              --tag "scheduler:github-actions" \
+              --tag "workflow:rehearse-healthz-degraded" \
+              --fingerprint "rate_limit_store_stuck_degraded_rehearsal" \
+              --extra "probe_output=$out" \
+              --extra "iteration=$i" \
+              --extra "rehearsal_run=https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+              || { echo "::error::sentry-cli send-event failed on iteration $i"; exit 1; }
+            sleep 2
+          done
+
+      - name: Verify Sentry ingested the rehearsal events with correct shape
+        id: verify
+        run: |
+          set -e
+          # Sentry ingestion is async — events typically appear in the
+          # events API within ~30s. Poll for up to ~3 minutes.
+          deadline=$(( $(date +%s) + 180 ))
+          base="https://sentry.io/api/0/organizations/${SENTRY_ORG}/events/"
+          # Query for events tagged with this run's unique id, in
+          # the rehearsal project, level=fatal, within the last 10m.
+          # We use the discover events API so we can filter by tag and
+          # see how many distinct events landed for the same fingerprint.
+          # Encode `+` so spaces in the query don't break the URL.
+          query="rehearsal_run_id:${RUN_ID_TAG}+level:fatal"
+          url="${base}?project=${SENTRY_PROJECT}&statsPeriod=10m&query=${query}&field=id&field=timestamp&field=tags%5Balert%5D&field=tags%5Brehearsal%5D&field=tags%5Bsubsystem%5D&per_page=10"
+          while :; do
+            resp=$(curl -sS -H "Authorization: Bearer $SENTRY_AUTH_TOKEN" \
+              -H "Accept: application/json" \
+              "$url" || true)
+            count=$(printf '%s' "$resp" | jq -r '.data | length // 0' 2>/dev/null || echo 0)
+            if [ "${count:-0}" -ge 1 ]; then
+              echo "Sentry returned $count event(s) for rehearsal_run_id=$RUN_ID_TAG"
+              # Assert the expected tags survived ingestion / PII scrub.
+              alert_tag=$(printf '%s' "$resp" | jq -r '.data[0]["tags[alert]"] // empty')
+              subsystem_tag=$(printf '%s' "$resp" | jq -r '.data[0]["tags[subsystem]"] // empty')
+              rehearsal_tag=$(printf '%s' "$resp" | jq -r '.data[0]["tags[rehearsal]"] // empty')
+              if [ "$alert_tag" != "rate_limit_store_stuck_degraded" ] \
+                 || [ "$subsystem_tag" != "rate_limit" ] \
+                 || [ "$rehearsal_tag" != "1" ]; then
+                echo "::error::ingested event tags mismatched: alert=$alert_tag subsystem=$subsystem_tag rehearsal=$rehearsal_tag"
+                exit 1
+              fi
+              # Assert fingerprint dedup — we sent 5 events with the
+              # same fingerprint; the rehearsal project should report
+              # them rolled up onto a single issue. Use the issues API
+              # filtered by the same run-id tag.
+              issues_url="https://sentry.io/api/0/projects/${SENTRY_ORG}/${SENTRY_PROJECT}/issues/?query=rehearsal_run_id:${RUN_ID_TAG}&statsPeriod=10m"
+              issues=$(curl -sS -H "Authorization: Bearer $SENTRY_AUTH_TOKEN" \
+                -H "Accept: application/json" "$issues_url" || true)
+              issue_count=$(printf '%s' "$issues" | jq -r 'length // 0' 2>/dev/null || echo 0)
+              if [ "${issue_count:-0}" -ne 1 ]; then
+                echo "::error::expected the 5 rehearsal events to collapse into 1 issue (fingerprint dedup), saw $issue_count"
+                exit 1
+              fi
+              echo "fingerprint dedup OK — 5 events -> 1 issue"
+
+              # Also assert the probe_output `extra` field survived
+              # ingestion. The on-call page body is composed FROM that
+              # extra (the probe JSON line), so if Sentry's PII
+              # scrubber, an inbound filter, or a project rule starts
+              # stripping `extra.probe_output`, on-call would receive
+              # a body with no actionable detail — silently. The list
+              # endpoint above only exposes summary tags, so we have
+              # to fetch one full event to inspect its `entries`/
+              # `context` payload.
+              event_id=$(printf '%s' "$resp" | jq -r '.data[0].id // empty')
+              issue_id=$(printf '%s' "$issues" | jq -r '.[0].id // empty')
+              issue_short=$(printf '%s' "$issues" | jq -r '.[0].shortId // empty')
+              if [ -z "$event_id" ]; then
+                echo "::error::events API returned no event id, can't fetch the full event for extra-payload assertion"
+                exit 1
+              fi
+              event_url="https://sentry.io/api/0/projects/${SENTRY_ORG}/${SENTRY_PROJECT}/events/${event_id}/"
+              event_full=$(curl -sS -H "Authorization: Bearer $SENTRY_AUTH_TOKEN" \
+                -H "Accept: application/json" "$event_url" || true)
+              # Sentry stores `--extra` payloads under the `additional
+              # data` context, which the events API surfaces as
+              # `context.<key>` OR as a context entry of type
+              # `additional_data` depending on SDK version. Check both.
+              probe_extra=$(printf '%s' "$event_full" | jq -r '
+                (.context.probe_output // empty)
+                // (.contexts["Additional Data"].probe_output // empty)
+                // (.contexts.additional_data.probe_output // empty)
+              ')
+              if [ -z "$probe_extra" ] || [ "$probe_extra" = "null" ]; then
+                echo "::error::event ${event_id} has no probe_output extra — Sentry PII scrubber or a project rule is stripping it. The on-call page body for production would be missing the offending subsystem / streak duration / threshold detail."
+                printf '%s\n' "$event_full" | jq -r '. | {context, contexts}' || true
+                exit 1
+              fi
+              # Sanity: the extra must contain the probe's JSON shape
+              # (subsystem + outcome) so we'd notice if a serialiser
+              # change started storing a stringified `[object Object]`
+              # instead of the JSON line.
+              if ! printf '%s' "$probe_extra" | grep -q '"subsystem"' \
+                 || ! printf '%s' "$probe_extra" | grep -q '"outcome"'; then
+                echo "::error::probe_output extra is present but doesn't contain the expected probe JSON shape: $probe_extra"
+                exit 1
+              fi
+              echo "probe_output extra survived ingestion OK"
+              # Surface the matched IDs in the run summary so on-call
+              # can jump straight to the rehearsed Sentry event/issue
+              # when triaging a failure.
+              {
+                echo "matched_event_id=$event_id"
+                echo "matched_issue_id=$issue_id"
+                echo "matched_issue_short=$issue_short"
+              } >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            now=$(date +%s)
+            if [ "$now" -ge "$deadline" ]; then
+              echo "::error::Sentry events API returned 0 events for rehearsal_run_id=$RUN_ID_TAG within 3 minutes"
+              echo "last response body: $resp"
+              exit 1
+            fi
+            echo "no events yet (count=${count:-0}), sleeping 15s..."
+            sleep 15
+          done
+
+      - name: Clear synthetic streak (always run)
+        if: ${{ always() }}
+        run: |
+          set -e
+          # Even if any earlier step failed we MUST clear the synthetic
+          # streak — leaving staging in a forever-degraded state would
+          # cause the per-minute probe workflow to start paging on-call
+          # for real until someone notices and resets manually.
+          resp=$(curl -sS -w '\n%{http_code}' \
+            -X POST "$STAGING_BASE_URL/api/_rehearsal/clear-stuck-degraded" \
+            -H "Content-Type: application/json" \
+            -H "X-Rehearsal-Token: $HEALTHZ_REHEARSAL_TOKEN" \
+            --data '{"subsystem":"rateLimitStore"}')
+          body=$(printf '%s' "$resp" | head -n -1)
+          code=$(printf '%s' "$resp" | tail -n 1)
+          echo "clear response (HTTP $code): $body"
+          if [ "$code" != "200" ]; then
+            # A failure to clear is itself page-worthy — surface
+            # loudly and fail the job so the cleanup never goes silent.
+            echo "::error::clear endpoint returned HTTP $code — staging may be left in a synthetic degraded state, manually POST clear-stuck-degraded"
+            exit 1
+          fi
+
+      - name: Summarise rehearsal in run summary
+        if: ${{ always() }}
+        env:
+          MATCHED_EVENT_ID: ${{ steps.verify.outputs.matched_event_id }}
+          MATCHED_ISSUE_ID: ${{ steps.verify.outputs.matched_issue_id }}
+          MATCHED_ISSUE_SHORT: ${{ steps.verify.outputs.matched_issue_short }}
+        run: |
+          {
+            echo "## Healthz stuck-degraded rehearsal"
+            echo ""
+            echo "- Inject status: ${{ steps.inject.outcome }}"
+            echo "- Probe status: ${{ steps.probe.outcome }}"
+            echo "- Sentry forward status: ${{ steps.forward.outcome }}"
+            echo "- Sentry verify status: ${{ steps.verify.outcome }}"
+            echo "- Run-id tag: $RUN_ID_TAG"
+            # Surface the matched Sentry IDs (when verify reached the
+            # assertion phase) so on-call can jump straight to the
+            # rehearsed event/issue when triaging a failure or
+            # confirming a successful rehearsal — no need to query
+            # Sentry by hand with the run-id tag.
+            if [ -n "$MATCHED_EVENT_ID" ]; then
+              echo "- Matched Sentry event: \`$MATCHED_EVENT_ID\` ([open](https://sentry.io/organizations/${SENTRY_ORG}/issues/?project=${SENTRY_PROJECT}&query=id:$MATCHED_EVENT_ID))"
+            fi
+            if [ -n "$MATCHED_ISSUE_SHORT" ] && [ -n "$MATCHED_ISSUE_ID" ]; then
+              echo "- Matched Sentry issue: \`$MATCHED_ISSUE_SHORT\` ([open](https://sentry.io/organizations/${SENTRY_ORG}/issues/$MATCHED_ISSUE_ID/))"
+            fi
+            echo ""
+            if [ -f probe_output.txt ]; then
+              echo "Probe output:"
+              echo '```json'
+              cat probe_output.txt
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

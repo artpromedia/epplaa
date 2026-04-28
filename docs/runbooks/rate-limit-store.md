@@ -324,3 +324,62 @@ HEALTHZ_DEGRADED_ALERT_THRESHOLD_MS=300000 \
 This probe is complementary to the Sentry rate-based alert in Step
 4 — keep both wired up. The Sentry alert catches cliff-edge outages
 quickly; this probe catches slow burns the rate alert can miss.
+
+> Prefer the automated rehearsal in the next subsection over the
+> manual `vars.*` flip - it does inject + probe + Sentry verification
+> + cleanup in a single workflow and won't leave staging in a
+> synthetic degraded state if you get distracted halfway through.
+
+### Automated weekly rehearsal (`rehearse-healthz-degraded.yml`)
+
+The manual dry-run above is fine for one-off checks but doesn't run
+on a cadence - so a regression in any link of the alerting chain
+(Sentry rule disabled, fingerprint stops deduping, PII scrubber
+ate the probe JSON, GitHub failure-notification channel rotated)
+would only surface during a real outage. To catch those before they
+hide an incident, a separate workflow rehearses the full
+inject -> probe -> Sentry pager path against staging on a weekly
+schedule.
+
+| Aspect | Where it lives |
+| --- | --- |
+| Workflow file | [`.github/workflows/rehearse-healthz-degraded.yml`](../../.github/workflows/rehearse-healthz-degraded.yml) |
+| Cadence | Sundays 04:17 UTC, plus `workflow_dispatch:` for ad-hoc verification |
+| Synthetic injector | The api-server exposes guarded `/api/_rehearsal/inject-stuck-degraded` and `/api/_rehearsal/clear-stuck-degraded` endpoints that flip `RedisFailureWatcher` (or `dbHealthWatcher`) into a synthetic `degraded` state with a caller-supplied `firstFailureAt`. Source: `artifacts/api-server/src/routes/healthzRehearsal.ts`. The endpoints return 404 unless `HEALTHZ_REHEARSAL_ENABLED=1` is set on the staging api-server, and additionally require an `X-Rehearsal-Token` header that timing-safely matches `HEALTHZ_REHEARSAL_TOKEN`. **Enable both env vars on staging only - never production.** |
+| Probe invocation | The same `pnpm --filter @workspace/api-server run check-healthz-degraded` CLI used in production, pointed at staging via `HEALTHZ_URL`. Asserts exit code is exactly `2` and the JSON line contains `subsystem: rateLimitStore`, `outcome: page`, and `durationMs > threshold`. |
+| Sentry forward | Five `sentry-cli send-event` calls with the same fingerprint, tagged `rehearsal:1`, `rehearsal_run_id:<workflow-run-id>`, `alert:rate_limit_store_stuck_degraded`, `subsystem:rate_limit`. The events go to a dedicated `alerts-rehearsal` Sentry project (`HEALTHZ_REHEARSAL_SENTRY_DSN`) so the production Sentry project stays clean. |
+| Sentry verification | Polls `https://sentry.io/api/0/organizations/<org>/events/?query=rehearsal_run_id:<id>` for up to 3 minutes and asserts (a) at least one event arrived for *this* run (the unique `rehearsal_run_id` tag is what makes that assertion safe across overlapping runs), (b) the alert / subsystem / rehearsal tags survived ingestion (so we'd notice if Sentry's PII scrubber started stripping them), and (c) the 5 sent events collapsed into exactly 1 issue (so we'd notice if the fingerprint deduplication broke). |
+| Cleanup | A final `if: ${{ always() }}` step POSTs to `clear-stuck-degraded` so even a mid-run failure restores staging to healthy. If that cleanup itself fails, the job fails loudly so on-call resets the watcher manually instead of leaving staging stuck-degraded forever (which would otherwise cause the per-minute probe workflow above to start paging on-call for real). |
+| Failure semantics | Any non-zero step exits the workflow non-zero, which triggers GitHub's standard "Failed workflow run" notification. That itself doubles as an end-to-end check that the failure-notification channel still reaches the right operators - if the rehearsal job is *failing* on a Monday morning and nobody noticed, the GitHub-failure path is broken and that's its own actionable signal. |
+
+**Required GitHub configuration** (Settings -> Secrets and variables -> Actions):
+
+| Name | Kind | Purpose |
+| --- | --- | --- |
+| `HEALTHZ_REHEARSAL_ENABLED` | var | Kill switch. Set to `1` to opt in; anything else skips the workflow. |
+| `HEALTHZ_REHEARSAL_STAGING_BASE_URL` | var | Base URL of staging api (e.g. `https://api.staging.epplaa.com`). The workflow appends `/api/_rehearsal/*` and `/api/healthz`. |
+| `HEALTHZ_REHEARSAL_THRESHOLD_MS` | var (optional) | Threshold the probe is invoked with. Defaults to `60000` (1 min) - a 10-min synthetic streak comfortably trips it. |
+| `HEALTHZ_REHEARSAL_INJECT_DURATION_MS` | var (optional) | How far in the past to stamp `firstFailureAt`. Defaults to `600000` (10 min). |
+| `HEALTHZ_REHEARSAL_SENTRY_ORG` | var | Sentry org slug used by the verification API call. |
+| `HEALTHZ_REHEARSAL_SENTRY_PROJECT` | var | Sentry project SLUG (not numeric ID) used by the verification API call. Should be a dedicated `alerts-rehearsal` project. |
+| `HEALTHZ_REHEARSAL_TOKEN` | secret | Bearer token forwarded as `X-Rehearsal-Token`. Must match staging api-server's `HEALTHZ_REHEARSAL_TOKEN` env var. |
+| `HEALTHZ_REHEARSAL_SENTRY_DSN` | secret | DSN sentry-cli posts the rehearsal event to. Point at the dedicated `alerts-rehearsal` project. |
+| `HEALTHZ_REHEARSAL_SENTRY_AUTH_TOKEN` | secret | Sentry auth token with `event:read` scope on the rehearsal project. Used by the verification step to poll the events API. |
+
+**Required staging api-server env vars** (set ONLY on staging, never production):
+
+- `HEALTHZ_REHEARSAL_ENABLED=1`
+- `HEALTHZ_REHEARSAL_TOKEN=<long random secret matching the GitHub secret above>`
+
+### Interpreting a failed rehearsal run
+
+When the rehearsal workflow fails, walk the steps top-down:
+
+| Failing step | Likely cause | Where to look |
+| --- | --- | --- |
+| `Verify required config is present` | One of the GitHub vars/secrets above is missing or got wiped during a Sentry/Slack rotation. | Repo Settings -> Secrets and variables -> Actions. |
+| `Inject synthetic stuck-degraded streak` | Staging api-server is down, or `HEALTHZ_REHEARSAL_ENABLED=1` is no longer set on staging, or the token rotated and the secret + env var drifted. A 404 means the kill switch is off (or staging redeployed without the env). A 401 means the token mismatch. A 503 means the env var is set but the token is missing on the server side. | Hit `/api/_rehearsal/inject-stuck-degraded` from your shell with the staging token to reproduce. |
+| `Run probe and assert it pages` | The `/healthz` schema regressed (e.g. `subsystems` map removed), the probe binary in this branch is broken, or the inject didn't actually take effect (likely because staging restarted between inject and probe - the watcher is in-process). Check the printed probe JSON for the actual `subsystem` / `outcome` / `durationMs` values. | `artifacts/api-server/src/scripts/checkHealthzDegraded.ts` and `artifacts/api-server/src/routes/health.ts`. |
+| `Forward 5 page events to the rehearsal Sentry project` | `HEALTHZ_REHEARSAL_SENTRY_DSN` is wrong/expired, or the rehearsal project was deleted/renamed. | Sentry dashboard -> alerts-rehearsal project settings -> Client Keys (DSN). |
+| `Verify Sentry ingested the rehearsal events` | (a) Sentry is dropping/scrubbing events - check the Sentry stats page for the rehearsal project. (b) The `event:read` scope is missing on the auth token. (c) **Fingerprint dedup broken**: if the failure message says "expected ... 1 issue, saw 5", the fingerprint stopped collapsing iterations - verify nothing renamed `--fingerprint rate_limit_store_stuck_degraded_rehearsal` and that no new Sentry inbound filter or processor is forcing per-event grouping. (d) **Tag stripped**: if the failure says "ingested event tags mismatched", Sentry's PII scrubber or a new `Tag Filter` rule is dropping `alert` / `subsystem` / `rehearsal`. The on-call page body for production would also be missing those tags. (e) **probe_output stripped**: if the failure says "event ... has no probe_output extra", Sentry's PII scrubber or a project rule is stripping the `--extra probe_output` payload. The on-call page body is composed FROM that extra (the probe JSON line with subsystem / streak duration / threshold / firstFailureAt), so production pages would arrive with no actionable detail. | Sentry project settings -> Data Scrubbing AND Alerts -> Issue alerts in the rehearsal project. The matched event/issue ID is surfaced in the workflow run summary so you can open the offending event directly. |
+| `Clear synthetic streak` | Staging is unreachable. Manually POST `clear-stuck-degraded` (see endpoint shape above) before leaving - otherwise the per-minute probe workflow against staging will start paging for real. The `if: always()` guard means this step runs even if everything before it failed; if **this** step is the failure, the synthetic streak is still live on staging. | Re-run with the same token from your shell. |

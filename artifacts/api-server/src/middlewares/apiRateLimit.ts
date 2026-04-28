@@ -230,6 +230,21 @@ class RedisFailureWatcher {
     this.breachedThisIncident = false;
     this.lastRecoveredAt = null;
   }
+
+  /**
+   * Test/rehearsal-only: seed an in-progress failure streak directly
+   * without going through the rolling-window breach detector. Used by
+   * the staging-only rehearsal route (routes/healthzRehearsal.ts) to
+   * flip the rate-limit store into a synthetic degraded state with
+   * firstFailureAt older than the duration-alert threshold so the
+   * checkHealthzDegraded probe will exit 2 against staging without
+   * having to actually break Redis. Production code paths must NEVER
+   * call this; the route layer gates it on HEALTHZ_REHEARSAL_ENABLED.
+   */
+  __injectStreak(firstFailureAt: number, failureCount: number): void {
+    this.firstFailureAt = firstFailureAt;
+    this.failuresSinceFirstFailure = Math.max(1, Math.floor(failureCount));
+  }
 }
 
 const redisFailureWatcher = new RedisFailureWatcher();
@@ -551,6 +566,21 @@ export function apiRateLimit(opts: ApiRateLimitOptions = {}): RequestHandler {
  */
 export function getRateLimitStoreKind(): "memory" | "redis" {
   return store.kind;
+}
+
+/**
+ * Rehearsal-only accessor for the singleton RedisFailureWatcher. Used
+ * by the staging-only routes/healthzRehearsal.ts to inject a synthetic
+ * stuck-degraded streak without breaking Redis. Exporting the watcher
+ * rather than a one-off setter keeps the rehearsal route the only
+ * caller that needs to know about __injectStreak / __reset, and the
+ * route layer is what gates this on HEALTHZ_REHEARSAL_ENABLED.
+ */
+export function __getRedisFailureWatcherForRehearsal(): {
+  __injectStreak(firstFailureAt: number, failureCount: number): void;
+  __reset(): void;
+} {
+  return redisFailureWatcher;
 }
 
 /**

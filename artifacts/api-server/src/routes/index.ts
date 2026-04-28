@@ -1,5 +1,6 @@
 import { Router, type IRouter } from "express";
 import healthRouter from "./health";
+import healthzRehearsalRouter from "./healthzRehearsal";
 import meRouter from "./me";
 import countriesRouter from "./countries";
 import productsRouter from "./products";
@@ -48,6 +49,11 @@ const router: IRouter = Router();
 router.get("/csrf-token", csrfTokenIssuer);
 
 router.use(healthRouter);
+// Staging-only injector for the stuck-degraded duration alert
+// rehearsal. The router itself is gated on HEALTHZ_REHEARSAL_ENABLED
+// so it returns 404 in production. See routes/healthzRehearsal.ts
+// and .github/workflows/rehearse-healthz-degraded.yml.
+router.use(healthzRehearsalRouter);
 router.use(countriesRouter);
 router.use(productsRouter);
 // streamLifecycleRouter must be mounted before streamsRouter: the latter

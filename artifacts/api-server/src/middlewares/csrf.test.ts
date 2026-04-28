@@ -74,5 +74,13 @@ describe("csrf double-submit", () => {
     expect(__test__.isExempt("/api/webhooks/paystack")).toBe(true);
     expect(__test__.isExempt("/api/health")).toBe(true);
     expect(__test__.isExempt("/api/orders")).toBe(false);
+    // The staging-only stuck-degraded rehearsal injector is called
+    // from a GitHub Actions cron with no browser cookies — it has to
+    // be exempt from CSRF or the workflow 403s before its own
+    // X-Rehearsal-Token guard runs. Asserted here so a future
+    // refactor of EXEMPT_PATH_PREFIXES doesn't silently regress
+    // the rehearsal pipeline.
+    expect(__test__.isExempt("/api/_rehearsal/inject-stuck-degraded")).toBe(true);
+    expect(__test__.isExempt("/api/_rehearsal/clear-stuck-degraded")).toBe(true);
   });
 });

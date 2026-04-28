@@ -78,6 +78,25 @@ export class SubsystemFailureWatcher {
     this.failuresSinceFirstFailure = 0;
     this.lastRecoveredAt = null;
   }
+
+  /**
+   * Test/rehearsal-only: seed an in-progress failure streak directly,
+   * bypassing the normal `record()` path. Used by the staging-only
+   * rehearsal route (`routes/healthzRehearsal.ts`) to flip a subsystem
+   * into a synthetic `degraded` state with a `firstFailureAt` older
+   * than the duration alert's threshold so the
+   * `checkHealthzDegraded` probe will exit 2 against staging without
+   * having to actually break the underlying dependency.
+   *
+   * Production code paths must NEVER call this — it is gated at the
+   * route layer (HEALTHZ_REHEARSAL_ENABLED=1 + token) so a misuse
+   * here would only ever surface in staging anyway, but keep the
+   * contract explicit.
+   */
+  __injectStreak(firstFailureAt: number, failureCount: number): void {
+    this.firstFailureAt = firstFailureAt;
+    this.failuresSinceFirstFailure = Math.max(1, Math.floor(failureCount));
+  }
 }
 
 /**

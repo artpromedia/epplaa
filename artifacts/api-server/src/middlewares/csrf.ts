@@ -32,6 +32,13 @@ const EXEMPT_PATH_PREFIXES = [
   "/api/__clerk",
   "/api/csrf-token",
   "/api/health",
+  // Staging-only rehearsal endpoints. These are mutating POSTs called
+  // by a GitHub Actions cron (no browser, no cookies) and are gated
+  // by HEALTHZ_REHEARSAL_ENABLED + a timing-safe X-Rehearsal-Token
+  // inside the route handler itself. Without this exemption the
+  // CSRF middleware would 403 the workflow before its bearer-style
+  // token guard even runs.
+  "/api/_rehearsal",
 ];
 
 function safeEqual(a: string, b: string): boolean {
