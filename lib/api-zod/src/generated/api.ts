@@ -10,8 +10,36 @@ import * as zod from "zod";
 /**
  * @summary Health check
  */
+export const healthCheckResponseRateLimitStoreFailureCountMin = 0;
+
 export const HealthCheckResponse = zod.object({
   status: zod.string(),
+  rateLimitStore: zod
+    .object({
+      kind: zod.enum(["memory", "redis"]),
+      state: zod.enum(["healthy", "degraded"]),
+      failureCount: zod
+        .number()
+        .min(healthCheckResponseRateLimitStoreFailureCountMin)
+        .describe(
+          "Number of failures in the current Redis streak. 0 when healthy.",
+        ),
+      firstFailureAt: zod
+        .number()
+        .nullable()
+        .describe(
+          "ms-epoch the current degraded streak began, or null when healthy.",
+        ),
+      lastRecoveredAt: zod
+        .number()
+        .nullable()
+        .describe(
+          "ms-epoch the most recent streak ended, or null until at least one streak has recovered.",
+        ),
+    })
+    .describe(
+      'Live snapshot of the rate-limit bucket store. `kind` reflects the\nconfigured backend (memory or redis); the remaining fields describe\nthe current Redis failure-streak as tracked by RedisFailureWatcher\non the api-server. For memory replicas the streak fields are\nconstants (state=\"healthy\", failureCount=0, both timestamps null)\nbecause there is no Redis to fail.\n',
+    ),
 });
 
 /**

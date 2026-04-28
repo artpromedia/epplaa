@@ -1,8 +1,21 @@
-import { useAdminDashboard } from "@workspace/api-client-react";
+import {
+  useAdminDashboard,
+  getHealthCheckQueryOptions,
+} from "@workspace/api-client-react";
+import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { PageHeader } from "@/components/admin-shell";
-import { AlertTriangle, Inbox, Scale, Wallet, Ban, Activity } from "lucide-react";
+import { cn } from "@/lib/utils";
+import {
+  AlertTriangle,
+  Inbox,
+  Scale,
+  Wallet,
+  Ban,
+  Activity,
+  Database,
+} from "lucide-react";
 
 const tiles = [
   { key: "openCases", label: "Open cases", icon: Inbox },
@@ -54,7 +67,8 @@ export default function DashboardPage() {
         })}
       </div>
 
-      <div className="mt-6 grid gap-4 md:grid-cols-2">
+      <div className="mt-6 grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+        <RateLimitStorePanel />
         <Card>
           <CardHeader className="flex flex-row items-center justify-between pb-2">
             <CardTitle className="text-sm">Moderation provider</CardTitle>
@@ -106,5 +120,140 @@ export default function DashboardPage() {
         </Card>
       </div>
     </div>
+  );
+}
+
+function formatTimestamp(ms: number | null): string {
+  if (ms === null) return "—";
+  return new Date(ms).toLocaleString(undefined, {
+    dateStyle: "medium",
+    timeStyle: "medium",
+  });
+}
+
+function formatRelative(ms: number | null, now: number): string {
+  if (ms === null) return "—";
+  const deltaSec = Math.max(0, Math.round((now - ms) / 1000));
+  if (deltaSec < 60) return `${deltaSec}s ago`;
+  const minutes = Math.round(deltaSec / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 48) return `${hours}h ago`;
+  const days = Math.round(hours / 24);
+  return `${days}d ago`;
+}
+
+function RateLimitStorePanel() {
+  const { data, isLoading, error } = useQuery({
+    ...getHealthCheckQueryOptions(),
+    refetchInterval: 10_000,
+    refetchIntervalInBackground: true,
+    staleTime: 0,
+  });
+
+  const status = data?.rateLimitStore;
+  const degraded = status?.state === "degraded";
+  const now = Date.now();
+
+  return (
+    <Card
+      className={cn(
+        degraded && "border-destructive/60 bg-destructive/5",
+      )}
+      data-testid="rate-limit-store-panel"
+    >
+      <CardHeader className="flex flex-row items-center justify-between pb-2">
+        <CardTitle className="text-sm">Rate limit store</CardTitle>
+        <Database
+          className={cn(
+            "w-4 h-4",
+            degraded ? "text-destructive" : "text-muted-foreground",
+          )}
+        />
+      </CardHeader>
+      <CardContent className="space-y-2">
+        {error ? (
+          <p
+            className="text-xs text-destructive"
+            data-testid="rate-limit-store-error"
+          >
+            Could not reach /api/healthz. The api-server may be down or
+            the preview proxy is misrouting requests.
+          </p>
+        ) : isLoading || !status ? (
+          <p className="text-xs text-muted-foreground">Loading…</p>
+        ) : (
+          <>
+            <div className="flex items-center gap-2 flex-wrap">
+              <Badge variant="outline" data-testid="rate-limit-store-kind">
+                {status.kind}
+              </Badge>
+              {degraded ? (
+                <Badge
+                  variant="destructive"
+                  data-testid="rate-limit-store-state"
+                >
+                  degraded
+                </Badge>
+              ) : (
+                <Badge
+                  variant="secondary"
+                  data-testid="rate-limit-store-state"
+                >
+                  healthy
+                </Badge>
+              )}
+            </div>
+            <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
+              <dt className="text-muted-foreground">Failure count</dt>
+              <dd
+                className={cn(
+                  "tabular-nums",
+                  degraded && "font-medium text-destructive",
+                )}
+                data-testid="rate-limit-store-failure-count"
+              >
+                {status.failureCount}
+              </dd>
+              <dt className="text-muted-foreground">Streak started</dt>
+              <dd
+                className="tabular-nums"
+                data-testid="rate-limit-store-first-failure"
+                title={
+                  status.firstFailureAt === null
+                    ? undefined
+                    : formatTimestamp(status.firstFailureAt)
+                }
+              >
+                {status.firstFailureAt === null
+                  ? "—"
+                  : `${formatRelative(status.firstFailureAt, now)} (${formatTimestamp(status.firstFailureAt)})`}
+              </dd>
+              <dt className="text-muted-foreground">Last recovered</dt>
+              <dd
+                className="tabular-nums"
+                data-testid="rate-limit-store-last-recovered"
+                title={
+                  status.lastRecoveredAt === null
+                    ? undefined
+                    : formatTimestamp(status.lastRecoveredAt)
+                }
+              >
+                {status.lastRecoveredAt === null
+                  ? "—"
+                  : `${formatRelative(status.lastRecoveredAt, now)} (${formatTimestamp(status.lastRecoveredAt)})`}
+              </dd>
+            </dl>
+            {status.kind === "memory" && (
+              <p className="text-[11px] text-muted-foreground">
+                Memory store: streak metrics are always zero. Set{" "}
+                <code>RATE_LIMIT_STORE=redis</code> before scaling the
+                api-server beyond one replica.
+              </p>
+            )}
+          </>
+        )}
+      </CardContent>
+    </Card>
   );
 }

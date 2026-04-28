@@ -2071,9 +2071,37 @@ components:
   schemas:
     HealthStatus:
       type: object
-      required: [status]
+      required: [status, rateLimitStore]
       properties:
         status: { type: string }
+        rateLimitStore: { $ref: "#/components/schemas/RateLimitStoreStatus" }
+    RateLimitStoreStatus:
+      type: object
+      description: |
+        Live snapshot of the rate-limit bucket store. `kind` reflects the
+        configured backend (memory or redis); the remaining fields describe
+        the current Redis failure-streak as tracked by RedisFailureWatcher
+        on the api-server. For memory replicas the streak fields are
+        constants (state="healthy", failureCount=0, both timestamps null)
+        because there is no Redis to fail.
+      required: [kind, state, failureCount, firstFailureAt, lastRecoveredAt]
+      properties:
+        kind:
+          type: string
+          enum: [memory, redis]
+        state:
+          type: string
+          enum: [healthy, degraded]
+        failureCount:
+          type: integer
+          minimum: 0
+          description: Number of failures in the current Redis streak. 0 when healthy.
+        firstFailureAt:
+          type: ["integer", "null"]
+          description: ms-epoch the current degraded streak began, or null when healthy.
+        lastRecoveredAt:
+          type: ["integer", "null"]
+          description: ms-epoch the most recent streak ended, or null until at least one streak has recovered.
     ApiError:
       type: object
       required: [error]

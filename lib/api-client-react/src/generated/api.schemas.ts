@@ -5,8 +5,54 @@
  * Epplaa API
  * OpenAPI spec version: 0.1.0
  */
+export type RateLimitStoreStatusKind =
+  (typeof RateLimitStoreStatusKind)[keyof typeof RateLimitStoreStatusKind];
+
+export const RateLimitStoreStatusKind = {
+  memory: "memory",
+  redis: "redis",
+} as const;
+
+export type RateLimitStoreStatusState =
+  (typeof RateLimitStoreStatusState)[keyof typeof RateLimitStoreStatusState];
+
+export const RateLimitStoreStatusState = {
+  healthy: "healthy",
+  degraded: "degraded",
+} as const;
+
+/**
+ * Live snapshot of the rate-limit bucket store. `kind` reflects the
+configured backend (memory or redis); the remaining fields describe
+the current Redis failure-streak as tracked by RedisFailureWatcher
+on the api-server. For memory replicas the streak fields are
+constants (state="healthy", failureCount=0, both timestamps null)
+because there is no Redis to fail.
+
+ */
+export interface RateLimitStoreStatus {
+  kind: RateLimitStoreStatusKind;
+  state: RateLimitStoreStatusState;
+  /**
+   * Number of failures in the current Redis streak. 0 when healthy.
+   * @minimum 0
+   */
+  failureCount: number;
+  /**
+   * ms-epoch the current degraded streak began, or null when healthy.
+   * @nullable
+   */
+  firstFailureAt: number | null;
+  /**
+   * ms-epoch the most recent streak ended, or null until at least one streak has recovered.
+   * @nullable
+   */
+  lastRecoveredAt: number | null;
+}
+
 export interface HealthStatus {
   status: string;
+  rateLimitStore: RateLimitStoreStatus;
 }
 
 export interface ApiError {
