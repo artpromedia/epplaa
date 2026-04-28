@@ -62,7 +62,13 @@ async function buildAll() {
       "@swc/*",
       "@aws-sdk/*",
       "@azure/*",
-      "@opentelemetry/*",
+      // @opentelemetry/* used to be externalised, but @sentry/node v10 has
+      // a transitive web of @opentelemetry/instrumentation-* packages that
+      // are pulled in via `import-in-the-middle`. Externalising them
+      // breaks runtime ESM resolution under pnpm's strict isolation, since
+      // those packages live in @sentry/node's own node_modules and are
+      // not hoisted into api-server/node_modules. Bundle them instead —
+      // they are pure JS with no native bindings.
       "@google-cloud/*",
       "@google/*",
       "googleapis",

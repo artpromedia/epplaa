@@ -9,6 +9,7 @@ import { enqueueNotification } from "../lib/notifications";
 import { logger } from "../lib/logger";
 import { requiredTierForOrder } from "../lib/kyc";
 import { sellerSanctionsBlocked, screenSubject } from "../lib/sanctions";
+import { requireMfa } from "./mfa";
 
 const router: IRouter = Router();
 
@@ -407,7 +408,7 @@ router.get("/seller/earnings", async (req, res) => {
   });
 });
 
-router.post("/seller/payouts", async (req, res) => {
+router.post("/seller/payouts", requireMfa(), async (req, res) => {
   const userId = requireUserId(req, res);
   if (!userId) return;
   const body = req.body as { amountMinor?: number };
@@ -460,13 +461,13 @@ router.post("/seller/payouts", async (req, res) => {
   });
 });
 
-router.post("/seller/payouts/:payoutId/mark-paid", async (req, res) => {
+router.post("/seller/payouts/:payoutId/mark-paid", requireMfa(), async (req, res) => {
   const userId = requireUserId(req, res);
   if (!userId) return;
   const [row] = await db
     .update(schema.payoutsTable)
     .set({ status: "paid", paidAt: new Date() })
-    .where(and(eq(schema.payoutsTable.userId, userId), eq(schema.payoutsTable.id, req.params.payoutId)))
+    .where(and(eq(schema.payoutsTable.userId, userId), eq(schema.payoutsTable.id, String(req.params.payoutId))))
     .returning();
   if (!row) {
     res.status(404).json({ error: "not_found" });

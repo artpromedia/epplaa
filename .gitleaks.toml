@@ -1,0 +1,40 @@
+# gitleaks configuration for Epplaa monorepo.
+# Triggered both as a pre-commit hook (scripts/install-hooks.sh) and as a
+# CI gate (.github/workflows/ci.yml). The default rule set is enabled;
+# we only narrow it with allowlist entries for documented placeholders
+# and integration env-var NAMES (not values).
+
+title = "Epplaa gitleaks config"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Documented placeholders, fixtures, and env-var names"
+regexes = [
+    # Local dev seed values used in lib/seed.ts and tests.
+    '''DEV_SECRET_PLACEHOLDER''',
+    '''dev-mfa-fallback''',
+    '''dev-mfa-pepper''',
+    # Names of env vars referenced in code/docs but never their values.
+    '''SESSION_SECRET''',
+    '''CLERK_SECRET_KEY''',
+    '''VITE_CLERK_PUBLISHABLE_KEY''',
+    '''DATABASE_URL''',
+    '''SENTRY_DSN''',
+    '''MFA_ENCRYPTION_KEY''',
+    '''MFA_BACKUP_PEPPER''',
+    '''OTEL_EXPORTER_OTLP_ENDPOINT''',
+    # Stripe / Paystack / Flutterwave env-var names referenced in payment integrations.
+    '''PAYSTACK_SECRET_KEY''',
+    '''FLUTTERWAVE_SECRET_KEY''',
+    '''STRIPE_SECRET_KEY''',
+]
+paths = [
+    '''(.*?)(jpg|gif|doc|pdf|bin|svg|png|jpeg|webp|woff2)$''',
+    '''pnpm-lock\.yaml$''',
+    '''package-lock\.json$''',
+    '''\.local/.*''',
+    '''node_modules/.*''',
+    '''dist/.*''',
+]

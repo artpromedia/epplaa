@@ -6,6 +6,7 @@ import { newWalletTxnId, newPayoutId, newPayoutReference } from "../lib/ids";
 import { ensureWalletBootstrapped, getWalletState } from "../lib/wallet";
 import { createPaymentIntent, gatewayRouter } from "../lib/payments";
 import { logger } from "../lib/logger";
+import { requireMfa } from "./mfa";
 
 const router: IRouter = Router();
 
@@ -93,7 +94,7 @@ router.post("/wallet/spend", async (req, res) => {
  * balance is debited immediately (via wallet_txn) so the user's available
  * balance reflects the in-flight withdrawal.
  */
-router.post("/wallet/withdraw", async (req, res) => {
+router.post("/wallet/withdraw", requireMfa(), async (req, res) => {
   const userId = requireUserId(req, res);
   if (!userId) return;
   const state = await getWalletState(userId);

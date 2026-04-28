@@ -37,8 +37,15 @@ import ndprRouter from "./ndpr";
 import manufacturerRouter from "./manufacturer";
 import wholesaleRouter from "./wholesale";
 import manufacturerAdminRouter from "./manufacturerAdmin";
+import mfaRouter from "./mfa";
+import { csrfTokenIssuer } from "../middlewares/csrf";
 
 const router: IRouter = Router();
+
+// CSRF token issuer — exempt from the CSRF check itself (see csrf.ts
+// EXEMPT_PATH_PREFIXES). The SPA calls this once per session, stashes
+// the returned token, and echoes it as `X-CSRF-Token` on mutations.
+router.get("/csrf-token", csrfTokenIssuer);
 
 router.use(healthRouter);
 router.use(countriesRouter);
@@ -81,5 +88,6 @@ router.use(ndprRouter);
 router.use(manufacturerRouter);
 router.use(wholesaleRouter);
 router.use(manufacturerAdminRouter);
+router.use(mfaRouter);
 
 export default router;

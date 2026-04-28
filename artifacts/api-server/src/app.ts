@@ -1,5 +1,12 @@
+// Sentry MUST be initialised before any other module so its async-context
+// hooks see every request from the very first line of code. The module is
+// a no-op when SENTRY_DSN is unset.
+import { initSentryServer } from "./lib/sentry";
+initSentryServer();
+
 import express, { type Express } from "express";
 import cors from "cors";
+import cookieParser from "cookie-parser";
 import pinoHttp from "pino-http";
 import { clerkMiddleware } from "@clerk/express";
 import router from "./routes";
@@ -15,10 +22,15 @@ import { autoReturnExpiredBoxReservations } from "./routes/box";
 import { auditMutations, auditPiiReads, initAuditChain } from "./lib/audit";
 import { initAdminSchema } from "./lib/roles";
 import { initManufacturerSchema } from "./lib/manufacturers";
+import { initSecuritySchema } from "./lib/security";
+import { initOtel } from "./lib/otel";
 import { refreshFxRates, seedFxRatesIfEmpty } from "./lib/fx";
 import { processDueNdprRequests, requireProcessingNotRestricted } from "./lib/ndpr";
 import { quarterlyResweep, bootstrapAllManufacturerScreenings } from "./lib/sanctions";
 import { runRetentionSweep } from "./lib/retention";
+import { securityHeaders } from "./middlewares/securityHeaders";
+import { csrfMiddleware } from "./middlewares/csrf";
+import { apiRateLimit } from "./middlewares/apiRateLimit";
 
 const app: Express = express();
 
@@ -40,6 +52,13 @@ app.use(
   express.raw({ type: "*/*", limit: "1mb" }),
   fulfillmentWebhooksRouter,
 );
+
+// Strict transport + content-security headers. Mounted AFTER raw-body
+// webhook routes (they need Content-Type unmodified) but BEFORE
+// express.json so even malformed bodies still get the protective headers.
+// Helmet defaults to frameguard=DENY, X-Content-Type-Options=nosniff,
+// HSTS=180d, plus a strict CSP allowing Clerk + Sentry tunnel only.
+for (const mw of securityHeaders()) app.use(mw);
 
 app.use(
   pinoHttp({
@@ -64,7 +83,20 @@ app.use(cors());
 // 6 MB blob lands around 8 MB, plus envelope. Use 10 MB to leave headroom.
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true }));
+// cookie-parser must be mounted BEFORE the CSRF middleware so the
+// double-submit check can read the `csrf_token` cookie.
+app.use(cookieParser());
 app.use(clerkMiddleware());
+
+// CSRF (double-submit cookie). Skipped on Bearer-auth requests (Clerk JWT
+// path), webhooks (HMAC-verified), and the /api/csrf-token issuer route
+// itself. See middlewares/csrf.ts for the exemption list.
+app.use(csrfMiddleware());
+
+// Per-route + per-identity rate limiter. Tier resolution: anon by IP,
+// buyer/seller/admin by Clerk userId. Hot endpoints (otp_start) keep
+// their existing tighter ipRateLimit on top of this baseline.
+app.use("/api", apiRateLimit({ name: "api" }));
 
 // NDPR Article 19 — Right to Restriction of Processing. Users who flip
 // `processingRestrictedAt` get 423 Locked on every mutating route except
@@ -228,6 +260,19 @@ if (process.env.NODE_ENV !== "test") {
     .then(() => seedFxRatesIfEmpty())
     .then(() => refreshFxRates())
     .catch((err) => logger.error({ err: (err as Error).message }, "manufacturer_schema_init_failed"));
+  // Security/MFA schema (Task #9): mfa_enrollments, mfa_challenges,
+  // rate_limit_events. Same additive `CREATE TABLE IF NOT EXISTS` pattern
+  // as the other init* helpers — every PK is `text` to match the rest
+  // of the project. NEVER use a destructive force-push here.
+  void initSecuritySchema().catch((err) =>
+    logger.error({ err: (err as Error).message }, "security_schema_init_failed"),
+  );
+  // OpenTelemetry SDK init. No-op when OTEL_EXPORTER_OTLP_ENDPOINT is
+  // unset, which is the normal case in dev. In prod it ships traces from
+  // express + http instrumentations to Grafana Cloud OTLP.
+  void initOtel().catch((err) =>
+    logger.warn({ err: (err as Error).message }, "otel_init_failed"),
+  );
   // Daily FX refresh — pulls fresh CBN/OXR rates so quoted/landed prices in
   // Naira don't drift. The seed/refresh on boot covers cold start; the
   // setInterval ensures long-running processes refresh every 24h without

@@ -1,6 +1,10 @@
 import { createRoot } from "react-dom/client";
 import App from "./App";
 import "./index.css";
+import { initSentryBrowser } from "./lib/sentry";
+
+// Browser Sentry init — no-op when VITE_SENTRY_DSN is unset (dev).
+initSentryBrowser();
 
 // Apply persisted/system theme before React renders to prevent a flash of the wrong theme.
 (function applyInitialTheme() {
