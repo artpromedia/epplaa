@@ -1,23 +1,38 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link } from "wouter";
-import { sellerGoLiveBroadcast } from "@workspace/api-client-react";
+import {
+  createStream,
+  startStream,
+  stopStream,
+  rotateStreamKey,
+  getStreamPlayback,
+  listStreamMessages,
+  deleteStreamMessage,
+  updateStreamModConfig,
+  type StreamWithSecrets,
+  type StreamChatMessage,
+} from "@workspace/api-client-react";
 import {
   Radio,
   Square,
-  Heart,
-  MessageCircle,
-  Share,
   Eye,
   Sparkles,
+  Copy,
+  Eye as EyeIcon,
+  EyeOff,
+  RefreshCw,
+  Trash2,
+  ShieldAlert,
 } from "lucide-react";
 import { useTheme } from "@/lib/theme-context";
 import { useCountry } from "@/lib/country-context";
 import { useSeller } from "@/lib/seller-context";
-import { TIERS } from "@/lib/seller-tiers";
+import { TIERS, tierIndex } from "@/lib/seller-tiers";
 import { formatPrice } from "@/lib/format";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { TierBadge } from "@/components/tier-badge";
 import { useToast } from "@/hooks/use-toast";
+import { connectStreamSocket } from "@/lib/stream-socket";
 
 const CATEGORIES = [
   "Beauty",
@@ -39,8 +54,8 @@ export default function SellerGoLive() {
   const [streamTitle, setStreamTitle] = useState("");
   const [category, setCategory] = useState(CATEGORIES[0]);
   const [selectedListings, setSelectedListings] = useState<string[]>([]);
-  const [isLive, setIsLive] = useState(false);
-  const [viewers] = useState(() => Math.floor(Math.random() * 80) + 12);
+  const [stream, setStream] = useState<StreamWithSecrets | null>(null);
+  const [creating, setCreating] = useState(false);
 
   if (status !== "approved") {
     return <NotApprovedState isDark={isDark} />;
@@ -75,48 +90,70 @@ export default function SellerGoLive() {
       toast({ title: "Pin at least one product to feature" });
       return;
     }
-    recordBroadcast({
-      title: trimmed,
-      category,
-      listingIds: selectedListings,
-    });
-    setIsLive(true);
-    setIsBroadcasting(true);
-    toast({
-      title: "You're live!",
-      description: `Streaming "${trimmed}" to ${viewers} viewers.`,
-    });
-    // Fire follower fan-out via backend. Best-effort — UI is already live.
-    if (application?.storeHandle) {
-      try {
-        await sellerGoLiveBroadcast({ title: trimmed });
-      } catch {
-        // Swallow: notifications are non-critical for the live experience.
+    setCreating(true);
+    try {
+      const created = await createStream({
+        title: trimmed,
+        currentProductId: selectedListings[0],
+      });
+      const started = await startStream(created.id);
+      recordBroadcast({
+        title: trimmed,
+        category,
+        listingIds: selectedListings,
+      });
+      setIsBroadcasting(true);
+      setStream(started);
+      toast({
+        title: "You're live!",
+        description: started.provider === "stub"
+          ? "Streaming via dev stub. Configure CF_STREAM_API_TOKEN for real ingest."
+          : `Point OBS at the RTMP URL with your stream key.`,
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      // The API returns 403 with `kyc_tier_required` when seller hasn't
+      // hit Tier 2 yet — give the host a clean nudge instead of a raw error.
+      if (msg.includes("kyc_tier_required")) {
+        toast({
+          title: "KYC Tier 2 required to go live",
+          description: "Verify your identity in Settings to unlock live streaming.",
+        });
+      } else {
+        toast({ title: "Couldn't start stream", description: msg });
       }
+    } finally {
+      setCreating(false);
     }
   }
 
-  function endBroadcast() {
-    setIsLive(false);
+  async function endBroadcast() {
+    if (!stream) return;
+    try {
+      await stopStream(stream.id);
+    } catch {
+      /* swallow — we still want the UI to drop back to setup */
+    }
     setIsBroadcasting(false);
     toast({
       title: "Stream ended",
-      description: `Recorded ${viewers} peak viewers. Replay saved to your storefront.`,
+      description: `Replay saved to your storefront.`,
     });
     setStreamTitle("");
     setSelectedListings([]);
+    setStream(null);
   }
 
-  if (isLive) {
+  if (stream) {
     return (
       <LiveBroadcastView
         isDark={isDark}
-        title={streamTitle}
-        viewers={viewers}
+        stream={stream}
         featured={listings.filter((l) => selectedListings.includes(l.id))}
         country={country}
         storeHandle={application?.storeHandle ?? "you"}
         onEnd={endBroadcast}
+        onStreamUpdated={setStream}
       />
     );
   }
@@ -138,6 +175,35 @@ export default function SellerGoLive() {
       </div>
 
       <div className="px-4 pb-24 space-y-4">
+        {tierIndex(tier) < 1 && (
+          <div
+            className={`rounded-xl border p-4 flex items-start gap-3 ${
+              isDark
+                ? "bg-[#FF8855]/10 border-[#FF8855]/30 text-white"
+                : "bg-[#E6502E]/10 border-[#E6502E]/30 text-stone-900"
+            }`}
+          >
+            <ShieldAlert
+              className={`h-5 w-5 shrink-0 mt-0.5 ${
+                isDark ? "text-[#FF8855]" : "text-[#E6502E]"
+              }`}
+            />
+            <div className="space-y-1">
+              <p className="font-bold text-sm">KYC Tier 2 needed to broadcast</p>
+              <p className={`text-xs ${subtleText}`}>
+                Verify your government ID and selfie in Settings → Identity to unlock live streaming.
+              </p>
+              <Link
+                href="/settings"
+                className={`inline-block mt-1 text-xs font-bold ${
+                  isDark ? "text-[#5BA3F5]" : "text-[#1B2A4A]"
+                }`}
+              >
+                Open settings →
+              </Link>
+            </div>
+          </div>
+        )}
         <div className={`rounded-xl border p-4 space-y-3 ${cardClass}`}>
           <p className={`text-xs ${subtleText}`}>
             {def.label} tier · up to {def.maxLiveHoursPerDay ?? "∞"} hour(s)
@@ -245,7 +311,7 @@ export default function SellerGoLive() {
 
         <button
           onClick={startBroadcast}
-          disabled={activeListings.length === 0}
+          disabled={activeListings.length === 0 || creating}
           className={`w-full flex items-center justify-center gap-2 py-4 rounded-full font-bold text-base ${
             isDark
               ? "bg-gradient-to-r from-[#FF8855] to-[#5BA3F5] text-black disabled:from-white/10 disabled:to-white/10 disabled:text-white/30"
@@ -254,7 +320,7 @@ export default function SellerGoLive() {
           data-testid="button-start-broadcast"
         >
           <Radio className="w-5 h-5" />
-          Start broadcast
+          {creating ? "Provisioning…" : "Start broadcast"}
         </button>
       </div>
     </div>
@@ -262,30 +328,116 @@ export default function SellerGoLive() {
 }
 
 function LiveBroadcastView({
-  isDark: _isDark,
-  title,
-  viewers,
+  isDark,
+  stream,
   featured,
   country,
   storeHandle,
   onEnd,
+  onStreamUpdated,
 }: {
   isDark: boolean;
-  title: string;
-  viewers: number;
+  stream: StreamWithSecrets;
   featured: ReturnType<typeof useSeller>["listings"];
   country: ReturnType<typeof useCountry>["country"];
   storeHandle: string;
   onEnd: () => void;
+  onStreamUpdated: (s: StreamWithSecrets) => void;
 }) {
+  const { toast } = useToast();
+  const [showKey, setShowKey] = useState(false);
+  const [livePresence, setLivePresence] = useState<number>(stream.currentViewers);
+  const [recentChat, setRecentChat] = useState<StreamChatMessage[]>([]);
+  const [slowMode, setSlowMode] = useState<number>(stream.slowModeSeconds);
+  const [bannedDraft, setBannedDraft] = useState("");
+  const [bannedWords, setBannedWords] = useState<string[]>(stream.bannedWords);
   const headline = featured[0];
 
-  return (
-    <div className="absolute inset-0 bg-gradient-to-br from-[#1a0033] via-black to-[#001a1a] text-white overflow-hidden">
-      <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top,rgba(255,136,85,0.25),transparent_60%),radial-gradient(ellipse_at_bottom,rgba(91,163,245,0.2),transparent_55%)]" />
+  // Connect to socket presence + chat firehose so the host can moderate.
+  useEffect(() => {
+    const sock = connectStreamSocket();
+    sock.emit("join", { streamId: stream.id });
+    const onPresence = (p: { streamId: string; count: number }) => {
+      if (p.streamId === stream.id) setLivePresence(p.count);
+    };
+    const onMessage = (m: StreamChatMessage) => {
+      if (m.streamId !== stream.id) return;
+      setRecentChat((prev) => [...prev.slice(-49), m]);
+    };
+    const onDeleted = (p: { streamId: string; messageId: string }) => {
+      if (p.streamId !== stream.id) return;
+      setRecentChat((prev) => prev.filter((m) => m.id !== p.messageId));
+    };
+    sock.on("presence:count", onPresence);
+    sock.on("chat:message", onMessage);
+    sock.on("chat:deleted", onDeleted);
+    // Hydrate with the most recent persisted history.
+    listStreamMessages(stream.id, { limit: 50 })
+      .then((res) => setRecentChat(res.messages))
+      .catch(() => {});
+    return () => {
+      sock.emit("leave", { streamId: stream.id });
+      sock.off("presence:count", onPresence);
+      sock.off("chat:message", onMessage);
+      sock.off("chat:deleted", onDeleted);
+    };
+  }, [stream.id]);
 
-      <div className="relative h-full flex flex-col">
-        <div className="pt-12 pb-3 px-4 flex items-start justify-between">
+  async function copyToClipboard(value: string, label: string) {
+    try {
+      await navigator.clipboard.writeText(value);
+      toast({ title: `${label} copied` });
+    } catch {
+      toast({ title: `Couldn't copy ${label}` });
+    }
+  }
+
+  async function onRotateKey() {
+    try {
+      const updated = await rotateStreamKey(stream.id);
+      onStreamUpdated(updated);
+      toast({ title: "Stream key rotated" });
+    } catch (err) {
+      toast({
+        title: "Rotation failed",
+        description: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  async function onDeleteMessage(id: string) {
+    try {
+      await deleteStreamMessage(stream.id, id);
+    } catch {
+      toast({ title: "Couldn't delete message" });
+    }
+  }
+
+  async function onSlowModeChange(value: number) {
+    setSlowMode(value);
+    try {
+      await updateStreamModConfig(stream.id, { slowModeSeconds: value });
+    } catch {
+      toast({ title: "Couldn't update slow mode" });
+    }
+  }
+
+  async function onAddBanned() {
+    const word = bannedDraft.trim();
+    if (!word) return;
+    try {
+      const cfg = await updateStreamModConfig(stream.id, { addBannedWord: word });
+      setBannedWords(cfg.bannedWords);
+      setBannedDraft("");
+    } catch {
+      toast({ title: "Couldn't add banned word" });
+    }
+  }
+
+  return (
+    <div className="absolute inset-0 bg-gradient-to-br from-[#1a0033] via-black to-[#001a1a] text-white overflow-y-auto">
+      <div className="min-h-full">
+        <div className="pt-12 pb-3 px-4 flex items-start justify-between sticky top-0 z-20 bg-black/60 backdrop-blur">
           <div className="flex items-center gap-2 min-w-0">
             <span className="bg-[#FF8855] text-white text-[10px] font-bold px-2 py-1 rounded">
               ● LIVE
@@ -294,73 +446,198 @@ function LiveBroadcastView({
           </div>
           <div className="flex items-center gap-1 bg-black/40 rounded-full px-3 py-1 backdrop-blur">
             <Eye className="w-3.5 h-3.5" />
-            <span className="text-xs font-bold">
-              {viewers.toLocaleString()}
+            <span className="text-xs font-bold" data-testid="text-host-viewer-count">
+              {livePresence.toLocaleString()}
             </span>
           </div>
         </div>
 
-        <div className="px-4">
-          <p className="text-base font-bold leading-tight">{title}</p>
+        <div className="px-4 mt-2">
+          <p className="text-base font-bold leading-tight">{stream.title}</p>
+          <p className="text-[11px] text-white/50 mt-1">
+            Provider: {stream.provider} · Status: {stream.status}
+          </p>
         </div>
 
-        <div className="flex-1 flex items-center justify-center px-6">
-          <div className="text-center">
-            <Radio className="w-16 h-16 mx-auto mb-4 text-[#5BA3F5] animate-pulse" />
-            <p className="font-bold text-lg mb-1">You're broadcasting</p>
-            <p className="text-sm text-white/60 max-w-xs">
-              In production, your camera feed shows here. Buyers chat, react,
-              and tap pinned products to buy live.
-            </p>
-          </div>
-        </div>
+        <div className="px-4 mt-4 space-y-4">
+          <section className="bg-white/5 border border-white/10 rounded-xl p-3 space-y-2">
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-bold flex items-center gap-2">
+                <Radio className="w-4 h-4 text-[#FF8855]" /> Ingest
+              </h3>
+              <button
+                onClick={onRotateKey}
+                className="flex items-center gap-1 text-xs px-2 py-1 rounded bg-white/10 hover:bg-white/20"
+                data-testid="button-rotate-stream-key"
+              >
+                <RefreshCw className="w-3 h-3" /> Rotate key
+              </button>
+            </div>
+            <div>
+              <label className="block text-[10px] font-bold uppercase text-white/50 mb-1">RTMP URL</label>
+              <div className="flex items-center gap-2">
+                <input
+                  readOnly
+                  value={stream.rtmpUrl ?? ""}
+                  className="flex-1 px-2 py-1.5 rounded bg-black/40 border border-white/10 text-xs"
+                  data-testid="input-rtmp-url"
+                />
+                <button
+                  onClick={() => copyToClipboard(stream.rtmpUrl ?? "", "RTMP URL")}
+                  className="p-1.5 rounded bg-white/10 hover:bg-white/20"
+                  aria-label="Copy RTMP URL"
+                >
+                  <Copy className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </div>
+            <div>
+              <label className="block text-[10px] font-bold uppercase text-white/50 mb-1">Stream key</label>
+              <div className="flex items-center gap-2">
+                <input
+                  readOnly
+                  type={showKey ? "text" : "password"}
+                  value={stream.rtmpStreamKey ?? ""}
+                  className="flex-1 px-2 py-1.5 rounded bg-black/40 border border-white/10 text-xs"
+                  data-testid="input-stream-key"
+                />
+                <button
+                  onClick={() => setShowKey((v) => !v)}
+                  className="p-1.5 rounded bg-white/10 hover:bg-white/20"
+                  aria-label={showKey ? "Hide stream key" : "Show stream key"}
+                >
+                  {showKey ? <EyeOff className="w-3.5 h-3.5" /> : <EyeIcon className="w-3.5 h-3.5" />}
+                </button>
+                <button
+                  onClick={() => copyToClipboard(stream.rtmpStreamKey ?? "", "Stream key")}
+                  className="p-1.5 rounded bg-white/10 hover:bg-white/20"
+                  aria-label="Copy stream key"
+                >
+                  <Copy className="w-3.5 h-3.5" />
+                </button>
+              </div>
+              <p className="text-[10px] text-white/40 mt-1">
+                Treat this like a password. Rotated each session — never share or commit.
+              </p>
+            </div>
+          </section>
 
-        {headline && (
-          <div className="absolute right-3 bottom-32 max-w-[200px] bg-black/60 backdrop-blur rounded-lg p-3 border border-white/15">
-            <p className="text-[10px] font-bold uppercase tracking-wider text-[#5BA3F5] mb-1">
-              Pinned now
-            </p>
-            <p className="text-sm font-bold leading-tight mb-1 line-clamp-2">
-              {headline.title}
-            </p>
-            <p className="text-base font-bold text-[#5BA3F5]">
-              {formatPrice(headline.priceMinor, country)}
-            </p>
-            <button className="mt-2 w-full py-1.5 bg-[#FF8855] text-white text-xs font-bold rounded-full">
-              Buy now
+          <section className="bg-white/5 border border-white/10 rounded-xl p-3 space-y-3">
+            <h3 className="text-sm font-bold">Moderation</h3>
+            <div>
+              <label className="block text-[10px] font-bold uppercase text-white/50 mb-1">
+                Slow mode (seconds between messages)
+              </label>
+              <select
+                value={slowMode}
+                onChange={(e) => onSlowModeChange(Number(e.target.value))}
+                className="w-full px-2 py-1.5 rounded bg-black/40 border border-white/10 text-xs"
+                data-testid="select-slow-mode"
+              >
+                {[0, 3, 5, 10, 15, 30, 60].map((s) => (
+                  <option key={s} value={s}>
+                    {s === 0 ? "Off" : `${s}s`}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="block text-[10px] font-bold uppercase text-white/50 mb-1">
+                Banned words ({bannedWords.length})
+              </label>
+              <div className="flex gap-2">
+                <input
+                  value={bannedDraft}
+                  onChange={(e) => setBannedDraft(e.target.value.slice(0, 32))}
+                  placeholder="add a word"
+                  className="flex-1 px-2 py-1.5 rounded bg-black/40 border border-white/10 text-xs"
+                  data-testid="input-banned-word"
+                />
+                <button
+                  onClick={onAddBanned}
+                  className="px-3 py-1.5 rounded bg-[#FF8855] text-black text-xs font-bold"
+                  data-testid="button-add-banned-word"
+                >
+                  Add
+                </button>
+              </div>
+              {bannedWords.length > 0 && (
+                <div className="flex flex-wrap gap-1 mt-2">
+                  {bannedWords.map((w) => (
+                    <span
+                      key={w}
+                      className="text-[10px] bg-white/5 border border-white/10 rounded px-2 py-0.5"
+                    >
+                      {w}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+          </section>
+
+          <section className="bg-white/5 border border-white/10 rounded-xl p-3">
+            <h3 className="text-sm font-bold mb-2">Live chat</h3>
+            <div
+              className="space-y-1 max-h-72 overflow-y-auto"
+              data-testid="host-chat-list"
+            >
+              {recentChat.length === 0 && (
+                <p className="text-xs text-white/40">No messages yet.</p>
+              )}
+              {recentChat.map((m) => (
+                <div
+                  key={m.id}
+                  className="flex items-start gap-2 text-xs bg-black/30 rounded px-2 py-1.5 group"
+                >
+                  <span
+                    className={`font-bold ${
+                      m.role === "host" ? "text-[#FF8855]" : "text-[#5BA3F5]"
+                    }`}
+                  >
+                    {m.username}
+                  </span>
+                  <span className="flex-1">{m.text}</span>
+                  {m.role !== "host" && (
+                    <button
+                      onClick={() => onDeleteMessage(m.id)}
+                      className="opacity-0 group-hover:opacity-100 text-white/50 hover:text-[#FF8855]"
+                      aria-label="Delete message"
+                      data-testid={`delete-message-${m.id}`}
+                    >
+                      <Trash2 className="w-3 h-3" />
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          </section>
+
+          {headline && (
+            <section className="bg-white/5 border border-white/10 rounded-xl p-3">
+              <p className="text-[10px] font-bold uppercase tracking-wider text-[#5BA3F5] mb-1">
+                Pinned now
+              </p>
+              <p className="text-sm font-bold leading-tight mb-1 line-clamp-2">
+                {headline.title}
+              </p>
+              <p className="text-base font-bold text-[#5BA3F5]">
+                {formatPrice(headline.priceMinor, country)}
+              </p>
+            </section>
+          )}
+
+          <div className="flex items-center justify-center gap-3 pb-12">
+            <Sparkles className="w-5 h-5 text-white/40" />
+            <button
+              onClick={onEnd}
+              className="flex items-center gap-2 px-6 py-3 rounded-full bg-white/10 backdrop-blur border border-white/20 text-white font-bold hover:bg-white/15"
+              data-testid="button-end-broadcast"
+            >
+              <Square className="w-4 h-4" />
+              End broadcast
             </button>
           </div>
-        )}
-
-        <div className="absolute right-3 bottom-3 flex flex-col items-center gap-3">
-          <Sparkles className="w-7 h-7 text-white/70" />
-          <Heart className="w-7 h-7 text-white/70" />
-          <MessageCircle className="w-7 h-7 text-white/70" />
-          <Share className="w-7 h-7 text-white/70" />
-        </div>
-
-        <div className="absolute bottom-3 left-3 right-20 space-y-2 pointer-events-none">
-          <div className="bg-black/40 backdrop-blur rounded-full px-3 py-1.5 max-w-fit">
-            <span className="text-xs">
-              <strong>chika_styles</strong> is this still in stock? 👀
-            </span>
-          </div>
-          <div className="bg-black/40 backdrop-blur rounded-full px-3 py-1.5 max-w-fit">
-            <span className="text-xs">
-              <strong>tobi.lagos</strong> dropping a follow!
-            </span>
-          </div>
-        </div>
-
-        <div className="px-4 pb-12 pt-3 flex justify-center pointer-events-auto">
-          <button
-            onClick={onEnd}
-            className="flex items-center gap-2 px-6 py-3 rounded-full bg-white/10 backdrop-blur border border-white/20 text-white font-bold hover:bg-white/15"
-            data-testid="button-end-broadcast"
-          >
-            <Square className="w-4 h-4" />
-            End broadcast
-          </button>
         </div>
       </div>
     </div>

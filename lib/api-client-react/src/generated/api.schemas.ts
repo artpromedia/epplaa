@@ -625,6 +625,122 @@ export interface GoLiveResponse {
   fanout: boolean;
 }
 
+export type StreamingProviderInfoProvider =
+  (typeof StreamingProviderInfoProvider)[keyof typeof StreamingProviderInfoProvider];
+
+export const StreamingProviderInfoProvider = {
+  stub: "stub",
+  cloudflare: "cloudflare",
+} as const;
+
+export interface StreamingProviderInfo {
+  provider: StreamingProviderInfoProvider;
+}
+
+export type StreamWithSecretsStatus =
+  (typeof StreamWithSecretsStatus)[keyof typeof StreamWithSecretsStatus];
+
+export const StreamWithSecretsStatus = {
+  idle: "idle",
+  live: "live",
+  ended: "ended",
+} as const;
+
+export type StreamWithSecretsProvider =
+  (typeof StreamWithSecretsProvider)[keyof typeof StreamWithSecretsProvider];
+
+export const StreamWithSecretsProvider = {
+  stub: "stub",
+  cloudflare: "cloudflare",
+} as const;
+
+export interface StreamWithSecrets {
+  id: string;
+  title: string;
+  hostName: string;
+  hostAvatar: string;
+  posterImage: string;
+  currentProductId?: string | null;
+  status: StreamWithSecretsStatus;
+  isLive: boolean;
+  provider: StreamWithSecretsProvider;
+  cfInputId?: string | null;
+  rtmpUrl?: string | null;
+  rtmpStreamKey?: string | null;
+  whipUrl?: string | null;
+  hlsUrl?: string | null;
+  currentViewers: number;
+  peakViewers: number;
+  slowModeSeconds: number;
+  bannedWords: string[];
+  startedAtIso?: string | null;
+  endedAtIso?: string | null;
+  keyRotatedAtIso?: string | null;
+}
+
+export type StreamPlaybackStatus =
+  (typeof StreamPlaybackStatus)[keyof typeof StreamPlaybackStatus];
+
+export const StreamPlaybackStatus = {
+  idle: "idle",
+  live: "live",
+  ended: "ended",
+} as const;
+
+export type StreamPlaybackProvider =
+  (typeof StreamPlaybackProvider)[keyof typeof StreamPlaybackProvider];
+
+export const StreamPlaybackProvider = {
+  stub: "stub",
+  cloudflare: "cloudflare",
+} as const;
+
+export interface StreamPlayback {
+  id: string;
+  status: StreamPlaybackStatus;
+  hlsUrl?: string | null;
+  provider: StreamPlaybackProvider;
+  currentViewers: number;
+  peakViewers: number;
+  title: string;
+  hostName: string;
+  currentProductId?: string | null;
+  isLive: boolean;
+  startedAtIso?: string | null;
+  endedAtIso?: string | null;
+}
+
+export type StreamChatMessageRole =
+  (typeof StreamChatMessageRole)[keyof typeof StreamChatMessageRole];
+
+export const StreamChatMessageRole = {
+  host: "host",
+  viewer: "viewer",
+  mod: "mod",
+} as const;
+
+export interface StreamChatMessage {
+  id: string;
+  streamId: string;
+  userId: string;
+  username: string;
+  text: string;
+  role: StreamChatMessageRole;
+  createdAtIso: string;
+}
+
+export interface StreamModConfig {
+  id: string;
+  slowModeSeconds: number;
+  bannedWords: string[];
+}
+
+export interface StreamReactionBucket {
+  bucketAtIso: string;
+  kind: string;
+  count: number;
+}
+
 export interface Ok {
   ok: boolean;
 }
@@ -853,6 +969,11 @@ export type BadRequestResponse = ApiError;
  */
 export type ForbiddenResponse = ApiError;
 
+/**
+ * Rate limited
+ */
+export type TooManyRequestsResponse = ApiError;
+
 export type DeletePushTokenParams = {
   token: string;
 };
@@ -863,9 +984,67 @@ export type ListProductsParams = {
   category?: string;
 };
 
+export type CreateStreamBody = {
+  title: string;
+  posterImage?: string;
+  currentProductId?: string;
+};
+
 export type SellerGoLiveBroadcastBody = {
   title: string;
   streamId?: string;
+};
+
+export type ListStreamMessagesParams = {
+  /**
+   * @minimum 1
+   * @maximum 200
+   */
+  limit?: number;
+};
+
+export type ListStreamMessages200 = {
+  messages: StreamChatMessage[];
+};
+
+export type SendStreamMessageBody = {
+  /** @maxLength 280 */
+  text: string;
+};
+
+export type UpdateStreamModConfigBody = {
+  /**
+   * @minimum 0
+   * @maximum 300
+   */
+  slowModeSeconds?: number;
+  addBannedWord?: string;
+};
+
+export type AddStreamReactionBody = {
+  /** @maxLength 16 */
+  kind?: string;
+  /**
+   * @minimum 1
+   * @maximum 10
+   */
+  count?: number;
+};
+
+export type AddStreamReaction201 = {
+  ok: boolean;
+};
+
+export type ListRecentStreamReactionsParams = {
+  /**
+   * @minimum 1
+   * @maximum 300
+   */
+  windowSeconds?: number;
+};
+
+export type ListRecentStreamReactions200 = {
+  buckets: StreamReactionBucket[];
 };
 
 export type ListFulfillmentLocationsParams = {

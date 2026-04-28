@@ -75,6 +75,8 @@
     "zod": "catalog:"
   },
   "dependencies": {
-    "@clerk/clerk-react": "^5.61.3"
+    "@clerk/clerk-react": "^5.61.3",
+    "hls.js": "^1.6.16",
+    "socket.io-client": "^4.8.3"
   }
 }

@@ -1,5 +1,7 @@
+import { createServer } from "node:http";
 import app from "./app";
 import { logger } from "./lib/logger";
+import { bootstrapSocketServer } from "./lib/socket";
 
 const rawPort = process.env["PORT"];
 
@@ -15,11 +17,15 @@ if (Number.isNaN(port) || port <= 0) {
   throw new Error(`Invalid PORT value: "${rawPort}"`);
 }
 
-app.listen(port, (err) => {
-  if (err) {
-    logger.error({ err }, "Error listening on port");
-    process.exit(1);
-  }
+// Use a manual http.Server so Socket.IO can attach to the same port.
+const httpServer = createServer(app);
+bootstrapSocketServer(httpServer);
 
+httpServer.listen(port, () => {
   logger.info({ port }, "Server listening");
+});
+
+httpServer.on("error", (err) => {
+  logger.error({ err }, "Error listening on port");
+  process.exit(1);
 });

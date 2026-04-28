@@ -1,6 +1,7 @@
 export * from "./users";
 export * from "./products";
 export * from "./streams";
+export * from "./streamChat";
 export * from "./replays";
 export * from "./fulfillmentLocations";
 export * from "./promoCodes";

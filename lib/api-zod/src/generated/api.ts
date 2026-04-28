@@ -197,6 +197,12 @@ export const ListStreamsResponseItem = zod.object({
 });
 export const ListStreamsResponse = zod.array(ListStreamsResponseItem);
 
+export const CreateStreamBody = zod.object({
+  title: zod.string(),
+  posterImage: zod.string().optional(),
+  currentProductId: zod.string().optional(),
+});
+
 export const GetStreamParams = zod.object({
   streamId: zod.coerce.string(),
 });
@@ -229,6 +235,215 @@ export const SellerGoLiveBroadcastBody = zod.object({
 export const SellerGoLiveBroadcastResponse = zod.object({
   ok: zod.boolean(),
   fanout: zod.boolean(),
+});
+
+export const GetStreamingProviderInfoResponse = zod.object({
+  provider: zod.enum(["stub", "cloudflare"]),
+});
+
+export const StartStreamParams = zod.object({
+  streamId: zod.coerce.string(),
+});
+
+export const StartStreamResponse = zod.object({
+  id: zod.string(),
+  title: zod.string(),
+  hostName: zod.string(),
+  hostAvatar: zod.string(),
+  posterImage: zod.string(),
+  currentProductId: zod.string().nullish(),
+  status: zod.enum(["idle", "live", "ended"]),
+  isLive: zod.boolean(),
+  provider: zod.enum(["stub", "cloudflare"]),
+  cfInputId: zod.string().nullish(),
+  rtmpUrl: zod.string().nullish(),
+  rtmpStreamKey: zod.string().nullish(),
+  whipUrl: zod.string().nullish(),
+  hlsUrl: zod.string().nullish(),
+  currentViewers: zod.number(),
+  peakViewers: zod.number(),
+  slowModeSeconds: zod.number(),
+  bannedWords: zod.array(zod.string()),
+  startedAtIso: zod.string().nullish(),
+  endedAtIso: zod.string().nullish(),
+  keyRotatedAtIso: zod.string().nullish(),
+});
+
+export const StopStreamParams = zod.object({
+  streamId: zod.coerce.string(),
+});
+
+export const StopStreamResponse = zod.object({
+  id: zod.string(),
+  title: zod.string(),
+  hostName: zod.string(),
+  hostAvatar: zod.string(),
+  posterImage: zod.string(),
+  currentProductId: zod.string().nullish(),
+  status: zod.enum(["idle", "live", "ended"]),
+  isLive: zod.boolean(),
+  provider: zod.enum(["stub", "cloudflare"]),
+  cfInputId: zod.string().nullish(),
+  rtmpUrl: zod.string().nullish(),
+  rtmpStreamKey: zod.string().nullish(),
+  whipUrl: zod.string().nullish(),
+  hlsUrl: zod.string().nullish(),
+  currentViewers: zod.number(),
+  peakViewers: zod.number(),
+  slowModeSeconds: zod.number(),
+  bannedWords: zod.array(zod.string()),
+  startedAtIso: zod.string().nullish(),
+  endedAtIso: zod.string().nullish(),
+  keyRotatedAtIso: zod.string().nullish(),
+});
+
+export const RotateStreamKeyParams = zod.object({
+  streamId: zod.coerce.string(),
+});
+
+export const RotateStreamKeyResponse = zod.object({
+  id: zod.string(),
+  title: zod.string(),
+  hostName: zod.string(),
+  hostAvatar: zod.string(),
+  posterImage: zod.string(),
+  currentProductId: zod.string().nullish(),
+  status: zod.enum(["idle", "live", "ended"]),
+  isLive: zod.boolean(),
+  provider: zod.enum(["stub", "cloudflare"]),
+  cfInputId: zod.string().nullish(),
+  rtmpUrl: zod.string().nullish(),
+  rtmpStreamKey: zod.string().nullish(),
+  whipUrl: zod.string().nullish(),
+  hlsUrl: zod.string().nullish(),
+  currentViewers: zod.number(),
+  peakViewers: zod.number(),
+  slowModeSeconds: zod.number(),
+  bannedWords: zod.array(zod.string()),
+  startedAtIso: zod.string().nullish(),
+  endedAtIso: zod.string().nullish(),
+  keyRotatedAtIso: zod.string().nullish(),
+});
+
+export const GetStreamPlaybackParams = zod.object({
+  streamId: zod.coerce.string(),
+});
+
+export const GetStreamPlaybackResponse = zod.object({
+  id: zod.string(),
+  status: zod.enum(["idle", "live", "ended"]),
+  hlsUrl: zod.string().nullish(),
+  provider: zod.enum(["stub", "cloudflare"]),
+  currentViewers: zod.number(),
+  peakViewers: zod.number(),
+  title: zod.string(),
+  hostName: zod.string(),
+  currentProductId: zod.string().nullish(),
+  isLive: zod.boolean(),
+  startedAtIso: zod.string().nullish(),
+  endedAtIso: zod.string().nullish(),
+});
+
+export const ListStreamMessagesParams = zod.object({
+  streamId: zod.coerce.string(),
+});
+
+export const listStreamMessagesQueryLimitMax = 200;
+
+export const ListStreamMessagesQueryParams = zod.object({
+  limit: zod.coerce
+    .number()
+    .min(1)
+    .max(listStreamMessagesQueryLimitMax)
+    .optional(),
+});
+
+export const ListStreamMessagesResponse = zod.object({
+  messages: zod.array(
+    zod.object({
+      id: zod.string(),
+      streamId: zod.string(),
+      userId: zod.string(),
+      username: zod.string(),
+      text: zod.string(),
+      role: zod.enum(["host", "viewer", "mod"]),
+      createdAtIso: zod.string(),
+    }),
+  ),
+});
+
+export const SendStreamMessageParams = zod.object({
+  streamId: zod.coerce.string(),
+});
+
+export const sendStreamMessageBodyTextMax = 280;
+
+export const SendStreamMessageBody = zod.object({
+  text: zod.string().max(sendStreamMessageBodyTextMax),
+});
+
+export const DeleteStreamMessageParams = zod.object({
+  streamId: zod.coerce.string(),
+  messageId: zod.coerce.string(),
+});
+
+export const UpdateStreamModConfigParams = zod.object({
+  streamId: zod.coerce.string(),
+});
+
+export const updateStreamModConfigBodySlowModeSecondsMin = 0;
+export const updateStreamModConfigBodySlowModeSecondsMax = 300;
+
+export const UpdateStreamModConfigBody = zod.object({
+  slowModeSeconds: zod
+    .number()
+    .min(updateStreamModConfigBodySlowModeSecondsMin)
+    .max(updateStreamModConfigBodySlowModeSecondsMax)
+    .optional(),
+  addBannedWord: zod.string().optional(),
+});
+
+export const UpdateStreamModConfigResponse = zod.object({
+  id: zod.string(),
+  slowModeSeconds: zod.number(),
+  bannedWords: zod.array(zod.string()),
+});
+
+export const AddStreamReactionParams = zod.object({
+  streamId: zod.coerce.string(),
+});
+
+export const addStreamReactionBodyKindMax = 16;
+
+export const addStreamReactionBodyCountMax = 10;
+
+export const AddStreamReactionBody = zod.object({
+  kind: zod.string().max(addStreamReactionBodyKindMax).optional(),
+  count: zod.number().min(1).max(addStreamReactionBodyCountMax).optional(),
+});
+
+export const ListRecentStreamReactionsParams = zod.object({
+  streamId: zod.coerce.string(),
+});
+
+export const listRecentStreamReactionsQueryWindowSecondsMax = 300;
+
+export const ListRecentStreamReactionsQueryParams = zod.object({
+  windowSeconds: zod.coerce
+    .number()
+    .min(1)
+    .max(listRecentStreamReactionsQueryWindowSecondsMax)
+    .optional(),
+});
+
+export const ListRecentStreamReactionsResponse = zod.object({
+  buckets: zod.array(
+    zod.object({
+      bucketAtIso: zod.string(),
+      kind: zod.string(),
+      count: zod.number(),
+    }),
+  ),
 });
 
 export const ListReplaysResponseItem = zod.object({

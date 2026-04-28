@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import Hls from "hls.js";
 import { Heart, MessageCircle, Share2, Gift, X, Send } from "lucide-react";
 import { TippingSheet } from "@/components/tipping-sheet";
 import { Link, useParams, useLocation } from "wouter";
@@ -10,6 +11,13 @@ import { useCart } from "@/lib/cart-context";
 import { formatPrice } from "@/lib/format";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { useToast } from "@/hooks/use-toast";
+import { connectStreamSocket } from "@/lib/stream-socket";
+import {
+  getStreamPlayback,
+  listStreamMessages,
+  type StreamPlayback,
+  type StreamChatMessage,
+} from "@workspace/api-client-react";
 import {
   BotViewer,
   formatViewerCount,
@@ -70,6 +78,12 @@ export default function LiveShopping() {
   const [tipOpen, setTipOpen] = useState(false);
   const heartIdRef = useRef(0);
 
+  // Real backend stream — populated when streamId matches a row in the DB
+  // (created via the seller go-live flow). When null we fall back to the
+  // seed/bot experience so demo streams under SEED_STREAMS still work.
+  const [realPlayback, setRealPlayback] = useState<StreamPlayback | null>(null);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+
   // Seed the chat with the existing static comments so the screen never looks
   // empty before bots start talking.
   const initialMessages = (): ChatMessage[] =>
@@ -120,10 +134,11 @@ export default function LiveShopping() {
     el.scrollTop = el.scrollHeight;
   }, [messages.length]);
 
-  // Bot chatter: random cadence between 2.2s and 4.2s. The currently scheduled
-  // timeout id is tracked in a ref so cleanup cancels the *pending* tick (not
-  // just the initial one) when streamId changes or the page unmounts.
+  // Bot chatter: only when there is no real backend stream. Once a real
+  // playback row is detected the socket firehose becomes the source of
+  // truth and the bots stop (they'd compete with real viewers).
   useEffect(() => {
+    if (realPlayback) return;
     let cancelled = false;
     let timeoutId: ReturnType<typeof setTimeout> | null = null;
     function tick() {
@@ -136,7 +151,6 @@ export default function LiveShopping() {
         kind: "bot",
         bot,
       });
-      // Bots also bump the comment counter (gives the side-rail life).
       setCommentCount((c) => c + 1);
       const delay = 2200 + Math.floor(Math.random() * 2000);
       timeoutId = setTimeout(tick, delay);
@@ -146,24 +160,119 @@ export default function LiveShopping() {
       cancelled = true;
       if (timeoutId) clearTimeout(timeoutId);
     };
+  }, [streamId, realPlayback]);
+
+  // Detect whether the routed streamId is a real backend stream. Failures
+  // (404 etc) leave realPlayback null and the demo experience continues.
+  useEffect(() => {
+    let cancelled = false;
+    if (!streamId) return;
+    getStreamPlayback(streamId)
+      .then((p) => {
+        if (!cancelled) setRealPlayback(p);
+      })
+      .catch(() => {
+        if (!cancelled) setRealPlayback(null);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [streamId]);
 
-  // Viewer count random walk every 3.5s; a tiny floor of 50 prevents zero.
+  // Mount HLS playback when a real stream provides a manifest URL. Native
+  // HLS (Safari) gets the URL straight on the <video>; everywhere else we
+  // attach hls.js. We *only* mount when the URL points at a real CDN —
+  // stub URLs (stub-playback.epplaa.local) wouldn't resolve and would
+  // produce a noisy MEDIA_ERR cycle, so we keep the poster in that case.
   useEffect(() => {
+    const video = videoRef.current;
+    const url = realPlayback?.hlsUrl ?? null;
+    if (!video || !url || url.includes("stub-playback.epplaa.local")) return undefined;
+    if (video.canPlayType("application/vnd.apple.mpegurl")) {
+      video.src = url;
+      return undefined;
+    }
+    if (Hls.isSupported()) {
+      const hls = new Hls({ enableWorker: true, lowLatencyMode: true });
+      hls.loadSource(url);
+      hls.attachMedia(video);
+      return () => hls.destroy();
+    }
+    return undefined;
+  }, [realPlayback?.hlsUrl]);
+
+  // Real socket: presence + live chat + reaction bursts. Joins the room
+  // for this stream id; tears down on stream change/unmount. The same
+  // shared socket is reused across the seller go-live host page.
+  useEffect(() => {
+    if (!realPlayback || !streamId) return;
+    const sock = connectStreamSocket();
+    sock.emit("join", { streamId });
+    const onPresence = (p: { streamId: string; count: number }) => {
+      if (p.streamId === streamId) setViewers(Math.max(1, p.count));
+    };
+    const onMessage = (m: StreamChatMessage) => {
+      if (m.streamId !== streamId) return;
+      pushMessage({
+        id: m.id,
+        username: m.username,
+        text: m.text,
+        kind: "you",
+      });
+      setCommentCount((c) => c + 1);
+    };
+    const onDeleted = (p: { streamId: string; messageId: string }) => {
+      if (p.streamId !== streamId) return;
+      setMessages((prev) => prev.filter((x) => x.id !== p.messageId));
+    };
+    const onReaction = (p: { streamId: string; count: number }) => {
+      if (p.streamId !== streamId) return;
+      setLikeCount((c) => c + p.count);
+    };
+    sock.on("presence:count", onPresence);
+    sock.on("chat:message", onMessage);
+    sock.on("chat:deleted", onDeleted);
+    sock.on("reaction:burst", onReaction);
+    listStreamMessages(streamId, { limit: 50 })
+      .then((res) => {
+        if (res.messages.length === 0) return;
+        setMessages(
+          res.messages.map((m) => ({
+            id: m.id,
+            username: m.username,
+            text: m.text,
+            kind: "you" as const,
+          })),
+        );
+      })
+      .catch(() => {});
+    return () => {
+      sock.emit("leave", { streamId });
+      sock.off("presence:count", onPresence);
+      sock.off("chat:message", onMessage);
+      sock.off("chat:deleted", onDeleted);
+      sock.off("reaction:burst", onReaction);
+    };
+  }, [realPlayback, streamId]);
+
+  // Viewer count random walk — only used in fallback (no real socket
+  // presence). When realPlayback is set, presence:count is authoritative.
+  useEffect(() => {
+    if (realPlayback) return;
     const interval = setInterval(() => {
       setViewers((v) => Math.max(50, v + nextViewerDelta()));
     }, 3500);
     return () => clearInterval(interval);
-  }, []);
+  }, [realPlayback]);
 
-  // Bot likes — occasional ambient growth so the heart count moves even when
-  // the user isn't tapping.
+  // Bot likes — fallback only, off when we have real reactions.
   useEffect(() => {
+    if (realPlayback) return;
     const interval = setInterval(() => {
       setLikeCount((c) => c + 1 + Math.floor(Math.random() * 3));
     }, 2400);
     return () => clearInterval(interval);
-  }, []);
+  }, [realPlayback]);
 
   // Garbage-collect floating hearts after their 1.4s animation finishes so the
   // DOM doesn't grow forever.
@@ -182,12 +291,34 @@ export default function LiveShopping() {
     const drift = Math.floor(Math.random() * 24) - 12; // sideways drift
     setHearts((prev) => [...prev.slice(-12), { id, x, drift }]);
     setLikeCount((c) => c + 1);
+    if (realPlayback && streamId) {
+      const sock = connectStreamSocket();
+      sock.emit("reaction:add", { streamId, kind: "heart", count: 1 });
+    }
   }
 
   function submitMessage(e: React.FormEvent) {
     e.preventDefault();
     const text = draft.trim();
     if (!text) return;
+    if (realPlayback && streamId) {
+      const sock = connectStreamSocket();
+      // Server echoes via chat:message, which appends to the list.
+      sock.emit("chat:send", { streamId, text }, (ack: { ok: boolean; reason?: string }) => {
+        if (!ack?.ok) {
+          if (ack?.reason?.startsWith("slow_mode_")) {
+            const wait = ack.reason.slice("slow_mode_".length);
+            toast({ title: `Slow mode — wait ${wait}s` });
+          } else if (ack?.reason === "unauthorized") {
+            toast({ title: "Sign in to chat" });
+          } else {
+            toast({ title: "Couldn't send" });
+          }
+        }
+      });
+      setDraft("");
+      return;
+    }
     pushMessage({
       id: uid(),
       username: "You",
@@ -256,13 +387,27 @@ export default function LiveShopping() {
         isDark ? "bg-[#0F1525] text-white" : "bg-[#fbeed3] text-stone-900"
       }`}
     >
-      {/* Video Background */}
+      {/* Video Background — real HLS player when a backend stream exists,
+          otherwise the seed poster image. */}
       <div className="absolute inset-0">
-        <img
-          src={stream.posterImage}
-          alt="Live stream"
-          className="w-full h-full object-cover opacity-90"
-        />
+        {realPlayback?.hlsUrl && !realPlayback.hlsUrl.includes("stub-playback.epplaa.local") ? (
+          <video
+            ref={videoRef}
+            autoPlay
+            muted
+            playsInline
+            controls={false}
+            className="w-full h-full object-cover opacity-90"
+            poster={stream.posterImage}
+            data-testid="video-live-hls"
+          />
+        ) : (
+          <img
+            src={stream.posterImage}
+            alt="Live stream"
+            className="w-full h-full object-cover opacity-90"
+          />
+        )}
         <div
           className={`absolute inset-0 bg-gradient-to-b ${
             isDark

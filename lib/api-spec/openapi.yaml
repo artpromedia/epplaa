@@ -163,6 +163,24 @@ paths:
           content:
             application/json:
               schema: { type: array, items: { $ref: "#/components/schemas/Stream" } }
+    post:
+      operationId: createStream
+      tags: [streams]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title]
+              properties:
+                title: { type: string }
+                posterImage: { type: string }
+                currentProductId: { type: string }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/StreamWithSecrets" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
   /streams/{streamId}:
     get:
       operationId: getStream
@@ -202,6 +220,160 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "400": { $ref: "#/components/responses/BadRequest" }
 
+  /streams/_provider/info:
+    get:
+      operationId: getStreamingProviderInfo
+      tags: [streams]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/StreamingProviderInfo" } } } }
+  /streams/{streamId}/start:
+    post:
+      operationId: startStream
+      tags: [streams]
+      parameters:
+        - { in: path, name: streamId, required: true, schema: { type: string } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/StreamWithSecrets" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /streams/{streamId}/stop:
+    post:
+      operationId: stopStream
+      tags: [streams]
+      parameters:
+        - { in: path, name: streamId, required: true, schema: { type: string } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/StreamWithSecrets" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /streams/{streamId}/rotate-key:
+    post:
+      operationId: rotateStreamKey
+      tags: [streams]
+      parameters:
+        - { in: path, name: streamId, required: true, schema: { type: string } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/StreamWithSecrets" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /streams/{streamId}/playback:
+    get:
+      operationId: getStreamPlayback
+      tags: [streams]
+      parameters:
+        - { in: path, name: streamId, required: true, schema: { type: string } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/StreamPlayback" } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /streams/{streamId}/messages:
+    get:
+      operationId: listStreamMessages
+      tags: [streams]
+      parameters:
+        - { in: path, name: streamId, required: true, schema: { type: string } }
+        - { in: query, name: limit, required: false, schema: { type: integer, minimum: 1, maximum: 200 } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [messages]
+                properties:
+                  messages:
+                    type: array
+                    items: { $ref: "#/components/schemas/StreamChatMessage" }
+    post:
+      operationId: sendStreamMessage
+      tags: [streams]
+      parameters:
+        - { in: path, name: streamId, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [text]
+              properties:
+                text: { type: string, maxLength: 280 }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/StreamChatMessage" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+  /streams/{streamId}/messages/{messageId}:
+    delete:
+      operationId: deleteStreamMessage
+      tags: [streams]
+      parameters:
+        - { in: path, name: streamId, required: true, schema: { type: string } }
+        - { in: path, name: messageId, required: true, schema: { type: string } }
+      responses:
+        "204": { description: No Content }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /streams/{streamId}/mod-config:
+    post:
+      operationId: updateStreamModConfig
+      tags: [streams]
+      parameters:
+        - { in: path, name: streamId, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                slowModeSeconds: { type: integer, minimum: 0, maximum: 300 }
+                addBannedWord: { type: string }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/StreamModConfig" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /streams/{streamId}/reactions:
+    post:
+      operationId: addStreamReaction
+      tags: [streams]
+      parameters:
+        - { in: path, name: streamId, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                kind: { type: string, maxLength: 16 }
+                count: { type: integer, minimum: 1, maximum: 10 }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { type: object, required: [ok], properties: { ok: { type: boolean } } } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /streams/{streamId}/reactions/recent:
+    get:
+      operationId: listRecentStreamReactions
+      tags: [streams]
+      parameters:
+        - { in: path, name: streamId, required: true, schema: { type: string } }
+        - { in: query, name: windowSeconds, required: false, schema: { type: integer, minimum: 1, maximum: 300 } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [buckets]
+                properties:
+                  buckets:
+                    type: array
+                    items: { $ref: "#/components/schemas/StreamReactionBucket" }
   /replays:
     get:
       operationId: listReplays
@@ -1456,6 +1628,11 @@ components:
       content:
         application/json:
           schema: { $ref: "#/components/schemas/ApiError" }
+    TooManyRequests:
+      description: Rate limited
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ApiError" }
   schemas:
     HealthStatus:
       type: object
@@ -2126,6 +2303,81 @@ components:
       properties:
         ok: { type: boolean }
         fanout: { type: boolean }
+    StreamingProviderInfo:
+      type: object
+      required: [provider]
+      properties:
+        provider: { type: string, enum: [stub, cloudflare] }
+    StreamWithSecrets:
+      type: object
+      required: [id, title, hostName, hostAvatar, posterImage, status, isLive, provider, currentViewers, peakViewers, slowModeSeconds, bannedWords]
+      properties:
+        id: { type: string }
+        title: { type: string }
+        hostName: { type: string }
+        hostAvatar: { type: string }
+        posterImage: { type: string }
+        currentProductId: { type: string, nullable: true }
+        status: { type: string, enum: [idle, live, ended] }
+        isLive: { type: boolean }
+        provider: { type: string, enum: [stub, cloudflare] }
+        cfInputId: { type: string, nullable: true }
+        rtmpUrl: { type: string, nullable: true }
+        rtmpStreamKey: { type: string, nullable: true }
+        whipUrl: { type: string, nullable: true }
+        hlsUrl: { type: string, nullable: true }
+        currentViewers: { type: integer }
+        peakViewers: { type: integer }
+        slowModeSeconds: { type: integer }
+        bannedWords:
+          type: array
+          items: { type: string }
+        startedAtIso: { type: string, nullable: true }
+        endedAtIso: { type: string, nullable: true }
+        keyRotatedAtIso: { type: string, nullable: true }
+    StreamPlayback:
+      type: object
+      required: [id, status, provider, currentViewers, peakViewers, title, hostName, isLive]
+      properties:
+        id: { type: string }
+        status: { type: string, enum: [idle, live, ended] }
+        hlsUrl: { type: string, nullable: true }
+        provider: { type: string, enum: [stub, cloudflare] }
+        currentViewers: { type: integer }
+        peakViewers: { type: integer }
+        title: { type: string }
+        hostName: { type: string }
+        currentProductId: { type: string, nullable: true }
+        isLive: { type: boolean }
+        startedAtIso: { type: string, nullable: true }
+        endedAtIso: { type: string, nullable: true }
+    StreamChatMessage:
+      type: object
+      required: [id, streamId, userId, username, text, role, createdAtIso]
+      properties:
+        id: { type: string }
+        streamId: { type: string }
+        userId: { type: string }
+        username: { type: string }
+        text: { type: string }
+        role: { type: string, enum: [host, viewer, mod] }
+        createdAtIso: { type: string }
+    StreamModConfig:
+      type: object
+      required: [id, slowModeSeconds, bannedWords]
+      properties:
+        id: { type: string }
+        slowModeSeconds: { type: integer }
+        bannedWords:
+          type: array
+          items: { type: string }
+    StreamReactionBucket:
+      type: object
+      required: [bucketAtIso, kind, count]
+      properties:
+        bucketAtIso: { type: string }
+        kind: { type: string }
+        count: { type: integer }
     Ok:
       type: object
       required: [ok]

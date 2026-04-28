@@ -18,6 +18,8 @@ import type {
 
 import type {
   AddRecentSearchBody,
+  AddStreamReaction201,
+  AddStreamReactionBody,
   AddressVerification,
   AdminKycVerification,
   AdminRunDuePayouts200,
@@ -40,6 +42,7 @@ import type {
   CreateReturnBody,
   CreateReviewBody,
   CreateSellerListingBody,
+  CreateStreamBody,
   DeletePushTokenParams,
   EarningsSummary,
   ForbiddenResponse,
@@ -53,7 +56,11 @@ import type {
   KycStatus,
   ListFulfillmentLocationsParams,
   ListProductsParams,
+  ListRecentStreamReactions200,
+  ListRecentStreamReactionsParams,
   ListReviewsParams,
+  ListStreamMessages200,
+  ListStreamMessagesParams,
   NdprRequest,
   NotFoundResponse,
   NotificationPrefs,
@@ -94,18 +101,26 @@ import type {
   SellerOrder,
   SellerProfile,
   SellerStreamRecord,
+  SendStreamMessageBody,
   SetSellerModeBody,
   StartKycVerification201,
   StartKycVerificationBody,
   Stream,
+  StreamChatMessage,
+  StreamModConfig,
+  StreamPlayback,
+  StreamWithSecrets,
+  StreamingProviderInfo,
   SubmitKycVerification200,
   SubmitKycVerificationBody,
   SubmitSafetyReportBody,
+  TooManyRequestsResponse,
   TransitionReturnBody,
   TransitionSellerOrderBody,
   UnauthorizedResponse,
   UpdateMeBody,
   UpdateSellerListingBody,
+  UpdateStreamModConfigBody,
   UpdateWalletSettingsBody,
   UpgradeSellerTierBody,
   UploadKycDocument200,
@@ -1128,6 +1143,88 @@ export function useListStreams<
   return { ...query, queryKey: queryOptions.queryKey };
 }
 
+export const getCreateStreamUrl = () => {
+  return `/api/streams`;
+};
+
+export const createStream = async (
+  createStreamBody: CreateStreamBody,
+  options?: RequestInit,
+): Promise<StreamWithSecrets> => {
+  return customFetch<StreamWithSecrets>(getCreateStreamUrl(), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(createStreamBody),
+  });
+};
+
+export const getCreateStreamMutationOptions = <
+  TError = ErrorType<UnauthorizedResponse | ForbiddenResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof createStream>>,
+    TError,
+    { data: BodyType<CreateStreamBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof createStream>>,
+  TError,
+  { data: BodyType<CreateStreamBody> },
+  TContext
+> => {
+  const mutationKey = ["createStream"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof createStream>>,
+    { data: BodyType<CreateStreamBody> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return createStream(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type CreateStreamMutationResult = NonNullable<
+  Awaited<ReturnType<typeof createStream>>
+>;
+export type CreateStreamMutationBody = BodyType<CreateStreamBody>;
+export type CreateStreamMutationError = ErrorType<
+  UnauthorizedResponse | ForbiddenResponse
+>;
+
+export const useCreateStream = <
+  TError = ErrorType<UnauthorizedResponse | ForbiddenResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof createStream>>,
+    TError,
+    { data: BodyType<CreateStreamBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof createStream>>,
+  TError,
+  { data: BodyType<CreateStreamBody> },
+  TContext
+> => {
+  return useMutation(getCreateStreamMutationOptions(options));
+};
+
 export const getGetStreamUrl = (streamId: string) => {
   return `/api/streams/${streamId}`;
 };
@@ -1372,6 +1469,976 @@ export const useSellerGoLiveBroadcast = <
 > => {
   return useMutation(getSellerGoLiveBroadcastMutationOptions(options));
 };
+
+export const getGetStreamingProviderInfoUrl = () => {
+  return `/api/streams/_provider/info`;
+};
+
+export const getStreamingProviderInfo = async (
+  options?: RequestInit,
+): Promise<StreamingProviderInfo> => {
+  return customFetch<StreamingProviderInfo>(getGetStreamingProviderInfoUrl(), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetStreamingProviderInfoQueryKey = () => {
+  return [`/api/streams/_provider/info`] as const;
+};
+
+export const getGetStreamingProviderInfoQueryOptions = <
+  TData = Awaited<ReturnType<typeof getStreamingProviderInfo>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getStreamingProviderInfo>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getGetStreamingProviderInfoQueryKey();
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getStreamingProviderInfo>>
+  > = ({ signal }) => getStreamingProviderInfo({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getStreamingProviderInfo>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetStreamingProviderInfoQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getStreamingProviderInfo>>
+>;
+export type GetStreamingProviderInfoQueryError = ErrorType<unknown>;
+
+export function useGetStreamingProviderInfo<
+  TData = Awaited<ReturnType<typeof getStreamingProviderInfo>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getStreamingProviderInfo>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetStreamingProviderInfoQueryOptions(options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+export const getStartStreamUrl = (streamId: string) => {
+  return `/api/streams/${streamId}/start`;
+};
+
+export const startStream = async (
+  streamId: string,
+  options?: RequestInit,
+): Promise<StreamWithSecrets> => {
+  return customFetch<StreamWithSecrets>(getStartStreamUrl(streamId), {
+    ...options,
+    method: "POST",
+  });
+};
+
+export const getStartStreamMutationOptions = <
+  TError = ErrorType<
+    UnauthorizedResponse | ForbiddenResponse | NotFoundResponse
+  >,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof startStream>>,
+    TError,
+    { streamId: string },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof startStream>>,
+  TError,
+  { streamId: string },
+  TContext
+> => {
+  const mutationKey = ["startStream"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof startStream>>,
+    { streamId: string }
+  > = (props) => {
+    const { streamId } = props ?? {};
+
+    return startStream(streamId, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type StartStreamMutationResult = NonNullable<
+  Awaited<ReturnType<typeof startStream>>
+>;
+
+export type StartStreamMutationError = ErrorType<
+  UnauthorizedResponse | ForbiddenResponse | NotFoundResponse
+>;
+
+export const useStartStream = <
+  TError = ErrorType<
+    UnauthorizedResponse | ForbiddenResponse | NotFoundResponse
+  >,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof startStream>>,
+    TError,
+    { streamId: string },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof startStream>>,
+  TError,
+  { streamId: string },
+  TContext
+> => {
+  return useMutation(getStartStreamMutationOptions(options));
+};
+
+export const getStopStreamUrl = (streamId: string) => {
+  return `/api/streams/${streamId}/stop`;
+};
+
+export const stopStream = async (
+  streamId: string,
+  options?: RequestInit,
+): Promise<StreamWithSecrets> => {
+  return customFetch<StreamWithSecrets>(getStopStreamUrl(streamId), {
+    ...options,
+    method: "POST",
+  });
+};
+
+export const getStopStreamMutationOptions = <
+  TError = ErrorType<
+    UnauthorizedResponse | ForbiddenResponse | NotFoundResponse
+  >,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof stopStream>>,
+    TError,
+    { streamId: string },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof stopStream>>,
+  TError,
+  { streamId: string },
+  TContext
+> => {
+  const mutationKey = ["stopStream"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof stopStream>>,
+    { streamId: string }
+  > = (props) => {
+    const { streamId } = props ?? {};
+
+    return stopStream(streamId, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type StopStreamMutationResult = NonNullable<
+  Awaited<ReturnType<typeof stopStream>>
+>;
+
+export type StopStreamMutationError = ErrorType<
+  UnauthorizedResponse | ForbiddenResponse | NotFoundResponse
+>;
+
+export const useStopStream = <
+  TError = ErrorType<
+    UnauthorizedResponse | ForbiddenResponse | NotFoundResponse
+  >,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof stopStream>>,
+    TError,
+    { streamId: string },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof stopStream>>,
+  TError,
+  { streamId: string },
+  TContext
+> => {
+  return useMutation(getStopStreamMutationOptions(options));
+};
+
+export const getRotateStreamKeyUrl = (streamId: string) => {
+  return `/api/streams/${streamId}/rotate-key`;
+};
+
+export const rotateStreamKey = async (
+  streamId: string,
+  options?: RequestInit,
+): Promise<StreamWithSecrets> => {
+  return customFetch<StreamWithSecrets>(getRotateStreamKeyUrl(streamId), {
+    ...options,
+    method: "POST",
+  });
+};
+
+export const getRotateStreamKeyMutationOptions = <
+  TError = ErrorType<
+    UnauthorizedResponse | ForbiddenResponse | NotFoundResponse
+  >,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof rotateStreamKey>>,
+    TError,
+    { streamId: string },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof rotateStreamKey>>,
+  TError,
+  { streamId: string },
+  TContext
+> => {
+  const mutationKey = ["rotateStreamKey"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof rotateStreamKey>>,
+    { streamId: string }
+  > = (props) => {
+    const { streamId } = props ?? {};
+
+    return rotateStreamKey(streamId, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type RotateStreamKeyMutationResult = NonNullable<
+  Awaited<ReturnType<typeof rotateStreamKey>>
+>;
+
+export type RotateStreamKeyMutationError = ErrorType<
+  UnauthorizedResponse | ForbiddenResponse | NotFoundResponse
+>;
+
+export const useRotateStreamKey = <
+  TError = ErrorType<
+    UnauthorizedResponse | ForbiddenResponse | NotFoundResponse
+  >,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof rotateStreamKey>>,
+    TError,
+    { streamId: string },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof rotateStreamKey>>,
+  TError,
+  { streamId: string },
+  TContext
+> => {
+  return useMutation(getRotateStreamKeyMutationOptions(options));
+};
+
+export const getGetStreamPlaybackUrl = (streamId: string) => {
+  return `/api/streams/${streamId}/playback`;
+};
+
+export const getStreamPlayback = async (
+  streamId: string,
+  options?: RequestInit,
+): Promise<StreamPlayback> => {
+  return customFetch<StreamPlayback>(getGetStreamPlaybackUrl(streamId), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetStreamPlaybackQueryKey = (streamId: string) => {
+  return [`/api/streams/${streamId}/playback`] as const;
+};
+
+export const getGetStreamPlaybackQueryOptions = <
+  TData = Awaited<ReturnType<typeof getStreamPlayback>>,
+  TError = ErrorType<NotFoundResponse>,
+>(
+  streamId: string,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getStreamPlayback>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getGetStreamPlaybackQueryKey(streamId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getStreamPlayback>>
+  > = ({ signal }) =>
+    getStreamPlayback(streamId, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: !!streamId,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getStreamPlayback>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetStreamPlaybackQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getStreamPlayback>>
+>;
+export type GetStreamPlaybackQueryError = ErrorType<NotFoundResponse>;
+
+export function useGetStreamPlayback<
+  TData = Awaited<ReturnType<typeof getStreamPlayback>>,
+  TError = ErrorType<NotFoundResponse>,
+>(
+  streamId: string,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getStreamPlayback>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetStreamPlaybackQueryOptions(streamId, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+export const getListStreamMessagesUrl = (
+  streamId: string,
+  params?: ListStreamMessagesParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : value.toString());
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/api/streams/${streamId}/messages?${stringifiedParams}`
+    : `/api/streams/${streamId}/messages`;
+};
+
+export const listStreamMessages = async (
+  streamId: string,
+  params?: ListStreamMessagesParams,
+  options?: RequestInit,
+): Promise<ListStreamMessages200> => {
+  return customFetch<ListStreamMessages200>(
+    getListStreamMessagesUrl(streamId, params),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getListStreamMessagesQueryKey = (
+  streamId: string,
+  params?: ListStreamMessagesParams,
+) => {
+  return [
+    `/api/streams/${streamId}/messages`,
+    ...(params ? [params] : []),
+  ] as const;
+};
+
+export const getListStreamMessagesQueryOptions = <
+  TData = Awaited<ReturnType<typeof listStreamMessages>>,
+  TError = ErrorType<unknown>,
+>(
+  streamId: string,
+  params?: ListStreamMessagesParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof listStreamMessages>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getListStreamMessagesQueryKey(streamId, params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof listStreamMessages>>
+  > = ({ signal }) =>
+    listStreamMessages(streamId, params, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: !!streamId,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof listStreamMessages>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type ListStreamMessagesQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listStreamMessages>>
+>;
+export type ListStreamMessagesQueryError = ErrorType<unknown>;
+
+export function useListStreamMessages<
+  TData = Awaited<ReturnType<typeof listStreamMessages>>,
+  TError = ErrorType<unknown>,
+>(
+  streamId: string,
+  params?: ListStreamMessagesParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof listStreamMessages>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getListStreamMessagesQueryOptions(
+    streamId,
+    params,
+    options,
+  );
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+export const getSendStreamMessageUrl = (streamId: string) => {
+  return `/api/streams/${streamId}/messages`;
+};
+
+export const sendStreamMessage = async (
+  streamId: string,
+  sendStreamMessageBody: SendStreamMessageBody,
+  options?: RequestInit,
+): Promise<StreamChatMessage> => {
+  return customFetch<StreamChatMessage>(getSendStreamMessageUrl(streamId), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(sendStreamMessageBody),
+  });
+};
+
+export const getSendStreamMessageMutationOptions = <
+  TError = ErrorType<
+    UnauthorizedResponse | NotFoundResponse | TooManyRequestsResponse
+  >,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof sendStreamMessage>>,
+    TError,
+    { streamId: string; data: BodyType<SendStreamMessageBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof sendStreamMessage>>,
+  TError,
+  { streamId: string; data: BodyType<SendStreamMessageBody> },
+  TContext
+> => {
+  const mutationKey = ["sendStreamMessage"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof sendStreamMessage>>,
+    { streamId: string; data: BodyType<SendStreamMessageBody> }
+  > = (props) => {
+    const { streamId, data } = props ?? {};
+
+    return sendStreamMessage(streamId, data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type SendStreamMessageMutationResult = NonNullable<
+  Awaited<ReturnType<typeof sendStreamMessage>>
+>;
+export type SendStreamMessageMutationBody = BodyType<SendStreamMessageBody>;
+export type SendStreamMessageMutationError = ErrorType<
+  UnauthorizedResponse | NotFoundResponse | TooManyRequestsResponse
+>;
+
+export const useSendStreamMessage = <
+  TError = ErrorType<
+    UnauthorizedResponse | NotFoundResponse | TooManyRequestsResponse
+  >,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof sendStreamMessage>>,
+    TError,
+    { streamId: string; data: BodyType<SendStreamMessageBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof sendStreamMessage>>,
+  TError,
+  { streamId: string; data: BodyType<SendStreamMessageBody> },
+  TContext
+> => {
+  return useMutation(getSendStreamMessageMutationOptions(options));
+};
+
+export const getDeleteStreamMessageUrl = (
+  streamId: string,
+  messageId: string,
+) => {
+  return `/api/streams/${streamId}/messages/${messageId}`;
+};
+
+export const deleteStreamMessage = async (
+  streamId: string,
+  messageId: string,
+  options?: RequestInit,
+): Promise<void> => {
+  return customFetch<void>(getDeleteStreamMessageUrl(streamId, messageId), {
+    ...options,
+    method: "DELETE",
+  });
+};
+
+export const getDeleteStreamMessageMutationOptions = <
+  TError = ErrorType<
+    UnauthorizedResponse | ForbiddenResponse | NotFoundResponse
+  >,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof deleteStreamMessage>>,
+    TError,
+    { streamId: string; messageId: string },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof deleteStreamMessage>>,
+  TError,
+  { streamId: string; messageId: string },
+  TContext
+> => {
+  const mutationKey = ["deleteStreamMessage"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof deleteStreamMessage>>,
+    { streamId: string; messageId: string }
+  > = (props) => {
+    const { streamId, messageId } = props ?? {};
+
+    return deleteStreamMessage(streamId, messageId, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type DeleteStreamMessageMutationResult = NonNullable<
+  Awaited<ReturnType<typeof deleteStreamMessage>>
+>;
+
+export type DeleteStreamMessageMutationError = ErrorType<
+  UnauthorizedResponse | ForbiddenResponse | NotFoundResponse
+>;
+
+export const useDeleteStreamMessage = <
+  TError = ErrorType<
+    UnauthorizedResponse | ForbiddenResponse | NotFoundResponse
+  >,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof deleteStreamMessage>>,
+    TError,
+    { streamId: string; messageId: string },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof deleteStreamMessage>>,
+  TError,
+  { streamId: string; messageId: string },
+  TContext
+> => {
+  return useMutation(getDeleteStreamMessageMutationOptions(options));
+};
+
+export const getUpdateStreamModConfigUrl = (streamId: string) => {
+  return `/api/streams/${streamId}/mod-config`;
+};
+
+export const updateStreamModConfig = async (
+  streamId: string,
+  updateStreamModConfigBody: UpdateStreamModConfigBody,
+  options?: RequestInit,
+): Promise<StreamModConfig> => {
+  return customFetch<StreamModConfig>(getUpdateStreamModConfigUrl(streamId), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(updateStreamModConfigBody),
+  });
+};
+
+export const getUpdateStreamModConfigMutationOptions = <
+  TError = ErrorType<UnauthorizedResponse | ForbiddenResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof updateStreamModConfig>>,
+    TError,
+    { streamId: string; data: BodyType<UpdateStreamModConfigBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof updateStreamModConfig>>,
+  TError,
+  { streamId: string; data: BodyType<UpdateStreamModConfigBody> },
+  TContext
+> => {
+  const mutationKey = ["updateStreamModConfig"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof updateStreamModConfig>>,
+    { streamId: string; data: BodyType<UpdateStreamModConfigBody> }
+  > = (props) => {
+    const { streamId, data } = props ?? {};
+
+    return updateStreamModConfig(streamId, data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type UpdateStreamModConfigMutationResult = NonNullable<
+  Awaited<ReturnType<typeof updateStreamModConfig>>
+>;
+export type UpdateStreamModConfigMutationBody =
+  BodyType<UpdateStreamModConfigBody>;
+export type UpdateStreamModConfigMutationError = ErrorType<
+  UnauthorizedResponse | ForbiddenResponse
+>;
+
+export const useUpdateStreamModConfig = <
+  TError = ErrorType<UnauthorizedResponse | ForbiddenResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof updateStreamModConfig>>,
+    TError,
+    { streamId: string; data: BodyType<UpdateStreamModConfigBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof updateStreamModConfig>>,
+  TError,
+  { streamId: string; data: BodyType<UpdateStreamModConfigBody> },
+  TContext
+> => {
+  return useMutation(getUpdateStreamModConfigMutationOptions(options));
+};
+
+export const getAddStreamReactionUrl = (streamId: string) => {
+  return `/api/streams/${streamId}/reactions`;
+};
+
+export const addStreamReaction = async (
+  streamId: string,
+  addStreamReactionBody: AddStreamReactionBody,
+  options?: RequestInit,
+): Promise<AddStreamReaction201> => {
+  return customFetch<AddStreamReaction201>(getAddStreamReactionUrl(streamId), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(addStreamReactionBody),
+  });
+};
+
+export const getAddStreamReactionMutationOptions = <
+  TError = ErrorType<UnauthorizedResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof addStreamReaction>>,
+    TError,
+    { streamId: string; data: BodyType<AddStreamReactionBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof addStreamReaction>>,
+  TError,
+  { streamId: string; data: BodyType<AddStreamReactionBody> },
+  TContext
+> => {
+  const mutationKey = ["addStreamReaction"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof addStreamReaction>>,
+    { streamId: string; data: BodyType<AddStreamReactionBody> }
+  > = (props) => {
+    const { streamId, data } = props ?? {};
+
+    return addStreamReaction(streamId, data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type AddStreamReactionMutationResult = NonNullable<
+  Awaited<ReturnType<typeof addStreamReaction>>
+>;
+export type AddStreamReactionMutationBody = BodyType<AddStreamReactionBody>;
+export type AddStreamReactionMutationError = ErrorType<UnauthorizedResponse>;
+
+export const useAddStreamReaction = <
+  TError = ErrorType<UnauthorizedResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof addStreamReaction>>,
+    TError,
+    { streamId: string; data: BodyType<AddStreamReactionBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof addStreamReaction>>,
+  TError,
+  { streamId: string; data: BodyType<AddStreamReactionBody> },
+  TContext
+> => {
+  return useMutation(getAddStreamReactionMutationOptions(options));
+};
+
+export const getListRecentStreamReactionsUrl = (
+  streamId: string,
+  params?: ListRecentStreamReactionsParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : value.toString());
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/api/streams/${streamId}/reactions/recent?${stringifiedParams}`
+    : `/api/streams/${streamId}/reactions/recent`;
+};
+
+export const listRecentStreamReactions = async (
+  streamId: string,
+  params?: ListRecentStreamReactionsParams,
+  options?: RequestInit,
+): Promise<ListRecentStreamReactions200> => {
+  return customFetch<ListRecentStreamReactions200>(
+    getListRecentStreamReactionsUrl(streamId, params),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getListRecentStreamReactionsQueryKey = (
+  streamId: string,
+  params?: ListRecentStreamReactionsParams,
+) => {
+  return [
+    `/api/streams/${streamId}/reactions/recent`,
+    ...(params ? [params] : []),
+  ] as const;
+};
+
+export const getListRecentStreamReactionsQueryOptions = <
+  TData = Awaited<ReturnType<typeof listRecentStreamReactions>>,
+  TError = ErrorType<unknown>,
+>(
+  streamId: string,
+  params?: ListRecentStreamReactionsParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof listRecentStreamReactions>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getListRecentStreamReactionsQueryKey(streamId, params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof listRecentStreamReactions>>
+  > = ({ signal }) =>
+    listRecentStreamReactions(streamId, params, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: !!streamId,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof listRecentStreamReactions>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type ListRecentStreamReactionsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listRecentStreamReactions>>
+>;
+export type ListRecentStreamReactionsQueryError = ErrorType<unknown>;
+
+export function useListRecentStreamReactions<
+  TData = Awaited<ReturnType<typeof listRecentStreamReactions>>,
+  TError = ErrorType<unknown>,
+>(
+  streamId: string,
+  params?: ListRecentStreamReactionsParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof listRecentStreamReactions>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getListRecentStreamReactionsQueryOptions(
+    streamId,
+    params,
+    options,
+  );
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
 
 export const getListReplaysUrl = () => {
   return `/api/replays`;
