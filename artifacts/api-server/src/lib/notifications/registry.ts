@@ -57,16 +57,29 @@ class FailoverChannel implements NotificationChannel {
 }
 
 /**
- * Single source of truth for channel adapter selection. Real provider when
- * env keys exist, otherwise console adapter so dev still exercises the
- * full enqueue → drain → delivered pipeline.
+ * Single source of truth for channel adapter selection.
  *
- * Provider failover policy: each kind is composed as
- * [primary(real), …secondary(real), console(dev)]. The outbox already
- * retries with backoff on a `false` SendResult — failover gives us
- * intra-attempt switching so a single provider outage does not stall
- * deliveries while waiting for the next backoff window.
+ * Production composition rule: chain ONLY real providers in the
+ * FailoverChannel. Console is NEVER part of a failover chain — using
+ * console as a fallback would mask real provider outages and falsely
+ * mark outbox rows delivered. Console is only used when zero real
+ * providers are configured (i.e. local dev), in which case it stands
+ * alone so the enqueue → drain → delivered pipeline still completes.
+ *
+ * Failover semantics: when a real primary fails, the next real
+ * secondary is tried in the same attempt. If ALL real providers fail,
+ * the channel returns ok:false and the outbox owns retry/backoff —
+ * which is the authoritative reliability layer.
  */
+function buildChannel(kind: ChannelKind, providers: NotificationChannel[]): NotificationChannel {
+  const real = providers.filter((p) => p.isConfigured());
+  if (real.length === 0) {
+    return new ConsoleChannel(kind);
+  }
+  if (real.length === 1) return real[0];
+  return new FailoverChannel(real);
+}
+
 class ChannelRegistry {
   private readonly sms: NotificationChannel;
   private readonly whatsapp: NotificationChannel;
@@ -75,10 +88,11 @@ class ChannelRegistry {
   private readonly email: NotificationChannel;
 
   constructor() {
-    const termiiSms = new TermiiChannel("sms");
-    const termiiWa = new TermiiChannel("whatsapp");
-    this.sms = new FailoverChannel([termiiSms, new ConsoleChannel("sms")]);
-    this.whatsapp = new FailoverChannel([termiiWa, new ConsoleChannel("whatsapp")]);
+    // Each list contains real providers in priority order. Add a second
+    // gateway here (e.g. new TwilioChannel("sms")) and it is automatically
+    // wrapped in a FailoverChannel for intra-attempt switching.
+    this.sms = buildChannel("sms", [new TermiiChannel("sms")]);
+    this.whatsapp = buildChannel("whatsapp", [new TermiiChannel("whatsapp")]);
     this.fcm = new FcmChannel();
     this.webpush = new WebPushChannel();
     this.email = new EmailChannel();
