@@ -1077,6 +1077,10 @@ export type StartKycVerification201 = {
   status: string;
 };
 
+export type SubmitKycVerificationBody = {
+  documentIds?: string[];
+};
+
 export type SubmitKycVerification200 = {
   id: string;
   status: string;

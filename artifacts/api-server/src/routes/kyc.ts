@@ -219,14 +219,27 @@ router.get("/kyc/documents/:id", async (req, res) => {
 router.post("/kyc/start", async (req, res) => {
   const userId = requireUserId(req, res);
   if (!userId) return;
-  const body = req.body as { kind?: string; documentIds?: string[]; subjectName?: string; country?: string };
+  const body = req.body as {
+    kind?: string;
+    tier?: number;
+    documentIds?: string[];
+    subjectName?: string;
+    country?: string;
+  };
   const kind = String(body.kind ?? "") as KycVerificationKind;
   if (!ALLOWED_VERIF_KINDS.has(kind)) {
     res.status(400).json({ error: "bad_kind" });
     return;
   }
   const documentIds = Array.isArray(body.documentIds) ? body.documentIds.map(String) : [];
-  const targetTier = KYC_CONSTANTS.KIND_TARGET_TIER[kind] ?? 1;
+  // Caller may explicitly request a target tier (e.g. UI picks Tier 3 with
+  // kind=cac, also wants the verification recorded as targeting Tier 3).
+  // We clamp into [kind's natural tier, 3] so the caller can only widen,
+  // never narrow — a `gov_id` row can be Tier 2 or Tier 3 (covers both),
+  // but `cac/ubo` cannot be downgraded to Tier 2.
+  const naturalTier = KYC_CONSTANTS.KIND_TARGET_TIER[kind] ?? 1;
+  const requested = Number.isFinite(body.tier) ? Number(body.tier) : naturalTier;
+  const targetTier = Math.min(3, Math.max(naturalTier, requested));
   const id = newVerifId();
   await db.insert(schema.kycVerificationsTable).values({
     id,
@@ -260,6 +273,7 @@ router.post("/kyc/verifications/:id/submit", async (req, res) => {
   const userId = requireUserId(req, res);
   if (!userId) return;
   const verifId = req.params.id;
+  const body = (req.body ?? {}) as { documentIds?: string[] };
   const [v] = await db
     .select()
     .from(schema.kycVerificationsTable)
@@ -273,12 +287,38 @@ router.post("/kyc/verifications/:id/submit", async (req, res) => {
     res.json({ id: v.id, status: v.status });
     return;
   }
-  // Verify all attached docs exist + uploaded.
-  const docIds = (v.documentIds ?? []) as string[];
+  // Two ways to attach docs:
+  //   1) Caller passes `documentIds` in the submit body (the UI uploads
+  //      first, then references the doc IDs here). Always wins.
+  //   2) Caller relied on docs attached at /kyc/start time.
+  // If neither is populated we auto-attach every uploaded doc the user
+  // currently owns — this matches the "upload then submit" UX where the
+  // verification starts empty.
+  let docIds = Array.isArray(body.documentIds) && body.documentIds.length > 0
+    ? body.documentIds.map(String)
+    : ((v.documentIds ?? []) as string[]);
+  if (docIds.length === 0) {
+    const uploaded = await db
+      .select({ id: schema.kycDocumentsTable.id })
+      .from(schema.kycDocumentsTable)
+      .where(
+        and(
+          eq(schema.kycDocumentsTable.userId, userId),
+          eq(schema.kycDocumentsTable.status, "uploaded"),
+        ),
+      );
+    docIds = uploaded.map((d) => d.id);
+  }
   if (docIds.length === 0) {
     res.status(400).json({ error: "no_documents" });
     return;
   }
+  // Persist the (possibly newly-resolved) doc list onto the verification
+  // so audit + admin review have a stable record of what was submitted.
+  await db
+    .update(schema.kycVerificationsTable)
+    .set({ documentIds: docIds })
+    .where(eq(schema.kycVerificationsTable.id, verifId));
   const docs = await db
     .select()
     .from(schema.kycDocumentsTable)

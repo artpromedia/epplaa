@@ -16,6 +16,7 @@ import { logger } from "./logger";
 import { newPaymentAttemptId, newPaymentIntentId, newPaymentReference } from "./ids";
 import { requiredTierForOrder } from "./kyc";
 import { sellerSanctionsBlocked } from "./sanctions";
+import { recordAudit } from "./audit";
 
 /**
  * 5-minute rolling window for the gateway health counters. The router opens
@@ -757,6 +758,13 @@ export async function processDuePayouts(): Promise<{ processed: number; failed: 
         { payoutId: payout.id, sellerKycTier, required },
         "payout_unblocked_kyc_satisfied",
       );
+      await recordAudit({
+        actorId: null,
+        action: "payout.unblocked",
+        entity: "payout",
+        entityId: payout.id,
+        payload: { userId: payout.userId, sellerKycTier, required, amountMinor: payout.amountMinor },
+      });
     }
   }
 
@@ -801,6 +809,20 @@ export async function processDuePayouts(): Promise<{ processed: number; failed: 
         { payoutId: payout.id, sellerKycTier, required, sanctionsBlocked },
         "payout_reblocked_at_claim_time",
       );
+      await recordAudit({
+        actorId: null,
+        action: "payout.reblocked",
+        entity: "payout",
+        entityId: payout.id,
+        payload: {
+          userId: payout.userId,
+          sellerKycTier,
+          required,
+          sanctionsBlocked,
+          reason,
+          amountMinor: payout.amountMinor,
+        },
+      });
       continue;
     }
     stillDue.push(payout);
@@ -859,6 +881,20 @@ export async function processDuePayouts(): Promise<{ processed: number; failed: 
           paidAt: result.status === "processed" ? new Date() : null,
         })
         .where(eq(schema.payoutsTable.id, payout.id));
+      await recordAudit({
+        actorId: null,
+        action: `payout.${finalStatus}`,
+        entity: "payout",
+        entityId: payout.id,
+        payload: {
+          userId: payout.userId,
+          amountMinor: payout.amountMinor,
+          currencyCode: payout.currencyCode,
+          gateway: gw.name,
+          gatewayReference: result.transferReference,
+          orderId: payout.orderId,
+        },
+      });
       // Mark the order settled only when ALL its payout legs are
       // resolved (paid or cancelled). Setting settledAt on the first
       // successful leg would mislead finance dashboards into thinking

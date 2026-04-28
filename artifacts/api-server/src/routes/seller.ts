@@ -8,7 +8,7 @@ import { COUNTRY_BY_CODE } from "../lib/static";
 import { enqueueNotification } from "../lib/notifications";
 import { logger } from "../lib/logger";
 import { requiredTierForOrder } from "../lib/kyc";
-import { sellerSanctionsBlocked } from "../lib/sanctions";
+import { sellerSanctionsBlocked, screenSubject } from "../lib/sanctions";
 
 const router: IRouter = Router();
 
@@ -59,7 +59,7 @@ router.get("/seller/me", async (req, res) => {
 router.post("/seller/apply", async (req, res) => {
   const userId = requireUserId(req, res);
   if (!userId) return;
-  const application = req.body ?? {};
+  const application = (req.body ?? {}) as Record<string, unknown>;
   const profile = await upsertProfile(userId, {
     application,
     status: "approved",
@@ -73,6 +73,18 @@ router.post("/seller/apply", async (req, res) => {
       daysAsSeller: 0,
     },
   });
+  // Compliance: every newly-onboarded seller (or seller updating their
+  // legal identity) gets a sanctions screen. Stub provider blocks names
+  // containing "BLOCKED" and KP/IR/SY/CU country codes; persisted result
+  // is what `sellerSanctionsBlocked` reads at payout time. We don't fail
+  // the apply call on a hit — the seller can still onboard, but payouts
+  // will be parked until trust & safety clears them.
+  const subjectName =
+    (typeof application.legalName === "string" && application.legalName.trim()) ||
+    (typeof application.businessName === "string" && application.businessName.trim()) ||
+    userId;
+  const country = typeof application.country === "string" ? application.country : "NG";
+  await screenSubject({ userId, name: subjectName, country });
   res.json(profile);
 });
 

@@ -1451,6 +1451,10 @@ export const SubmitKycVerificationParams = zod.object({
   id: zod.coerce.string(),
 });
 
+export const SubmitKycVerificationBody = zod.object({
+  documentIds: zod.array(zod.string()).optional(),
+});
+
 export const SubmitKycVerificationResponse = zod.object({
   id: zod.string(),
   status: zod.string(),

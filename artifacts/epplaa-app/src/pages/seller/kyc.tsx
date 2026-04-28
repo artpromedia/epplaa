@@ -116,7 +116,11 @@ export default function SellerKyc() {
 
   async function startTier(target: 2 | 3) {
     try {
-      await startMut.mutateAsync({ data: { kind: "gov_id", tier: target } });
+      // For Tier 3 we open the verification with `cac` (a Tier-3-only kind)
+      // so the backend's natural-tier clamp lands at 3. For Tier 2 a
+      // `gov_id` ticket is enough — it covers gov-id + bank verification.
+      const kind = target === 3 ? "cac" : "gov_id";
+      await startMut.mutateAsync({ data: { kind, tier: target } });
       toast({ title: `Tier ${target} verification opened` });
     } catch (err) {
       toast({
@@ -126,9 +130,12 @@ export default function SellerKyc() {
     }
   }
 
-  async function submitForReview(verificationId: string) {
+  async function submitForReview(verificationId: string, documentIds: string[]) {
     try {
-      await submitMut.mutateAsync({ id: verificationId });
+      // The backend will auto-attach uploaded docs if we send an empty list,
+      // but passing explicit IDs keeps the audit trail honest about what
+      // the user actually intended to submit.
+      await submitMut.mutateAsync({ id: verificationId, data: { documentIds } });
       toast({ title: "Submitted for compliance review" });
     } catch (err) {
       toast({
@@ -266,9 +273,14 @@ export default function SellerKyc() {
               >
                 Open Tier {targetTier} verification
               </button>
-            ) : missing.length === 0 && openVerification.status === "open" ? (
+            ) : missing.length === 0 && openVerification.status === "draft" ? (
               <button
-                onClick={() => submitForReview(openVerification.id)}
+                onClick={() =>
+                  submitForReview(
+                    openVerification.id,
+                    data.documents.filter((d) => d.status === "uploaded").map((d) => d.id),
+                  )
+                }
                 disabled={submitMut.isPending}
                 className="mt-3 w-full bg-orange-500 hover:bg-orange-600 disabled:opacity-50 text-white text-sm font-bold py-2 rounded-md"
                 data-testid="button-submit-verification"

@@ -99,6 +99,7 @@ import type {
   StartKycVerificationBody,
   Stream,
   SubmitKycVerification200,
+  SubmitKycVerificationBody,
   SubmitSafetyReportBody,
   TransitionReturnBody,
   TransitionSellerOrderBody,
@@ -7717,6 +7718,7 @@ export const getSubmitKycVerificationUrl = (id: string) => {
 
 export const submitKycVerification = async (
   id: string,
+  submitKycVerificationBody?: SubmitKycVerificationBody,
   options?: RequestInit,
 ): Promise<SubmitKycVerification200> => {
   return customFetch<SubmitKycVerification200>(
@@ -7724,6 +7726,8 @@ export const submitKycVerification = async (
     {
       ...options,
       method: "POST",
+      headers: { "Content-Type": "application/json", ...options?.headers },
+      body: JSON.stringify(submitKycVerificationBody),
     },
   );
 };
@@ -7735,14 +7739,14 @@ export const getSubmitKycVerificationMutationOptions = <
   mutation?: UseMutationOptions<
     Awaited<ReturnType<typeof submitKycVerification>>,
     TError,
-    { id: string },
+    { id: string; data: BodyType<SubmitKycVerificationBody> },
     TContext
   >;
   request?: SecondParameter<typeof customFetch>;
 }): UseMutationOptions<
   Awaited<ReturnType<typeof submitKycVerification>>,
   TError,
-  { id: string },
+  { id: string; data: BodyType<SubmitKycVerificationBody> },
   TContext
 > => {
   const mutationKey = ["submitKycVerification"];
@@ -7756,11 +7760,11 @@ export const getSubmitKycVerificationMutationOptions = <
 
   const mutationFn: MutationFunction<
     Awaited<ReturnType<typeof submitKycVerification>>,
-    { id: string }
+    { id: string; data: BodyType<SubmitKycVerificationBody> }
   > = (props) => {
-    const { id } = props ?? {};
+    const { id, data } = props ?? {};
 
-    return submitKycVerification(id, requestOptions);
+    return submitKycVerification(id, data, requestOptions);
   };
 
   return { mutationFn, ...mutationOptions };
@@ -7769,7 +7773,8 @@ export const getSubmitKycVerificationMutationOptions = <
 export type SubmitKycVerificationMutationResult = NonNullable<
   Awaited<ReturnType<typeof submitKycVerification>>
 >;
-
+export type SubmitKycVerificationMutationBody =
+  BodyType<SubmitKycVerificationBody>;
 export type SubmitKycVerificationMutationError = ErrorType<
   UnauthorizedResponse | NotFoundResponse
 >;
@@ -7781,14 +7786,14 @@ export const useSubmitKycVerification = <
   mutation?: UseMutationOptions<
     Awaited<ReturnType<typeof submitKycVerification>>,
     TError,
-    { id: string },
+    { id: string; data: BodyType<SubmitKycVerificationBody> },
     TContext
   >;
   request?: SecondParameter<typeof customFetch>;
 }): UseMutationResult<
   Awaited<ReturnType<typeof submitKycVerification>>,
   TError,
-  { id: string },
+  { id: string; data: BodyType<SubmitKycVerificationBody> },
   TContext
 > => {
   return useMutation(getSubmitKycVerificationMutationOptions(options));

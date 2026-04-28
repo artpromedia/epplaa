@@ -1269,6 +1269,16 @@ paths:
       operationId: submitKycVerification
       tags: [kyc]
       parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                documentIds:
+                  type: array
+                  items: { type: string }
       responses:
         "200":
           description: OK
