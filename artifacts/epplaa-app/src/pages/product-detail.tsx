@@ -374,8 +374,14 @@ function LandedCostPreview({
   const [serverBreakdown, setServerBreakdown] = useState<typeof clientEstimate | null>(null);
   const [serverEtaLabel, setServerEtaLabel] = useState<string | null>(null);
   useEffect(() => {
+    // Reset both pieces of server-derived state on every dependency change so
+    // the UI never displays a stale ETA/breakdown from a previous product,
+    // destination, or shipping mode while the new quote is in flight (or when
+    // the product no longer has a wholesale listing). The fallback path then
+    // renders the client estimate consistently until the new quote resolves.
+    setServerBreakdown(null);
+    setServerEtaLabel(null);
     if (!wholesaleListingId) {
-      setServerBreakdown(null);
       return;
     }
     let cancelled = false;
@@ -392,7 +398,11 @@ function LandedCostPreview({
             shipMode: mode,
           }),
         });
-        if (!res.ok || cancelled) return;
+        if (!res.ok || cancelled) {
+          // Non-2xx response leaves both server states cleared above so the
+          // UI shows the client-side fallback estimate, not stale data.
+          return;
+        }
         const data = (await res.json()) as {
           breakdown: {
             fobInDestMinor: number;
@@ -423,7 +433,9 @@ function LandedCostPreview({
         });
         setServerEtaLabel(`${data.transitDays} days transit · ${data.productionLeadDays}d production`);
       } catch {
-        // Network failure — silently fall back to the client estimate.
+        // Network failure — server state was already cleared at the top of
+        // the effect, so the UI silently falls back to the client estimate
+        // without leaving a stale ETA label visible.
       }
     })();
     return () => {
