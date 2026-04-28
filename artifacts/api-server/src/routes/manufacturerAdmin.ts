@@ -249,7 +249,13 @@ router.post("/admin/bonded-inventory/:wholesaleOrderId/arrived", requireRole(ADM
   if (!adminId) return;
   const orderId = String(req.params.wholesaleOrderId ?? "");
   const warehouseCode = String((req.body ?? {}).warehouseCode ?? "LOS-BWH-01");
-  const qty = Math.max(1, Number((req.body ?? {}).qty ?? 0));
+  // Distinguish "qty omitted entirely" from "qty explicitly provided" — the
+  // common back-office case is that the whole order arrives at once, so an
+  // omitted qty must fall through to order.qty rather than silently defaulting
+  // to 1 (which would fragment bonded inventory and delay delivered+payout).
+  const rawQty = (req.body ?? {}).qty;
+  const qtyProvided = rawQty !== undefined && rawQty !== null && rawQty !== "";
+  const parsedQty = qtyProvided ? Math.max(1, Math.floor(Number(rawQty) || 0)) : 0;
   const [order] = await db
     .select()
     .from(schema.wholesaleOrdersTable)
@@ -259,7 +265,7 @@ router.post("/admin/bonded-inventory/:wholesaleOrderId/arrived", requireRole(ADM
     res.status(404).json({ error: "not_found" });
     return;
   }
-  const finalQty = qty || order.qty;
+  const finalQty = qtyProvided ? parsedQty : order.qty;
   const [row] = await db
     .insert(schema.bondedWarehouseInventoryTable)
     .values({
@@ -308,7 +314,12 @@ router.post("/admin/bonded-inventory/:wholesaleOrderId/released", requireRole(AD
   const adminId = requireUserId(req, res);
   if (!adminId) return;
   const orderId = String(req.params.wholesaleOrderId ?? "");
-  const qty = Math.max(1, Number((req.body ?? {}).qty ?? 0));
+  // As with /arrived: when qty is omitted entirely, release the full on-hand
+  // balance (the canonical "ship everything we have" case). Only clamp when
+  // qty was explicitly supplied so we never silently default to 1.
+  const rawQty = (req.body ?? {}).qty;
+  const qtyProvided = rawQty !== undefined && rawQty !== null && rawQty !== "";
+  const parsedQty = qtyProvided ? Math.max(1, Math.floor(Number(rawQty) || 0)) : 0;
   const [bonded] = await db
     .select()
     .from(schema.bondedWarehouseInventoryTable)
@@ -318,7 +329,7 @@ router.post("/admin/bonded-inventory/:wholesaleOrderId/released", requireRole(AD
     res.status(404).json({ error: "not_warehoused" });
     return;
   }
-  const releaseQty = qty || bonded.qtyOnHand;
+  const releaseQty = qtyProvided ? parsedQty : bonded.qtyOnHand;
   if (releaseQty > bonded.qtyOnHand) {
     res.status(400).json({ error: "qty_exceeds_on_hand", qtyOnHand: bonded.qtyOnHand });
     return;

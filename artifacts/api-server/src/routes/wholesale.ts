@@ -68,8 +68,17 @@ function rowToWholesaleOrder(row: typeof schema.wholesaleOrdersTable.$inferSelec
 }
 
 // ---------------------------------------------------------------------------
-// Public catalog browse (any signed-in user — sellers placing wholesale orders)
+// Public wholesale catalog (intentionally unauthenticated)
 // ---------------------------------------------------------------------------
+// Product decision: catalog browse + landed-cost quote are deliberately public
+// so prospective sellers can evaluate FOB pricing, lead times, and Naira
+// landed cost *before* signing up — this is the conversion funnel into the
+// Epplaa seller program. Mutating endpoints below (POST /wholesale/orders,
+// POST /wholesale/orders/:id/cancel) are still gated by `requireUserId`, so
+// only signed-in users can actually place or modify orders.
+// If business rules later require gating the catalog (e.g. wholesale pricing
+// becomes seller-tier-restricted), add `requireUserId` here and on
+// /wholesale/listings/:id and /wholesale/quote in the same change.
 
 router.get("/wholesale/listings", async (req, res) => {
   const { search, originCountry, category, hsCode } = req.query as {
