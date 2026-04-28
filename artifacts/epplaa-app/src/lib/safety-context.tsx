@@ -46,6 +46,8 @@ export interface SafetyReport {
   createdAtIso: string;
   updatedAtIso: string;
   blockedAtSubmit: boolean;
+  caseId: string | null;
+  caseStatus: string | null;
 }
 
 export interface BlockedSeller {
@@ -107,6 +109,8 @@ export function SafetyProvider({ children }: { children: ReactNode }) {
         createdAtIso: r.createdAtIso,
         updatedAtIso: r.updatedAtIso,
         blockedAtSubmit: r.blockedAtSubmit,
+        caseId: (r as { caseId?: string | null }).caseId ?? null,
+        caseStatus: (r as { caseStatus?: string | null }).caseStatus ?? null,
       })),
     [reportsQuery.data],
   );
@@ -163,6 +167,8 @@ export function SafetyProvider({ children }: { children: ReactNode }) {
         createdAtIso: now,
         updatedAtIso: now,
         blockedAtSubmit: blockOnSubmit,
+        caseId: null,
+        caseStatus: null,
       };
     },
     [submitMut],

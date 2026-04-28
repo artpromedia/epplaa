@@ -21,6 +21,11 @@ export const returnsTable = pgTable("returns", {
   pickupCarrierRef: text("pickup_carrier_ref").notNull().default(""),
   /** Carrier code that issued the reverse label. */
   pickupCarrier: text("pickup_carrier").notNull().default(""),
+  /**
+   * Linked moderation_cases.id when the return entered `disputed` and was
+   * enqueued into the operator dispute queue. NULL otherwise.
+   */
+  caseId: text("case_id"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 

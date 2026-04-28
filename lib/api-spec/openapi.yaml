@@ -30,6 +30,7 @@ tags:
   - { name: reviews }
   - { name: discovery }
   - { name: seller }
+  - { name: admin }
 paths:
   /healthz:
     get:
@@ -1704,6 +1705,262 @@ paths:
         "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/NdprRequest" } } } }
         "401": { $ref: "#/components/responses/Unauthorized" }
 
+  # --- Admin operator console -------------------------------------------------
+  /admin/dashboard:
+    get:
+      operationId: adminDashboard
+      tags: [admin]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/AdminDashboard" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /admin/me/roles:
+    get:
+      operationId: adminMyRoles
+      tags: [admin]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/UserRoles" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /admin/cases:
+    get:
+      operationId: adminListCases
+      tags: [admin]
+      parameters:
+        - { in: query, name: state, schema: { type: string } }
+        - { in: query, name: kind, schema: { type: string } }
+        - { in: query, name: assignee, schema: { type: string } }
+        - { in: query, name: limit, schema: { type: integer } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/CasePage" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /admin/cases/{id}:
+    get:
+      operationId: adminGetCase
+      tags: [admin]
+      parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/ModerationCaseDetail" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /admin/cases/{id}/transition:
+    post:
+      operationId: adminTransitionCase
+      tags: [admin]
+      parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [state], properties: { state: { type: string } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/ModerationCase" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /admin/cases/{id}/assign:
+    post:
+      operationId: adminAssignCase
+      tags: [admin]
+      parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties: { assignee: { type: ["string", "null"] } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/ModerationCase" } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /admin/cases/{id}/decide:
+    post:
+      operationId: adminDecideCase
+      tags: [admin]
+      parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [decision]
+              properties:
+                decision: { type: string }
+                reason: { type: string }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/ModerationCase" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /admin/disputes:
+    get:
+      operationId: adminListDisputes
+      tags: [admin]
+      parameters:
+        - { in: query, name: state, schema: { type: string } }
+        - { in: query, name: limit, schema: { type: integer } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/DisputePage" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /admin/disputes/{id}/decide:
+    post:
+      operationId: adminDecideDispute
+      tags: [admin]
+      parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [decision]
+              properties:
+                decision: { type: string, enum: [refund, deny, partial] }
+                reason: { type: string }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/ModerationCase" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /admin/payouts:
+    get:
+      operationId: adminListPayouts
+      tags: [admin]
+      parameters:
+        - { in: query, name: status, schema: { type: string } }
+        - { in: query, name: limit, schema: { type: integer } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/PayoutOpsPage" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /admin/payouts/{id}/hold:
+    post:
+      operationId: adminHoldPayout
+      tags: [admin]
+      parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [reason], properties: { reason: { type: string } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/PayoutOpsRow" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /admin/payouts/{id}/release:
+    post:
+      operationId: adminReleasePayout
+      tags: [admin]
+      parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { type: object, properties: { reason: { type: string } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/PayoutOpsRow" } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /admin/payouts/{id}/clawback:
+    post:
+      operationId: adminClawbackPayout
+      tags: [admin]
+      parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [reason], properties: { reason: { type: string } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/PayoutOpsRow" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /admin/payouts/{id}/actions:
+    get:
+      operationId: adminListPayoutActions
+      tags: [admin]
+      parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/PayoutAction" } }
+  /admin/takedowns:
+    get:
+      operationId: adminListTakedowns
+      tags: [admin]
+      parameters:
+        - { in: query, name: limit, schema: { type: integer } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/Takedown" } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    post:
+      operationId: adminCreateTakedown
+      tags: [admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [targetKind, targetId, reasonCode]
+              properties:
+                targetKind: { type: string }
+                targetId: { type: string }
+                reasonCode: { type: string }
+                notes: { type: string }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/Takedown" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+  /admin/users/{userId}/roles:
+    get:
+      operationId: adminGetUserRoles
+      tags: [admin]
+      parameters: [{ in: path, name: userId, required: true, schema: { type: string } }]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/UserRoles" } } } }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    post:
+      operationId: adminGrantUserRole
+      tags: [admin]
+      parameters: [{ in: path, name: userId, required: true, schema: { type: string } }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [role]
+              properties: { role: { type: string } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/UserRoles" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+  /admin/users/{userId}/roles/{role}:
+    delete:
+      operationId: adminRevokeUserRole
+      tags: [admin]
+      parameters:
+        - { in: path, name: userId, required: true, schema: { type: string } }
+        - { in: path, name: role, required: true, schema: { type: string } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/UserRoles" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+  /admin/scan/text:
+    post:
+      operationId: adminScanText
+      tags: [admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [text], properties: { text: { type: string } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/ModerationScanResult" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+
 components:
   responses:
     Unauthorized:
@@ -2357,6 +2614,9 @@ components:
         notes: { type: string }
         status: { type: string }
         blockedAtSubmit: { type: boolean }
+        # Buyer transparency: linked T&S case id + state (no operator PII).
+        caseId: { type: ["string", "null"] }
+        caseStatus: { type: ["string", "null"] }
         createdAtIso: { type: string }
         updatedAtIso: { type: string }
     SubmitSafetyReportBody:
@@ -2776,3 +3036,160 @@ components:
             - { type: "null" }
             - { type: object, additionalProperties: true }
         failureReason: { type: ["string", "null"] }
+
+    AdminDashboard:
+      type: object
+      required: [openCases, dueSoon, pendingDisputes, csamCases, takedowns7d, heldPayouts, moderationProvider, degraded]
+      properties:
+        openCases: { type: integer }
+        dueSoon: { type: integer }
+        pendingDisputes: { type: integer }
+        csamCases: { type: integer }
+        takedowns7d: { type: integer }
+        heldPayouts: { type: integer }
+        moderationProvider: { type: string }
+        degraded: { type: boolean }
+        degradedReason: { type: ["string", "null"] }
+    UserRoles:
+      type: object
+      required: [userId, roles]
+      properties:
+        userId: { type: string }
+        roles:
+          type: array
+          items: { type: string }
+    ModerationCase:
+      type: object
+      required: [id, kind, targetKind, targetId, severity, state, decisionReason, evidence, createdAtIso, updatedAtIso]
+      properties:
+        id: { type: string }
+        kind: { type: string }
+        targetKind: { type: string }
+        targetId: { type: string }
+        severity: { type: string }
+        state: { type: string }
+        assignedTo: { type: ["string", "null"] }
+        slaDueAtIso: { type: ["string", "null"] }
+        decision: { type: ["string", "null"] }
+        decisionReason: { type: string }
+        decidedAtIso: { type: ["string", "null"] }
+        decidedBy: { type: ["string", "null"] }
+        evidence: { type: object, additionalProperties: true }
+        sourceUserId: { type: ["string", "null"] }
+        sourceReportId: { type: ["string", "null"] }
+        takedownId: { type: ["string", "null"] }
+        createdAtIso: { type: string }
+        updatedAtIso: { type: string }
+    ModerationScan:
+      type: object
+      required: [id, provider, decision, scores, csamMatch, scannedAtIso]
+      properties:
+        id: { type: string }
+        provider: { type: string }
+        decision: { type: string }
+        scores: { type: object, additionalProperties: true }
+        csamMatch: { type: boolean }
+        scannedAtIso: { type: string }
+    ModerationCaseDetail:
+      allOf:
+        - { $ref: "#/components/schemas/ModerationCase" }
+        - type: object
+          required: [scans]
+          properties:
+            scans:
+              type: array
+              items: { $ref: "#/components/schemas/ModerationScan" }
+    CasePage:
+      type: object
+      required: [items, totalCount]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/ModerationCase" }
+        totalCount: { type: integer }
+    DisputeReturnRow:
+      type: object
+      required: [id, orderId, productTitle, status, refundAmountMinor, currencyCode, reason, reasonLabel]
+      properties:
+        id: { type: string }
+        orderId: { type: string }
+        productTitle: { type: string }
+        status: { type: string }
+        refundAmountMinor: { type: integer }
+        currencyCode: { type: string }
+        reason: { type: string }
+        reasonLabel: { type: string }
+    DisputeCase:
+      allOf:
+        - { $ref: "#/components/schemas/ModerationCase" }
+        - type: object
+          properties:
+            returnRow:
+              oneOf:
+                - { type: "null" }
+                - { $ref: "#/components/schemas/DisputeReturnRow" }
+    DisputePage:
+      type: object
+      required: [items, totalCount]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/DisputeCase" }
+        totalCount: { type: integer }
+    PayoutOpsRow:
+      type: object
+      required: [id, userId, amountMinor, currencyCode, status, kind, gateway, requestedAtIso]
+      properties:
+        id: { type: string }
+        userId: { type: string }
+        sellerId: { type: ["string", "null"] }
+        orderId: { type: ["string", "null"] }
+        amountMinor: { type: integer }
+        currencyCode: { type: string }
+        status: { type: string }
+        kind: { type: string }
+        gateway: { type: string }
+        gatewayReference: { type: ["string", "null"] }
+        holdUntilIso: { type: ["string", "null"] }
+        errorMessage: { type: ["string", "null"] }
+        requestedAtIso: { type: string }
+        paidAtIso: { type: ["string", "null"] }
+    PayoutOpsPage:
+      type: object
+      required: [items, totalCount]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/PayoutOpsRow" }
+        totalCount: { type: integer }
+    PayoutAction:
+      type: object
+      required: [id, payoutId, action, actorUserId, reason, createdAtIso]
+      properties:
+        id: { type: string }
+        payoutId: { type: string }
+        action: { type: string }
+        actorUserId: { type: string }
+        reason: { type: string }
+        createdAtIso: { type: string }
+    Takedown:
+      type: object
+      required: [id, targetKind, targetId, reasonCode]
+      properties:
+        id: { type: string }
+        targetKind: { type: string }
+        targetId: { type: string }
+        reasonCode: { type: string }
+        actorUserId: { type: string }
+        notifiedAtIso: { type: ["string", "null"] }
+        notes: { type: string }
+        createdAtIso: { type: string }
+    ModerationScanResult:
+      type: object
+      required: [blocked, decision, scanId]
+      properties:
+        blocked: { type: boolean }
+        caseId: { type: ["string", "null"] }
+        decision: { type: string }
+        scanId: { type: string }
+        csamMatch: { type: boolean }

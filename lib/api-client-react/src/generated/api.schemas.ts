@@ -569,6 +569,10 @@ export interface SafetyReport {
   notes: string;
   status: string;
   blockedAtSubmit: boolean;
+  /** @nullable */
+  caseId?: string | null;
+  /** @nullable */
+  caseStatus?: string | null;
   createdAtIso: string;
   updatedAtIso: string;
 }
@@ -1012,6 +1016,153 @@ export interface NdprRequest {
   failureReason?: string | null;
 }
 
+export interface AdminDashboard {
+  openCases: number;
+  dueSoon: number;
+  pendingDisputes: number;
+  csamCases: number;
+  takedowns7d: number;
+  heldPayouts: number;
+  moderationProvider: string;
+  degraded: boolean;
+  /** @nullable */
+  degradedReason?: string | null;
+}
+
+export interface UserRoles {
+  userId: string;
+  roles: string[];
+}
+
+export type ModerationCaseEvidence = { [key: string]: unknown };
+
+export interface ModerationCase {
+  id: string;
+  kind: string;
+  targetKind: string;
+  targetId: string;
+  severity: string;
+  state: string;
+  /** @nullable */
+  assignedTo?: string | null;
+  /** @nullable */
+  slaDueAtIso?: string | null;
+  /** @nullable */
+  decision?: string | null;
+  decisionReason: string;
+  /** @nullable */
+  decidedAtIso?: string | null;
+  /** @nullable */
+  decidedBy?: string | null;
+  evidence: ModerationCaseEvidence;
+  /** @nullable */
+  sourceUserId?: string | null;
+  /** @nullable */
+  sourceReportId?: string | null;
+  /** @nullable */
+  takedownId?: string | null;
+  createdAtIso: string;
+  updatedAtIso: string;
+}
+
+export type ModerationScanScores = { [key: string]: unknown };
+
+export interface ModerationScan {
+  id: string;
+  provider: string;
+  decision: string;
+  scores: ModerationScanScores;
+  csamMatch: boolean;
+  scannedAtIso: string;
+}
+
+export type ModerationCaseDetail = ModerationCase & {
+  scans: ModerationScan[];
+};
+
+export interface CasePage {
+  items: ModerationCase[];
+  totalCount: number;
+}
+
+export interface DisputeReturnRow {
+  id: string;
+  orderId: string;
+  productTitle: string;
+  status: string;
+  refundAmountMinor: number;
+  currencyCode: string;
+  reason: string;
+  reasonLabel: string;
+}
+
+export type DisputeCase = ModerationCase & {
+  returnRow?: null | DisputeReturnRow;
+};
+
+export interface DisputePage {
+  items: DisputeCase[];
+  totalCount: number;
+}
+
+export interface PayoutOpsRow {
+  id: string;
+  userId: string;
+  /** @nullable */
+  sellerId?: string | null;
+  /** @nullable */
+  orderId?: string | null;
+  amountMinor: number;
+  currencyCode: string;
+  status: string;
+  kind: string;
+  gateway: string;
+  /** @nullable */
+  gatewayReference?: string | null;
+  /** @nullable */
+  holdUntilIso?: string | null;
+  /** @nullable */
+  errorMessage?: string | null;
+  requestedAtIso: string;
+  /** @nullable */
+  paidAtIso?: string | null;
+}
+
+export interface PayoutOpsPage {
+  items: PayoutOpsRow[];
+  totalCount: number;
+}
+
+export interface PayoutAction {
+  id: string;
+  payoutId: string;
+  action: string;
+  actorUserId: string;
+  reason: string;
+  createdAtIso: string;
+}
+
+export interface Takedown {
+  id: string;
+  targetKind: string;
+  targetId: string;
+  reasonCode: string;
+  actorUserId?: string;
+  /** @nullable */
+  notifiedAtIso?: string | null;
+  notes?: string;
+  createdAtIso?: string;
+}
+
+export interface ModerationScanResult {
+  blocked: boolean;
+  /** @nullable */
+  caseId?: string | null;
+  decision: string;
+  scanId: string;
+  csamMatch?: boolean;
+}
+
 /**
  * Sign-in required
  */
@@ -1404,4 +1555,80 @@ export type RequestNdprRectifyBody = {
 
 export type RequestNdprRestrictBody = {
   lift?: boolean;
+};
+
+export type AdminListCasesParams = {
+  state?: string;
+  kind?: string;
+  assignee?: string;
+  limit?: number;
+};
+
+export type AdminTransitionCaseBody = {
+  state: string;
+};
+
+export type AdminAssignCaseBody = {
+  /** @nullable */
+  assignee?: string | null;
+};
+
+export type AdminDecideCaseBody = {
+  decision: string;
+  reason?: string;
+};
+
+export type AdminListDisputesParams = {
+  state?: string;
+  limit?: number;
+};
+
+export type AdminDecideDisputeBodyDecision =
+  (typeof AdminDecideDisputeBodyDecision)[keyof typeof AdminDecideDisputeBodyDecision];
+
+export const AdminDecideDisputeBodyDecision = {
+  refund: "refund",
+  deny: "deny",
+  partial: "partial",
+} as const;
+
+export type AdminDecideDisputeBody = {
+  decision: AdminDecideDisputeBodyDecision;
+  reason?: string;
+};
+
+export type AdminListPayoutsParams = {
+  status?: string;
+  limit?: number;
+};
+
+export type AdminHoldPayoutBody = {
+  reason: string;
+};
+
+export type AdminReleasePayoutBody = {
+  reason?: string;
+};
+
+export type AdminClawbackPayoutBody = {
+  reason: string;
+};
+
+export type AdminListTakedownsParams = {
+  limit?: number;
+};
+
+export type AdminCreateTakedownBody = {
+  targetKind: string;
+  targetId: string;
+  reasonCode: string;
+  notes?: string;
+};
+
+export type AdminGrantUserRoleBody = {
+  role: string;
+};
+
+export type AdminScanTextBody = {
+  text: string;
 };

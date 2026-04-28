@@ -87,3 +87,23 @@ export function newBoxReservationId(): string {
 export function newManifestRunId(): string {
   return `mfr_${Date.now().toString(36)}_${rand(3).toLowerCase()}`;
 }
+
+export function newModerationCaseId(): string {
+  return `mc_${Date.now().toString(36)}_${rand(3).toLowerCase()}`;
+}
+
+export function newModerationScanId(): string {
+  return `ms_${Date.now().toString(36)}_${rand(3).toLowerCase()}`;
+}
+
+export function newPayoutActionId(): string {
+  return `pa_${Date.now().toString(36)}_${rand(3).toLowerCase()}`;
+}
+
+export function newTakedownId(): string {
+  return `td_${Date.now().toString(36)}_${rand(3).toLowerCase()}`;
+}
+
+export function newRoleId(): string {
+  return `role_${rand(4).toLowerCase()}`;
+}

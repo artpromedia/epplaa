@@ -31,3 +31,4 @@ export * from "./kyc";
 export * from "./audit";
 export * from "./sanctions";
 export * from "./ndpr";
+export * from "./admin";

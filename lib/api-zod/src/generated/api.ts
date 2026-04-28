@@ -1156,6 +1156,8 @@ export const ListSafetyReportsResponseItem = zod.object({
   notes: zod.string(),
   status: zod.string(),
   blockedAtSubmit: zod.boolean(),
+  caseId: zod.string().nullish(),
+  caseStatus: zod.string().nullish(),
   createdAtIso: zod.string(),
   updatedAtIso: zod.string(),
 });
@@ -1982,4 +1984,450 @@ export const RequestNdprRestrictResponse = zod.object({
     .union([zod.null(), zod.record(zod.string(), zod.unknown())])
     .optional(),
   failureReason: zod.string().nullish(),
+});
+
+export const AdminDashboardResponse = zod.object({
+  openCases: zod.number(),
+  dueSoon: zod.number(),
+  pendingDisputes: zod.number(),
+  csamCases: zod.number(),
+  takedowns7d: zod.number(),
+  heldPayouts: zod.number(),
+  moderationProvider: zod.string(),
+  degraded: zod.boolean(),
+  degradedReason: zod.string().nullish(),
+});
+
+export const AdminMyRolesResponse = zod.object({
+  userId: zod.string(),
+  roles: zod.array(zod.string()),
+});
+
+export const AdminListCasesQueryParams = zod.object({
+  state: zod.coerce.string().optional(),
+  kind: zod.coerce.string().optional(),
+  assignee: zod.coerce.string().optional(),
+  limit: zod.coerce.number().optional(),
+});
+
+export const AdminListCasesResponse = zod.object({
+  items: zod.array(
+    zod.object({
+      id: zod.string(),
+      kind: zod.string(),
+      targetKind: zod.string(),
+      targetId: zod.string(),
+      severity: zod.string(),
+      state: zod.string(),
+      assignedTo: zod.string().nullish(),
+      slaDueAtIso: zod.string().nullish(),
+      decision: zod.string().nullish(),
+      decisionReason: zod.string(),
+      decidedAtIso: zod.string().nullish(),
+      decidedBy: zod.string().nullish(),
+      evidence: zod.record(zod.string(), zod.unknown()),
+      sourceUserId: zod.string().nullish(),
+      sourceReportId: zod.string().nullish(),
+      takedownId: zod.string().nullish(),
+      createdAtIso: zod.string(),
+      updatedAtIso: zod.string(),
+    }),
+  ),
+  totalCount: zod.number(),
+});
+
+export const AdminGetCaseParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const AdminGetCaseResponse = zod
+  .object({
+    id: zod.string(),
+    kind: zod.string(),
+    targetKind: zod.string(),
+    targetId: zod.string(),
+    severity: zod.string(),
+    state: zod.string(),
+    assignedTo: zod.string().nullish(),
+    slaDueAtIso: zod.string().nullish(),
+    decision: zod.string().nullish(),
+    decisionReason: zod.string(),
+    decidedAtIso: zod.string().nullish(),
+    decidedBy: zod.string().nullish(),
+    evidence: zod.record(zod.string(), zod.unknown()),
+    sourceUserId: zod.string().nullish(),
+    sourceReportId: zod.string().nullish(),
+    takedownId: zod.string().nullish(),
+    createdAtIso: zod.string(),
+    updatedAtIso: zod.string(),
+  })
+  .and(
+    zod.object({
+      scans: zod.array(
+        zod.object({
+          id: zod.string(),
+          provider: zod.string(),
+          decision: zod.string(),
+          scores: zod.record(zod.string(), zod.unknown()),
+          csamMatch: zod.boolean(),
+          scannedAtIso: zod.string(),
+        }),
+      ),
+    }),
+  );
+
+export const AdminTransitionCaseParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const AdminTransitionCaseBody = zod.object({
+  state: zod.string(),
+});
+
+export const AdminTransitionCaseResponse = zod.object({
+  id: zod.string(),
+  kind: zod.string(),
+  targetKind: zod.string(),
+  targetId: zod.string(),
+  severity: zod.string(),
+  state: zod.string(),
+  assignedTo: zod.string().nullish(),
+  slaDueAtIso: zod.string().nullish(),
+  decision: zod.string().nullish(),
+  decisionReason: zod.string(),
+  decidedAtIso: zod.string().nullish(),
+  decidedBy: zod.string().nullish(),
+  evidence: zod.record(zod.string(), zod.unknown()),
+  sourceUserId: zod.string().nullish(),
+  sourceReportId: zod.string().nullish(),
+  takedownId: zod.string().nullish(),
+  createdAtIso: zod.string(),
+  updatedAtIso: zod.string(),
+});
+
+export const AdminAssignCaseParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const AdminAssignCaseBody = zod.object({
+  assignee: zod.string().nullish(),
+});
+
+export const AdminAssignCaseResponse = zod.object({
+  id: zod.string(),
+  kind: zod.string(),
+  targetKind: zod.string(),
+  targetId: zod.string(),
+  severity: zod.string(),
+  state: zod.string(),
+  assignedTo: zod.string().nullish(),
+  slaDueAtIso: zod.string().nullish(),
+  decision: zod.string().nullish(),
+  decisionReason: zod.string(),
+  decidedAtIso: zod.string().nullish(),
+  decidedBy: zod.string().nullish(),
+  evidence: zod.record(zod.string(), zod.unknown()),
+  sourceUserId: zod.string().nullish(),
+  sourceReportId: zod.string().nullish(),
+  takedownId: zod.string().nullish(),
+  createdAtIso: zod.string(),
+  updatedAtIso: zod.string(),
+});
+
+export const AdminDecideCaseParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const AdminDecideCaseBody = zod.object({
+  decision: zod.string(),
+  reason: zod.string().optional(),
+});
+
+export const AdminDecideCaseResponse = zod.object({
+  id: zod.string(),
+  kind: zod.string(),
+  targetKind: zod.string(),
+  targetId: zod.string(),
+  severity: zod.string(),
+  state: zod.string(),
+  assignedTo: zod.string().nullish(),
+  slaDueAtIso: zod.string().nullish(),
+  decision: zod.string().nullish(),
+  decisionReason: zod.string(),
+  decidedAtIso: zod.string().nullish(),
+  decidedBy: zod.string().nullish(),
+  evidence: zod.record(zod.string(), zod.unknown()),
+  sourceUserId: zod.string().nullish(),
+  sourceReportId: zod.string().nullish(),
+  takedownId: zod.string().nullish(),
+  createdAtIso: zod.string(),
+  updatedAtIso: zod.string(),
+});
+
+export const AdminListDisputesQueryParams = zod.object({
+  state: zod.coerce.string().optional(),
+  limit: zod.coerce.number().optional(),
+});
+
+export const AdminListDisputesResponse = zod.object({
+  items: zod.array(
+    zod
+      .object({
+        id: zod.string(),
+        kind: zod.string(),
+        targetKind: zod.string(),
+        targetId: zod.string(),
+        severity: zod.string(),
+        state: zod.string(),
+        assignedTo: zod.string().nullish(),
+        slaDueAtIso: zod.string().nullish(),
+        decision: zod.string().nullish(),
+        decisionReason: zod.string(),
+        decidedAtIso: zod.string().nullish(),
+        decidedBy: zod.string().nullish(),
+        evidence: zod.record(zod.string(), zod.unknown()),
+        sourceUserId: zod.string().nullish(),
+        sourceReportId: zod.string().nullish(),
+        takedownId: zod.string().nullish(),
+        createdAtIso: zod.string(),
+        updatedAtIso: zod.string(),
+      })
+      .and(
+        zod.object({
+          returnRow: zod
+            .union([
+              zod.null(),
+              zod.object({
+                id: zod.string(),
+                orderId: zod.string(),
+                productTitle: zod.string(),
+                status: zod.string(),
+                refundAmountMinor: zod.number(),
+                currencyCode: zod.string(),
+                reason: zod.string(),
+                reasonLabel: zod.string(),
+              }),
+            ])
+            .optional(),
+        }),
+      ),
+  ),
+  totalCount: zod.number(),
+});
+
+export const AdminDecideDisputeParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const AdminDecideDisputeBody = zod.object({
+  decision: zod.enum(["refund", "deny", "partial"]),
+  reason: zod.string().optional(),
+});
+
+export const AdminDecideDisputeResponse = zod.object({
+  id: zod.string(),
+  kind: zod.string(),
+  targetKind: zod.string(),
+  targetId: zod.string(),
+  severity: zod.string(),
+  state: zod.string(),
+  assignedTo: zod.string().nullish(),
+  slaDueAtIso: zod.string().nullish(),
+  decision: zod.string().nullish(),
+  decisionReason: zod.string(),
+  decidedAtIso: zod.string().nullish(),
+  decidedBy: zod.string().nullish(),
+  evidence: zod.record(zod.string(), zod.unknown()),
+  sourceUserId: zod.string().nullish(),
+  sourceReportId: zod.string().nullish(),
+  takedownId: zod.string().nullish(),
+  createdAtIso: zod.string(),
+  updatedAtIso: zod.string(),
+});
+
+export const AdminListPayoutsQueryParams = zod.object({
+  status: zod.coerce.string().optional(),
+  limit: zod.coerce.number().optional(),
+});
+
+export const AdminListPayoutsResponse = zod.object({
+  items: zod.array(
+    zod.object({
+      id: zod.string(),
+      userId: zod.string(),
+      sellerId: zod.string().nullish(),
+      orderId: zod.string().nullish(),
+      amountMinor: zod.number(),
+      currencyCode: zod.string(),
+      status: zod.string(),
+      kind: zod.string(),
+      gateway: zod.string(),
+      gatewayReference: zod.string().nullish(),
+      holdUntilIso: zod.string().nullish(),
+      errorMessage: zod.string().nullish(),
+      requestedAtIso: zod.string(),
+      paidAtIso: zod.string().nullish(),
+    }),
+  ),
+  totalCount: zod.number(),
+});
+
+export const AdminHoldPayoutParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const AdminHoldPayoutBody = zod.object({
+  reason: zod.string(),
+});
+
+export const AdminHoldPayoutResponse = zod.object({
+  id: zod.string(),
+  userId: zod.string(),
+  sellerId: zod.string().nullish(),
+  orderId: zod.string().nullish(),
+  amountMinor: zod.number(),
+  currencyCode: zod.string(),
+  status: zod.string(),
+  kind: zod.string(),
+  gateway: zod.string(),
+  gatewayReference: zod.string().nullish(),
+  holdUntilIso: zod.string().nullish(),
+  errorMessage: zod.string().nullish(),
+  requestedAtIso: zod.string(),
+  paidAtIso: zod.string().nullish(),
+});
+
+export const AdminReleasePayoutParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const AdminReleasePayoutBody = zod.object({
+  reason: zod.string().optional(),
+});
+
+export const AdminReleasePayoutResponse = zod.object({
+  id: zod.string(),
+  userId: zod.string(),
+  sellerId: zod.string().nullish(),
+  orderId: zod.string().nullish(),
+  amountMinor: zod.number(),
+  currencyCode: zod.string(),
+  status: zod.string(),
+  kind: zod.string(),
+  gateway: zod.string(),
+  gatewayReference: zod.string().nullish(),
+  holdUntilIso: zod.string().nullish(),
+  errorMessage: zod.string().nullish(),
+  requestedAtIso: zod.string(),
+  paidAtIso: zod.string().nullish(),
+});
+
+export const AdminClawbackPayoutParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const AdminClawbackPayoutBody = zod.object({
+  reason: zod.string(),
+});
+
+export const AdminClawbackPayoutResponse = zod.object({
+  id: zod.string(),
+  userId: zod.string(),
+  sellerId: zod.string().nullish(),
+  orderId: zod.string().nullish(),
+  amountMinor: zod.number(),
+  currencyCode: zod.string(),
+  status: zod.string(),
+  kind: zod.string(),
+  gateway: zod.string(),
+  gatewayReference: zod.string().nullish(),
+  holdUntilIso: zod.string().nullish(),
+  errorMessage: zod.string().nullish(),
+  requestedAtIso: zod.string(),
+  paidAtIso: zod.string().nullish(),
+});
+
+export const AdminListPayoutActionsParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const AdminListPayoutActionsResponseItem = zod.object({
+  id: zod.string(),
+  payoutId: zod.string(),
+  action: zod.string(),
+  actorUserId: zod.string(),
+  reason: zod.string(),
+  createdAtIso: zod.string(),
+});
+export const AdminListPayoutActionsResponse = zod.array(
+  AdminListPayoutActionsResponseItem,
+);
+
+export const AdminListTakedownsQueryParams = zod.object({
+  limit: zod.coerce.number().optional(),
+});
+
+export const AdminListTakedownsResponseItem = zod.object({
+  id: zod.string(),
+  targetKind: zod.string(),
+  targetId: zod.string(),
+  reasonCode: zod.string(),
+  actorUserId: zod.string().optional(),
+  notifiedAtIso: zod.string().nullish(),
+  notes: zod.string().optional(),
+  createdAtIso: zod.string().optional(),
+});
+export const AdminListTakedownsResponse = zod.array(
+  AdminListTakedownsResponseItem,
+);
+
+export const AdminCreateTakedownBody = zod.object({
+  targetKind: zod.string(),
+  targetId: zod.string(),
+  reasonCode: zod.string(),
+  notes: zod.string().optional(),
+});
+
+export const AdminGetUserRolesParams = zod.object({
+  userId: zod.coerce.string(),
+});
+
+export const AdminGetUserRolesResponse = zod.object({
+  userId: zod.string(),
+  roles: zod.array(zod.string()),
+});
+
+export const AdminGrantUserRoleParams = zod.object({
+  userId: zod.coerce.string(),
+});
+
+export const AdminGrantUserRoleBody = zod.object({
+  role: zod.string(),
+});
+
+export const AdminGrantUserRoleResponse = zod.object({
+  userId: zod.string(),
+  roles: zod.array(zod.string()),
+});
+
+export const AdminRevokeUserRoleParams = zod.object({
+  userId: zod.coerce.string(),
+  role: zod.coerce.string(),
+});
+
+export const AdminRevokeUserRoleResponse = zod.object({
+  userId: zod.string(),
+  roles: zod.array(zod.string()),
+});
+
+export const AdminScanTextBody = zod.object({
+  text: zod.string(),
+});
+
+export const AdminScanTextResponse = zod.object({
+  blocked: zod.boolean(),
+  caseId: zod.string().nullish(),
+  decision: zod.string(),
+  scanId: zod.string(),
+  csamMatch: zod.boolean().optional(),
 });

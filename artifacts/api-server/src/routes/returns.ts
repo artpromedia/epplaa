@@ -4,6 +4,7 @@ import { db, schema } from "../lib/db";
 import { requireUserId } from "../lib/auth";
 import { newReturnId, newWalletTxnId } from "../lib/ids";
 import { logger } from "../lib/logger";
+import { openModerationCase } from "../lib/moderation";
 import { getCarrier } from "../lib/fulfillment";
 import type { DispatchRequest, ShippingAddress } from "../lib/fulfillment";
 
@@ -147,6 +148,34 @@ router.post("/returns/:returnId/transitions", async (req, res) => {
     .where(eq(schema.returnsTable.id, existing.id))
     .returning();
   await maybeRefundWallet(userId, row);
+  // When the return enters `disputed`, enqueue a dispute case for the
+  // operator queue. Idempotent: if the row already has a `case_id` we skip.
+  if (status === "disputed" && !row.caseId) {
+    try {
+      const caseId = await openModerationCase({
+        kind: "dispute",
+        targetKind: "return",
+        targetId: row.id,
+        severity: "normal",
+        evidence: {
+          returnId: row.id,
+          orderId: row.orderId,
+          refundAmountMinor: row.refundAmountMinor,
+          currencyCode: row.currencyCode,
+          reason: row.reason,
+          reasonLabel: row.reasonLabel,
+        },
+        sourceUserId: userId,
+      });
+      await db
+        .update(schema.returnsTable)
+        .set({ caseId })
+        .where(eq(schema.returnsTable.id, row.id));
+      row.caseId = caseId;
+    } catch (err) {
+      logger.error({ err: (err as Error).message, returnId: row.id }, "return_dispute_case_open_failed");
+    }
+  }
   res.json(rowToReturn(row));
 });
 

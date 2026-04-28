@@ -84,7 +84,7 @@ export default function SafetyHub() {
                     <p className={`text-xs ${subtle}`}>
                       {reportReasonLabel(r.reason)} · {r.targetKind}
                     </p>
-                    <div className="flex items-center gap-1 mt-1">
+                    <div className="flex items-center gap-1 mt-1 flex-wrap">
                       <Clock
                         className={`w-3 h-3 ${
                           isDark ? "text-white/40" : "text-stone-400"
@@ -103,6 +103,19 @@ export default function SafetyHub() {
                       >
                         {r.status.replace(/_/g, " ")}
                       </span>
+                      {r.caseId && (
+                        <span
+                          data-testid={`safety-report-case-${r.id}`}
+                          className={`text-[10px] uppercase tracking-wider font-bold px-1.5 py-0.5 rounded ${
+                            isDark
+                              ? "bg-white/10 text-white/70"
+                              : "bg-stone-200 text-stone-700"
+                          }`}
+                          title={`Case ${r.caseId}`}
+                        >
+                          case {(r.caseStatus ?? "open").replace(/_/g, " ")}
+                        </span>
+                      )}
                     </div>
                   </div>
                 </div>

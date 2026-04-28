@@ -13,6 +13,7 @@ import { processDuePayouts } from "./lib/payments";
 import { drainOutbox } from "./lib/notifications";
 import { autoReturnExpiredBoxReservations } from "./routes/box";
 import { auditMutations, auditPiiReads, initAuditChain } from "./lib/audit";
+import { initAdminSchema } from "./lib/roles";
 import { processDueNdprRequests, requireProcessingNotRestricted } from "./lib/ndpr";
 import { quarterlyResweep, bootstrapAllManufacturerScreenings } from "./lib/sanctions";
 import { runRetentionSweep } from "./lib/retention";
@@ -204,6 +205,14 @@ if (process.env.NODE_ENV !== "test") {
   // than lazily on the first audit write.
   void initAuditChain().catch((err) =>
     logger.error({ err: (err as Error).message }, "audit_chain_init_failed"),
+  );
+  // Trust & Safety operator console schema: roles, user_roles,
+  // moderation_cases, moderation_scans, payout_actions, takedowns.
+  // Additive-only (CREATE TABLE IF NOT EXISTS / ADD COLUMN IF NOT EXISTS)
+  // — matches the initAuditChain pattern. Bootstraps default roles and
+  // grants `admin` to anyone in EPPLAA_ADMIN_USER_IDS.
+  void initAdminSchema().catch((err) =>
+    logger.error({ err: (err as Error).message }, "admin_schema_init_failed"),
   );
   // Backfill sanctions screening for every manufacturer attributed to a
   // product. Manufacturers don't have a dedicated onboarding route in this

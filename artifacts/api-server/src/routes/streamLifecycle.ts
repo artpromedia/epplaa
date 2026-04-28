@@ -13,6 +13,7 @@ import { logger } from "../lib/logger";
 import { isHost, listRecentMessages, chatSendAtomic, softDeleteMessage, toPublicChatMessage } from "../lib/chat";
 import { recordReaction, recentReactions } from "../lib/reactions";
 import { getSocketServer } from "../lib/socket";
+import { moderateText, moderateImage } from "../lib/moderation";
 
 const router: IRouter = Router();
 
@@ -41,6 +42,23 @@ router.post("/streams", async (req, res) => {
   if (await sellerSanctionsBlocked(userId)) {
     res.status(403).json({ error: "sanctions_review_required" });
     return;
+  }
+  // Poster image moderation: scan the seller-supplied thumbnail before the
+  // stream row is created so blocked content never reaches the catalog.
+  // CSAM matches open a high-severity case via recordScanAndMaybeOpenCase
+  // inside moderateImage; we surface the case id back to the caller so
+  // ops can audit the rejection.
+  const posterUrl = String(body.posterImage ?? "").trim();
+  if (posterUrl) {
+    const posterScan = await moderateImage(posterUrl, {
+      surface: "stream_poster",
+      targetId: `pending:${userId}`,
+      sourceUserId: userId,
+    });
+    if (posterScan.blocked) {
+      res.status(422).json({ error: "poster_image_rejected", caseId: posterScan.caseId, decision: posterScan.decision });
+      return;
+    }
   }
   const [seller] = await db
     .select({ application: schema.sellersTable.application })
@@ -292,6 +310,22 @@ router.post("/streams/:streamId/messages", async (req, res) => {
     return;
   }
   const text = raw.slice(0, 280);
+  // Real-time text moderation. Block decisions refuse the send (and open
+  // a content case automatically); review/allow decisions pass through.
+  // A provider failure must not block legitimate chat — log + allow.
+  try {
+    const mod = await moderateText(text, {
+      surface: "stream_chat",
+      targetId: `${req.params.streamId}:${userId}:${Date.now()}`,
+      sourceUserId: userId,
+    });
+    if (mod.blocked) {
+      res.status(422).json({ error: "blocked_by_moderation", caseId: mod.caseId });
+      return;
+    }
+  } catch (err) {
+    logger.error({ err: (err as Error).message }, "chat_text_moderation_failed");
+  }
   const [u] = await db
     .select({ name: schema.usersTable.displayName })
     .from(schema.usersTable)
