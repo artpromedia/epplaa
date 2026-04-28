@@ -4,15 +4,6 @@ import { listRecordedVideos } from "./streaming";
 import { newSafeId } from "./ids";
 import { logger } from "./logger";
 
-/**
- * After a stream ends we ask Cloudflare for the recording it produced
- * and persist a `replays` row pointing at it. The replays page already
- * loads from `/replays`, so once the row exists the buyer can rewatch.
- *
- * For the stub provider this is a synthetic row pointing at a stub HLS
- * URL — enough to validate the lifecycle in dev/tests without a real
- * VOD pipeline.
- */
 export async function persistReplayForEndedStream(streamId: string): Promise<void> {
   const [stream] = await db
     .select()
@@ -21,7 +12,6 @@ export async function persistReplayForEndedStream(streamId: string): Promise<voi
     .limit(1);
   if (!stream) return;
   if (!stream.cfInputId) return;
-  // Don't double-create a replay for the same stream.
   const existing = await db
     .select({ id: schema.replaysTable.id })
     .from(schema.replaysTable)
@@ -46,8 +36,6 @@ export async function persistReplayForEndedStream(streamId: string): Promise<voi
       viewCount: String(stream.peakViewers),
       productIds: stream.currentProductId ? [stream.currentProductId] : [],
       liveStreamId: stream.id,
-      // VOD HLS manifest from the recording. Replay detail uses this
-      // to mount the same hls.js player as the live page.
       playbackUrl: v.hlsUrl || null,
     });
     await db

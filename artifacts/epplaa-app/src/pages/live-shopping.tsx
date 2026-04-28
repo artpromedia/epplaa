@@ -32,8 +32,6 @@ interface ChatMessage {
   id: string;
   username: string;
   text: string;
-  // Bot messages render with the styled fallback avatar; the local "you"
-  // message uses a coral pill so the user can spot their own contribution.
   kind: "bot" | "seed" | "you";
   bot?: BotViewer;
   seed?: (typeof SEED_COMMENTS)[number];
@@ -41,9 +39,7 @@ interface ChatMessage {
 
 interface FloatingHeart {
   id: number;
-  // Horizontal jitter so the hearts don't stack in a single column.
   x: number;
-  // Drift slightly to the side as they rise.
   drift: number;
 }
 
@@ -63,10 +59,7 @@ export default function LiveShopping() {
   const { toast } = useToast();
   const [, navigate] = useLocation();
 
-  // Seed fallback: lets the demo URLs (/live/stream1, /live/stream-2…) keep
-  // working when no real DB row exists yet. For real streams created by the
-  // seller go-live flow, every visible piece of metadata is overridden below
-  // from the playback row so the UI never shows the wrong host/product.
+  // Demo fallback for /live/stream1, /live/stream-2… URLs without a DB row.
   const seedStream =
     SEED_STREAMS.find((s) => s.id === streamId) || SEED_STREAMS[0];
 
@@ -81,21 +74,12 @@ export default function LiveShopping() {
   const [tipOpen, setTipOpen] = useState(false);
   const heartIdRef = useRef(0);
 
-  // Real backend stream — populated when streamId matches a row in the DB
-  // (created via the seller go-live flow). When null we fall back to the
-  // seed/bot experience so demo streams under SEED_STREAMS still work.
   const [realPlayback, setRealPlayback] = useState<StreamPlayback | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
-  // Live hls.js instance, retained so the Lite-mode toggle can cap or
-  // uncap the bitrate ladder without remounting the player.
   const hlsRef = useRef<Hls | null>(null);
-  // Lite mode pins playback to the lowest quality rendition — useful on
-  // mobile networks. When false hls.js auto-selects based on bandwidth.
   const [liteMode, setLiteMode] = useState(false);
 
-  // Real-stream metadata overrides: when the playback row exists, the host
-  // name / poster / pinned product MUST come from the DB, not from the seed
-  // fallback (otherwise newly created streams render with the wrong seller).
+  // Real playback row overrides seed metadata when present.
   const liveTitle = realPlayback?.title ?? seedStream.title;
   const liveHostName = realPlayback?.hostName ?? seedStream.hostName;
   const liveHostAvatar =
@@ -107,16 +91,10 @@ export default function LiveShopping() {
   const livePinnedProductId =
     realPlayback?.currentProductId ?? seedStream.currentProductId ?? null;
   const seedPinned = SEED_PRODUCTS.find((p) => p.id === livePinnedProductId);
-  // For real streams the pinned product may be a real DB product that isn't
-  // in the seed catalogue — fetch on demand so the buy-now overlay still
-  // resolves. `useGetProduct` is gated by `enabled: !!productId` so passing
-  // an empty string here is a no-op.
   const { data: fetchedPinned } = useGetProduct(
     !seedPinned && livePinnedProductId ? livePinnedProductId : "",
   );
   const pinnedProduct = seedPinned ?? fetchedPinned ?? undefined;
-  // Stable shape that downstream JSX keys off. Anywhere the JSX used to
-  // read `stream.X` should now read `stream.X` from this object.
   const stream = {
     ...seedStream,
     title: liveTitle,
@@ -126,8 +104,6 @@ export default function LiveShopping() {
     currentProductId: livePinnedProductId,
   };
 
-  // Seed the chat with the existing static comments so the screen never looks
-  // empty before bots start talking.
   const initialMessages = (): ChatMessage[] =>
     SEED_COMMENTS.slice(0, 4).map((c) => ({
       id: uid(),
@@ -140,11 +116,7 @@ export default function LiveShopping() {
 
   const chatScrollRef = useRef<HTMLDivElement | null>(null);
 
-  // Reset every stream-scoped piece of state when the user navigates between
-  // /live/:streamId routes (e.g. via a "Watch live now" CTA from a replay).
-  // Without this, viewer/like/comment counts and chat history would bleed
-  // across streams. The intervals below are also keyed on `streamId` so they
-  // tear down and restart with fresh closures.
+  // Reset stream-scoped state on /live/:streamId navigation.
   const isFirstStreamMount = useRef(true);
   useEffect(() => {
     if (isFirstStreamMount.current) {
@@ -157,8 +129,6 @@ export default function LiveShopping() {
     setHearts([]);
     setDraft("");
     setMessages(initialMessages());
-    // initialMessages and seedViewers are intentionally regenerated per stream;
-    // we don't list them as deps to avoid re-running on every render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [streamId]);
 
@@ -169,16 +139,13 @@ export default function LiveShopping() {
     });
   }
 
-  // Auto-scroll chat to bottom whenever a new message arrives.
   useEffect(() => {
     const el = chatScrollRef.current;
     if (!el) return;
     el.scrollTop = el.scrollHeight;
   }, [messages.length]);
 
-  // Bot chatter: only when there is no real backend stream. Once a real
-  // playback row is detected the socket firehose becomes the source of
-  // truth and the bots stop (they'd compete with real viewers).
+  // Bot chatter only in the demo fallback; real streams use the socket.
   useEffect(() => {
     if (realPlayback) return;
     let cancelled = false;
@@ -204,8 +171,6 @@ export default function LiveShopping() {
     };
   }, [streamId, realPlayback]);
 
-  // Detect whether the routed streamId is a real backend stream. Failures
-  // (404 etc) leave realPlayback null and the demo experience continues.
   useEffect(() => {
     let cancelled = false;
     if (!streamId) return;
@@ -221,11 +186,7 @@ export default function LiveShopping() {
     };
   }, [streamId]);
 
-  // Mount HLS playback when a real stream provides a manifest URL. Native
-  // HLS (Safari) gets the URL straight on the <video>; everywhere else we
-  // attach hls.js. We *only* mount when the URL points at a real CDN —
-  // stub URLs (stub-playback.epplaa.local) wouldn't resolve and would
-  // produce a noisy MEDIA_ERR cycle, so we keep the poster in that case.
+  // Safari = native HLS; otherwise attach hls.js. Stub URLs are skipped.
   useEffect(() => {
     const video = videoRef.current;
     const url = realPlayback?.hlsUrl ?? null;
@@ -239,8 +200,6 @@ export default function LiveShopping() {
       hls.loadSource(url);
       hls.attachMedia(video);
       hlsRef.current = hls;
-      // Re-apply current Lite-mode preference once the manifest has
-      // loaded (levels aren't known before MANIFEST_PARSED fires).
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
         hls.autoLevelCapping = liteMode ? 0 : -1;
       });
@@ -252,18 +211,13 @@ export default function LiveShopping() {
     return undefined;
   }, [realPlayback?.hlsUrl, liteMode]);
 
-  // Keep hls.js in sync when the user toggles Lite mode after manifest
-  // has already loaded. autoLevelCapping=0 pins to the lowest rendition
-  // (data saver); -1 lets ABR pick the best level for the bandwidth.
+  // Lite mode: 0 pins lowest rendition; -1 lets ABR choose.
   useEffect(() => {
     const hls = hlsRef.current;
     if (!hls) return;
     hls.autoLevelCapping = liteMode ? 0 : -1;
   }, [liteMode]);
 
-  // Real socket: presence + live chat + reaction bursts. Joins the room
-  // for this stream id; tears down on stream change/unmount. The same
-  // shared socket is reused across the seller go-live host page.
   useEffect(() => {
     if (!realPlayback || !streamId) return;
     const sock = connectStreamSocket();
@@ -315,8 +269,7 @@ export default function LiveShopping() {
     };
   }, [realPlayback, streamId]);
 
-  // Viewer count random walk — only used in fallback (no real socket
-  // presence). When realPlayback is set, presence:count is authoritative.
+  // Demo fallbacks (off when realPlayback drives the counters).
   useEffect(() => {
     if (realPlayback) return;
     const interval = setInterval(() => {
@@ -325,7 +278,6 @@ export default function LiveShopping() {
     return () => clearInterval(interval);
   }, [realPlayback]);
 
-  // Bot likes — fallback only, off when we have real reactions.
   useEffect(() => {
     if (realPlayback) return;
     const interval = setInterval(() => {
@@ -334,8 +286,6 @@ export default function LiveShopping() {
     return () => clearInterval(interval);
   }, [realPlayback]);
 
-  // Garbage-collect floating hearts after their 1.4s animation finishes so the
-  // DOM doesn't grow forever.
   useEffect(() => {
     if (hearts.length === 0) return;
     const t = setTimeout(() => {
@@ -363,7 +313,6 @@ export default function LiveShopping() {
     if (!text) return;
     if (realPlayback && streamId) {
       const sock = connectStreamSocket();
-      // Server echoes via chat:message, which appends to the list.
       sock.emit("chat:send", { streamId, text }, (ack: { ok: boolean; reason?: string }) => {
         if (!ack?.ok) {
           if (ack?.reason?.startsWith("slow_mode_")) {
@@ -425,7 +374,7 @@ export default function LiveShopping() {
         return;
       }
     } catch {
-      // user dismissed the native share sheet; fall through to clipboard
+      // share dismissed — fall through to clipboard
     }
     try {
       await navigator.clipboard.writeText(url);

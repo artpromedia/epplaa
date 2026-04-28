@@ -12,22 +12,8 @@ import {
 import { enqueueReaction, REACTION_BUCKET_MS, startReactionFlusher } from "./reactions";
 import { recordAudit } from "./audit";
 
-/**
- * Socket.IO real-time chat + reactions + presence backbone.
- *
- * Single-instance for MVP — no Redis adapter — but the surface is
- * designed so plugging in `@socket.io/redis-adapter` later only requires
- * the bootstrap call to receive a Redis client. Rooms are per stream
- * (`stream:{streamId}`); presence is the room's connected-socket count.
- *
- * Auth: viewers may join read-only without a sign-in (so the live count
- * matches what buyer eyeballs are seeing); posting/deleting/reacting
- * require a verified Clerk session. The handshake middleware verifies
- * a Clerk JWT supplied via `auth.token`. Identity (userId, username) is
- * resolved server-side — `auth.username` from the client is ignored to
- * prevent host impersonation in moderation actions.
- */
-
+// Single-instance Socket.IO. Rooms = `stream:{id}`. Anonymous sockets
+// can join (for presence); write events require a verified Clerk JWT.
 interface AuthedSocket extends Socket {
   data: {
     userId?: string;
@@ -65,24 +51,12 @@ export function bootstrapSocketServer(httpServer: HttpServer): SocketServer {
 
   const ns = io.of("/streams");
 
-  /**
-   * Handshake auth middleware. Verifies the Clerk session JWT supplied as
-   * `auth.token` and pins the verified userId on `socket.data`. We never
-   * trust client-supplied identity claims — `auth.username` is ignored.
-   *
-   * Connections without a valid token are still allowed through (so the
-   * presence count includes anonymous lurkers and the player can render
-   * chat read-only). Write events 401 when `socket.data.userId` is unset.
-   */
   ns.use(async (socket: AuthedSocket, next) => {
     socket.data.joinedStreams = new Set<string>();
     const auth = (socket.handshake.auth ?? {}) as { token?: string };
     const token = typeof auth.token === "string" ? auth.token.trim() : "";
     const secretKey = process.env.CLERK_SECRET_KEY;
-    if (!token || !secretKey) {
-      // Anonymous — read-only socket.
-      return next();
-    }
+    if (!token || !secretKey) return next();
     try {
       const payload = await verifyToken(token, { secretKey });
       const sub = typeof payload?.sub === "string" ? payload.sub : "";
@@ -91,11 +65,7 @@ export function bootstrapSocketServer(httpServer: HttpServer): SocketServer {
         socket.data.username = await resolveUsername(sub);
       }
     } catch (err) {
-      logger.warn(
-        { err: (err as Error).message },
-        "socket_token_verify_failed",
-      );
-      // Fall through anonymous — write events will 401.
+      logger.warn({ err: (err as Error).message }, "socket_token_verify_failed");
     }
     return next();
   });
@@ -108,8 +78,6 @@ export function bootstrapSocketServer(httpServer: HttpServer): SocketServer {
       await socket.join(room);
       socket.data.joinedStreams.add(streamId);
       const count = ns.adapter.rooms.get(room)?.size ?? 0;
-      // Bump current_viewers + peak_viewers atomically. peak_viewers
-      // uses GREATEST so it monotonically tracks the high-water mark.
       try {
         await db
           .update(schema.streamsTable)
@@ -149,9 +117,6 @@ export function bootstrapSocketServer(httpServer: HttpServer): SocketServer {
             return;
           }
           const text = raw.slice(0, 280);
-          // Single-transaction send: advisory-lock + slow-mode check +
-          // banned-word filter + insert all execute under one tx, so
-          // the lock is still held when the row commits.
           const username = socket.data.username ?? "viewer";
           const result = await chatSendAtomic({ streamId, userId, username, text });
           if (!result.ok) {
@@ -233,8 +198,6 @@ export function bootstrapSocketServer(httpServer: HttpServer): SocketServer {
           }
           const kind = String(payload?.kind ?? "heart").slice(0, 16);
           const count = Math.max(1, Math.min(10, Number(payload?.count ?? 1)));
-          // Buffer in-memory; the 250ms flusher persists one bucket row
-          // and broadcasts one aggregated burst per (stream, kind).
           enqueueReaction(streamId, kind, count);
           ack?.({ ok: true });
         } catch (err) {
@@ -244,13 +207,8 @@ export function bootstrapSocketServer(httpServer: HttpServer): SocketServer {
       },
     );
 
-    /**
-     * `disconnecting` fires *before* socket.io tears the room memberships
-     * down, so socket.rooms still contains every joined room. Using
-     * `disconnect` would race and leave stale `current_viewers` rows.
-     * We also rely on `joinedStreams` as a belt-and-braces fallback for
-     * abrupt transport drops.
-     */
+    // `disconnecting` (not `disconnect`) so socket.rooms still contains the
+    // joined rooms when we recompute presence.
     socket.on("disconnecting", async () => {
       const ids = new Set<string>(socket.data.joinedStreams);
       for (const room of socket.rooms) {
@@ -262,11 +220,6 @@ export function bootstrapSocketServer(httpServer: HttpServer): SocketServer {
     });
   });
 
-  /**
-   * Single-instance reaction flusher. Owns the 250ms tick that drains
-   * the in-memory reaction queue: one DB row + one socket emit per
-   * (stream, kind) bucket. Stopped on process exit by the http server.
-   */
   startReactionFlusher((streamId, kind, count) => {
     ns.to(`stream:${streamId}`).emit("reaction:burst", { streamId, kind, count });
   });
@@ -283,8 +236,7 @@ async function leaveStream(socket: AuthedSocket, streamId: string, alreadyInRoom
     await socket.leave(room);
   }
   socket.data.joinedStreams.delete(streamId);
-  // After-leave count: if we're inside `disconnecting` socket.io has not
-  // yet removed us from the room set, so subtract 1.
+  // disconnecting fires before socket.io evicts the socket; subtract 1.
   const raw = ns.adapter.rooms.get(room)?.size ?? 0;
   const count = alreadyInRoom ? Math.max(0, raw - 1) : raw;
   try {

@@ -18,12 +18,8 @@ const router: IRouter = Router();
 
 const REQUIRED_KYC_TIER_TO_BROADCAST = 2;
 
-/**
- * POST /streams — create a stream + provision the upstream live input.
- * Only Tier 2+ KYC sellers may create. The seller's storefront name is
- * snapshotted onto the row; the RTMP URL + key + WHIP + HLS URL come
- * back to the seller hub.
- */
+// Tier 2+ KYC required. Provisions the CF live input and snapshots the
+// seller's display info onto the stream row.
 router.post("/streams", async (req, res) => {
   const userId = requireUserId(req, res);
   if (!userId) return;
@@ -46,8 +42,6 @@ router.post("/streams", async (req, res) => {
     res.status(403).json({ error: "sanctions_review_required" });
     return;
   }
-  // Snapshot seller display info so the stream card doesn't have to
-  // join sellers on every read.
   const [seller] = await db
     .select({ application: schema.sellersTable.application })
     .from(schema.sellersTable)
@@ -85,11 +79,7 @@ router.post("/streams", async (req, res) => {
   res.status(201).json(toStreamWithSecrets(row));
 });
 
-/**
- * POST /streams/:streamId/start — flips status=live and notifies followers.
- * Idempotent: a stream already live returns the current state without
- * re-fanning out.
- */
+// Idempotent. Notifies followers only on the first transition to live.
 router.post("/streams/:streamId/start", async (req, res) => {
   const userId = requireUserId(req, res);
   if (!userId) return;
@@ -106,8 +96,7 @@ router.post("/streams/:streamId/start", async (req, res) => {
     res.status(403).json({ error: "forbidden" });
     return;
   }
-  // Re-check the gate on every start (KYC could have lapsed since
-  // the input was provisioned).
+  // KYC may have lapsed since the input was provisioned; re-check.
   const tier = await currentKycTier(userId);
   if (tier < REQUIRED_KYC_TIER_TO_BROADCAST) {
     res.status(403).json({ error: "kyc_tier_required", requiredTier: REQUIRED_KYC_TIER_TO_BROADCAST, currentTier: tier });
@@ -139,9 +128,6 @@ router.post("/streams/:streamId/start", async (req, res) => {
   res.json(toStreamWithSecrets(updated));
 });
 
-/**
- * POST /streams/:streamId/stop — flips status=ended, persists replay row.
- */
 router.post("/streams/:streamId/stop", async (req, res) => {
   const userId = requireUserId(req, res);
   if (!userId) return;
@@ -167,11 +153,6 @@ router.post("/streams/:streamId/stop", async (req, res) => {
   res.json(toStreamWithSecrets(updated));
 });
 
-/**
- * POST /streams/:streamId/rotate-key — issue a new RTMP stream key.
- * Per the task: "Stream keys rotate per session and are tied to a Tier
- * 2+ KYC seller." Recommended after every broadcast.
- */
 router.post("/streams/:streamId/rotate-key", async (req, res) => {
   const userId = requireUserId(req, res);
   if (!userId) return;
@@ -192,9 +173,6 @@ router.post("/streams/:streamId/rotate-key", async (req, res) => {
     res.status(400).json({ error: "no_live_input" });
     return;
   }
-  // Real rotation requires a new live input — Cloudflare doesn't expose
-  // an in-place key rotation. The old input is deleted (so the old
-  // ingest key stops working immediately) and a fresh one is created.
   const fresh = await rotateStreamKey(
     row.cfInputId,
     { name: row.title, sellerUserId: userId, streamId: row.id },
@@ -223,10 +201,7 @@ router.post("/streams/:streamId/rotate-key", async (req, res) => {
   res.json(toStreamWithSecrets(updated));
 });
 
-/**
- * GET /streams/:streamId/playback — public read used by the buyer
- * player. Strips the RTMP key (treat as a credential).
- */
+// Public buyer-side read; never includes the RTMP key.
 router.get("/streams/:streamId/playback", async (req, res) => {
   const [row] = await db
     .select()
@@ -255,10 +230,6 @@ router.get("/streams/:streamId/playback", async (req, res) => {
   });
 });
 
-/**
- * POST /streams/:streamId/mod-config — host-only moderation knobs.
- * `slowModeSeconds` 0..300; `addBannedWord` appends to the per-stream list.
- */
 router.post("/streams/:streamId/mod-config", async (req, res) => {
   const userId = requireUserId(req, res);
   if (!userId) return;
@@ -303,23 +274,14 @@ router.post("/streams/:streamId/mod-config", async (req, res) => {
   });
 });
 
-/**
- * GET /streams/:streamId/messages — paginated chat history (newest-last).
- */
 router.get("/streams/:streamId/messages", async (req, res) => {
   const limit = Math.max(1, Math.min(200, Number(req.query.limit ?? 50)));
   const messages = await listRecentMessages(req.params.streamId, limit);
   res.json({ messages });
 });
 
-/**
- * POST /streams/:streamId/messages — REST send endpoint (clients
- * without a websocket can still chat). Goes through the same atomic
- * send helper as the socket path so slow-mode is enforced identically
- * across transports. Username is resolved server-side from the users
- * table — we never trust a client-supplied display name (host
- * impersonation vector).
- */
+// Username is resolved server-side; client-supplied display names are
+// never trusted (host impersonation vector).
 router.post("/streams/:streamId/messages", async (req, res) => {
   const userId = requireUserId(req, res);
   if (!userId) return;
@@ -382,10 +344,6 @@ router.delete("/streams/:streamId/messages/:messageId", async (req, res) => {
   res.status(204).end();
 });
 
-/**
- * POST /streams/:streamId/reactions — REST fallback for the socket
- * `reaction:add` event. Same effect; the row goes into the bucket.
- */
 router.post("/streams/:streamId/reactions", async (req, res) => {
   const userId = requireUserId(req, res);
   if (!userId) return;

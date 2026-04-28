@@ -1,18 +1,7 @@
 import { logger } from "./logger";
 
-/**
- * Cloudflare Stream provider abstraction.
- *
- * The MVP requires a real RTMP/HLS path *when credentials are present*
- * (CF_STREAM_API_TOKEN + CF_STREAM_ACCOUNT_ID) and a deterministic stub
- * otherwise so dev + tests work end-to-end without a Cloudflare account.
- * Provider selection is made *per call*: hot-rotating the env between
- * runs is supported (handy when ops add the secret without a rebuild).
- *
- * Stub URLs are clearly labelled (`stub-ingest.epplaa.local`) so they
- * cannot be confused with real ingest endpoints in logs/metrics.
- */
-
+// Cloudflare Stream provider, with a deterministic stub when
+// CF_STREAM_API_TOKEN/CF_STREAM_ACCOUNT_ID aren't set.
 const CF_BASE = "https://api.cloudflare.com/client/v4";
 
 export interface LiveInputCreate {
@@ -45,9 +34,6 @@ function selectProvider(): "stub" | "cloudflare" {
 }
 
 function newStubKey(streamId: string): string {
-  // Stream key is treated as a credential — random per call so a rotate
-  // operation actually changes it. Includes the stream id so logs are
-  // navigable in dev.
   const rand = Math.random().toString(36).slice(2, 14);
   return `stub-${streamId}-${rand}`;
 }
@@ -127,20 +113,8 @@ export async function createLiveInput(input: LiveInputCreate): Promise<LiveInput
   }
 }
 
-/**
- * Rotate the RTMP stream key for an existing stream. Returns a fresh
- * LiveInput so the caller can persist *all* the new credentials (uid,
- * RTMP URL, RTMP key, WHIP URL, HLS URL).
- *
- * Cloudflare's API has no in-place "rotate key" operation — the only
- * way to issue a new key is to delete the existing live input and
- * create a brand new one. We do exactly that here. The previous live
- * input is removed so the old stream key can no longer be used to
- * ingest, which is the security guarantee a rotation has to provide.
- *
- * In stub mode we just synthesize a fresh key (and stable uid) so dev
- * + tests can exercise the flow without a Cloudflare account.
- */
+// CF has no in-place key rotation: delete the old live input and create
+// a new one so the previous RTMP key stops accepting ingest.
 export async function rotateStreamKey(
   uid: string,
   meta: { name: string; sellerUserId: string; streamId: string },
@@ -149,11 +123,6 @@ export async function rotateStreamKey(
   if (selectProvider() === "stub") {
     return stubLiveInput({ meta, recording });
   }
-  // Best-effort delete the old input first so the previous key stops
-  // accepting ingest immediately. If the delete fails (e.g. CF returns
-  // 404 because the input was already deleted) we still proceed to
-  // create the replacement — losing the new key is worse than leaking
-  // a stale one for one rotation.
   try {
     await cfFetch(`/stream/live_inputs/${uid}`, { method: "DELETE" });
   } catch (err) {

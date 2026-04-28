@@ -16,18 +16,12 @@ export default function ReplayDetail() {
   const { country } = useCountry();
   const [, navigate] = useLocation();
 
-  // Try the API first; if the id matches a seed entry instead (e.g. a
-  // demo replay shipped with the app), fall back to the static row so
-  // the existing UX keeps working without a backend record.
+  // API row first, then seed fallback for demo replays without a backend record.
   const { data: apiReplay, isLoading } = useGetReplay(replayId ?? "");
   const seedReplay = getReplayById(replayId ?? "");
   const replay: Replay | undefined =
     (apiReplay as Replay | undefined) ?? seedReplay;
 
-  // Mount hls.js for the recorded VOD when the API returned a real
-  // playback URL. Stub URLs (used in dev when CF isn't configured) are
-  // skipped so we don't spam MEDIA_ERR cycles, and Safari uses native
-  // HLS via the <video src> attribute path.
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const playbackUrl = replay?.playbackUrl ?? null;
@@ -84,7 +78,6 @@ export default function ReplayDetail() {
         isDark ? "bg-[#0F1525] text-white" : "bg-[#fbeed3] text-stone-900"
       }`}
     >
-      {/* Real VOD player when available; poster fallback otherwise. */}
       <div className="absolute inset-0">
         {hasRealPlayback ? (
           <video
@@ -150,8 +143,6 @@ export default function ReplayDetail() {
         </div>
       </div>
 
-      {/* Centered play overlay (only when we don't have a real player or
-          it's currently paused — controls are still on the video). */}
       {(!hasRealPlayback || !isPlaying) && (
         <div className="absolute inset-0 flex items-center justify-center z-10 pointer-events-none">
           <div

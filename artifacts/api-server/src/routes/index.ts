@@ -38,8 +38,11 @@ const router: IRouter = Router();
 router.use(healthRouter);
 router.use(countriesRouter);
 router.use(productsRouter);
-router.use(streamsRouter);
+// streamLifecycleRouter must be mounted before streamsRouter: the latter
+// owns `GET /streams/:streamId` which would otherwise shadow reserved
+// paths like `GET /streams/_provider/info`.
 router.use(streamLifecycleRouter);
+router.use(streamsRouter);
 router.use(replaysRouter);
 router.use(fulfillmentLocationsRouter);
 router.use(promoCodesRouter);
