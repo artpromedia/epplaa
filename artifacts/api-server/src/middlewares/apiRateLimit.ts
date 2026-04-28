@@ -1,5 +1,6 @@
 import type { Request, RequestHandler } from "express";
 import { sql } from "drizzle-orm";
+import IORedis, { type Redis } from "ioredis";
 import { db } from "../lib/db";
 import { newSafeId } from "../lib/ids";
 import { logger } from "../lib/logger";
@@ -16,24 +17,33 @@ import { userHasAnyRole } from "../lib/roles";
  *   admin  — 1200 (back-office — only realistic ceiling for paginating
  *            very large result sets)
  *
- * In-memory bucket. For multi-instance deployments swap the `BucketStore`
- * impl with a Redis-backed one (see comment at the bottom). The interface
- * is deliberately tiny so the swap is mechanical.
+ * Bucket store is selected by `RATE_LIMIT_STORE`:
+ *   - unset / "memory" — process-local sliding window log. Fine for a
+ *     single api-server replica.
+ *   - "redis"          — sliding window log stored in Redis via an
+ *     atomic Lua script. Required before scaling horizontally because
+ *     each in-memory replica would otherwise own its own quota,
+ *     effectively multiplying the cap by the replica count.
  */
 
 type Tier = "anon" | "buyer" | "seller" | "admin";
+
+interface BumpResult {
+  allowed: boolean;
+  retryAfterMs: number;
+}
+
+interface BucketStore {
+  bump(key: string, now: number, windowMs: number, max: number): Promise<BumpResult>;
+}
 
 interface Bucket {
   hits: number[];
 }
 
-interface BucketStore {
-  bump(key: string, now: number, windowMs: number, max: number): { allowed: boolean; retryAfterMs: number };
-}
-
 class InMemoryStore implements BucketStore {
   private readonly map = new Map<string, Bucket>();
-  bump(key: string, now: number, windowMs: number, max: number): { allowed: boolean; retryAfterMs: number } {
+  async bump(key: string, now: number, windowMs: number, max: number): Promise<BumpResult> {
     const cutoff = now - windowMs;
     let bucket = this.map.get(key);
     if (!bucket) {
@@ -57,9 +67,126 @@ class InMemoryStore implements BucketStore {
   }
 }
 
-const store = new InMemoryStore();
+/**
+ * Lua-backed sliding-window log. We use a sorted set per key:
+ *   score  = hit timestamp (ms)
+ *   member = unique nonce per insert (ts + nonce) so ZADD never collides
+ *
+ * The script atomically:
+ *   1. Drops scores <= now - windowMs (matches InMemoryStore's strict
+ *      `t > cutoff` filter).
+ *   2. Returns 429 + a Retry-After hint when ZCARD >= max.
+ *   3. Otherwise ZADDs the new hit and refreshes PEXPIRE.
+ *
+ * Atomicity matters: without the script, two concurrent requests at
+ * `max - 1` could each read the count, both decide they're allowed,
+ * and both write — slipping a request past the cap.
+ */
+const RATE_LIMIT_LUA = `
+local key = KEYS[1]
+local now = tonumber(ARGV[1])
+local windowMs = tonumber(ARGV[2])
+local max = tonumber(ARGV[3])
+local member = ARGV[4]
+local cutoff = now - windowMs
+redis.call('ZREMRANGEBYSCORE', key, '-inf', cutoff)
+local count = redis.call('ZCARD', key)
+if count >= max then
+  local oldest = redis.call('ZRANGE', key, 0, 0, 'WITHSCORES')
+  local retryAfter = (tonumber(oldest[2]) + windowMs) - now
+  if retryAfter < 1000 then retryAfter = 1000 end
+  return {0, retryAfter}
+end
+redis.call('ZADD', key, now, member)
+redis.call('PEXPIRE', key, windowMs + 1000)
+return {1, 0}
+`;
+
+interface RateLimitRedis extends Redis {
+  rateLimitBump(
+    key: string,
+    now: string,
+    windowMs: string,
+    max: string,
+    member: string,
+  ): Promise<[number, number]>;
+}
+
+class RedisStore implements BucketStore {
+  private readonly redis: RateLimitRedis;
+  private memberSeq = 0;
+  constructor(redis: Redis) {
+    redis.defineCommand("rateLimitBump", {
+      numberOfKeys: 1,
+      lua: RATE_LIMIT_LUA,
+    });
+    this.redis = redis as RateLimitRedis;
+  }
+  async bump(key: string, now: number, windowMs: number, max: number): Promise<BumpResult> {
+    // Unique member to avoid ZADD score collisions when two hits land on
+    // the same millisecond. Process pid + monotonic counter is enough —
+    // a redis-side INCR would add a round-trip and break atomicity.
+    this.memberSeq = (this.memberSeq + 1) >>> 0;
+    const member = `${now}:${process.pid}:${this.memberSeq}`;
+    try {
+      const [allowed, retryAfter] = await this.redis.rateLimitBump(
+        key,
+        String(now),
+        String(windowMs),
+        String(max),
+        member,
+      );
+      return {
+        allowed: Number(allowed) === 1,
+        retryAfterMs: Number(retryAfter),
+      };
+    } catch (err) {
+      // Degrade open if Redis is unreachable — better to serve than to
+      // 429 every request because of a backing-store outage. The error
+      // is logged so on-call can react.
+      logger.error(
+        { err: (err as Error).message },
+        "rate_limit_redis_bump_failed",
+      );
+      return { allowed: true, retryAfterMs: 0 };
+    }
+  }
+}
+
+function createBucketStore(): BucketStore {
+  const kind = (process.env.RATE_LIMIT_STORE ?? "memory").toLowerCase();
+  if (kind === "redis") {
+    const url = process.env.REDIS_URL;
+    if (!url) {
+      throw new Error(
+        "RATE_LIMIT_STORE=redis requires REDIS_URL to be set",
+      );
+    }
+    const client = new IORedis(url, {
+      maxRetriesPerRequest: 3,
+      enableReadyCheck: true,
+      lazyConnect: false,
+    });
+    client.on("error", (err) => {
+      logger.error(
+        { err: err.message },
+        "rate_limit_redis_client_error",
+      );
+    });
+    return new RedisStore(client);
+  }
+  if (kind !== "memory") {
+    logger.warn(
+      { kind },
+      "rate_limit_store_unknown_kind_falling_back_to_memory",
+    );
+  }
+  return new InMemoryStore();
+}
+
+const store: BucketStore = createBucketStore();
 const SWEEP_MS = 10 * 60 * 1000;
-if (process.env.NODE_ENV !== "test") {
+if (store instanceof InMemoryStore && process.env.NODE_ENV !== "test") {
   setInterval(() => store.sweep(Date.now(), SWEEP_MS), SWEEP_MS).unref?.();
 }
 
@@ -144,7 +271,7 @@ export function apiRateLimit(opts: ApiRateLimitOptions = {}): RequestHandler {
       // unbounded cardinality on attacker-controlled query params.
       const routeKey = perRoute ? `${req.method}:${req.path.split("?")[0]}` : "*";
       const key = `${name}:${tier}:${routeKey}:${identity}`;
-      const result = store.bump(key, Date.now(), windowMs, max);
+      const result = await store.bump(key, Date.now(), windowMs, max);
       if (!result.allowed) {
         res.setHeader("Retry-After", Math.ceil(result.retryAfterMs / 1000));
         res.status(429).json({
@@ -169,18 +296,4 @@ export function apiRateLimit(opts: ApiRateLimitOptions = {}): RequestHandler {
   };
 }
 
-/*
- * Redis swap-in (future):
- *   class RedisStore implements BucketStore {
- *     constructor(private readonly redis: RedisClient) {}
- *     async bump(key, now, windowMs, max) {
- *       // ZADD key now now; ZREMRANGEBYSCORE key 0 (now - windowMs); ZCARD
- *       // EXPIRE key windowMs/1000; compare against max in a Lua script
- *       // for atomicity.
- *     }
- *   }
- *   Replace the `store` const with `new RedisStore(redis)` behind an env
- *   gate; no change needed at call sites.
- */
-
-export const __test__ = { resolveTier, store, InMemoryStore };
+export const __test__ = { resolveTier, store, InMemoryStore, RedisStore };
