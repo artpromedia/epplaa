@@ -48,20 +48,26 @@ router.post("/promos/broadcast", async (req, res) => {
     });
     return;
   }
+  // Sum the actual outbox rows written (per-channel) rather than just
+  // counting users attempted, so observability reflects what the worker
+  // will actually try to deliver. A user with promos disabled or no
+  // configured channels contributes 0.
   let enqueued = 0;
+  let attempted = 0;
   for (const userId of userIds) {
+    attempted++;
     try {
-      await enqueueNotification({
+      const r = await enqueueNotification({
         userId,
         eventType: "promo",
         payload: { title, body: text, url },
       });
-      enqueued++;
+      enqueued += r.enqueued;
     } catch (err) {
       logger.error({ err: (err as Error).message, userId }, "notify_promo_enqueue_failed");
     }
   }
-  res.json({ ok: true, enqueued });
+  res.json({ ok: true, enqueued, attempted });
 });
 
 export default router;

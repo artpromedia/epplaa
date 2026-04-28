@@ -139,7 +139,13 @@ export class FcmChannel implements NotificationChannel {
           message: {
             token: msg.to,
             notification: { title: msg.title, body: msg.body },
-            data: { url: msg.url ?? "", ...((msg.payload as Record<string, string>) ?? {}) },
+            // FCM HTTP v1 message.data MUST have string values; numeric or
+            // boolean payload fields would cause INVALID_ARGUMENT.
+            data: Object.fromEntries(
+              Object.entries({ url: msg.url ?? "", ...(msg.payload ?? {}) })
+                .filter(([, v]) => v !== undefined && v !== null)
+                .map(([k, v]) => [k, typeof v === "string" ? v : JSON.stringify(v)]),
+            ),
           },
         }),
       });
