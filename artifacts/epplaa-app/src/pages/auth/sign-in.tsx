@@ -1,6 +1,6 @@
 import { SignIn } from "@clerk/clerk-react";
 import { Link, useLocation } from "wouter";
-import epplaaLogo from "@assets/epplaa-logo-color_1777409658028.png";
+import epplaaLogo from "@assets/epplaa-logo-color-nobg.png";
 
 export default function SignInPage() {
   const [location] = useLocation();

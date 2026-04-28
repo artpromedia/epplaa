@@ -9,7 +9,7 @@ import NotFound from "@/pages/not-found";
 import { ApiAuthBridge } from "@/lib/auth-bridge";
 import { CsrfBridge } from "@/lib/csrf-bridge";
 import { PortalShell } from "@/components/portal-shell";
-import epplaaLogo from "@assets/epplaa-logo-color_1777409658028.png";
+import epplaaLogo from "@assets/epplaa-logo-color-nobg.png";
 
 import DashboardPage from "@/pages/dashboard";
 import ApplyPage from "@/pages/apply";

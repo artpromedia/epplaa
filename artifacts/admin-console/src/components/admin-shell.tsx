@@ -12,7 +12,7 @@ import {
 } from "lucide-react";
 import { useAdminMyRoles } from "@workspace/api-client-react";
 import { cn } from "@/lib/utils";
-import epplaaLogo from "@assets/epplaa-logo-color_1777409658028.png";
+import epplaaLogo from "@assets/epplaa-logo-color-nobg.png";
 
 interface NavItem {
   href: string;
