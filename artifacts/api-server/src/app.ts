@@ -27,6 +27,7 @@ import { initOtel } from "./lib/otel";
 import { refreshFxRates, seedFxRatesIfEmpty } from "./lib/fx";
 import { processDueNdprRequests, requireProcessingNotRestricted } from "./lib/ndpr";
 import { quarterlyResweep, bootstrapAllManufacturerScreenings } from "./lib/sanctions";
+import { pruneStalePendingMfaEnrollments } from "./lib/mfa";
 import { runRetentionSweep } from "./lib/retention";
 import { securityHeaders } from "./middlewares/securityHeaders";
 import { csrfMiddleware } from "./middlewares/csrf";
@@ -231,6 +232,22 @@ function startScheduledJobs(): void {
       );
     }, HOUR_MS);
   }, 180_000);
+  // Prune stale `pending` MFA enrolments: every 5 minutes delete rows
+  // older than `MFA_PENDING_PRUNE_MAX_AGE_MS` (default 10 min) so the
+  // mfa_enrollments table doesn't accumulate abandoned QR-code setups
+  // and so encrypted secrets don't sit in the DB longer than needed.
+  // Active enrolments are never touched.
+  const MFA_PRUNE_INTERVAL_MS = 5 * 60 * 1000;
+  setTimeout(() => {
+    void pruneStalePendingMfaEnrollments().catch((err) =>
+      logger.error({ err: (err as Error).message }, "mfa_pending_prune_failed"),
+    );
+    setInterval(() => {
+      void pruneStalePendingMfaEnrollments().catch((err) =>
+        logger.error({ err: (err as Error).message }, "mfa_pending_prune_failed"),
+      );
+    }, MFA_PRUNE_INTERVAL_MS);
+  }, 75_000);
 }
 
 if (process.env.NODE_ENV !== "test") {

@@ -207,6 +207,88 @@ d("mfa db integration", () => {
     expect(bogus).toBe(false);
   });
 
+  it("pruneStalePendingMfaEnrollments deletes only stale pending rows and leaves active + fresh pending alone", async () => {
+    const stalePendingUser = makeUserId();
+    const freshPendingUser = makeUserId();
+    const activeUser = makeUserId();
+
+    // 1. Stale pending: enrol then back-date `updated_at` past the cutoff.
+    await mfa.setupTotp(stalePendingUser, `${stalePendingUser}@example.com`);
+    await db.execute(sql`
+      UPDATE mfa_enrollments
+         SET updated_at = now() - interval '1 hour'
+       WHERE user_id = ${stalePendingUser};
+    `);
+
+    // 2. Fresh pending: enrol but don't verify and don't back-date.
+    await mfa.setupTotp(freshPendingUser, `${freshPendingUser}@example.com`);
+
+    // 3. Active enrolment: enrol, verify, then back-date `updated_at` to
+    //    prove the prune ignores `status = 'active'` regardless of age.
+    const activeSetup = await mfa.setupTotp(activeUser, `${activeUser}@example.com`);
+    const { authenticator: a } = await import("otplib");
+    a.options = { window: 1, step: 30 };
+    await mfa.verifyTotpAndActivate(activeUser, a.generate(activeSetup.secret));
+    await db.execute(sql`
+      UPDATE mfa_enrollments
+         SET updated_at = now() - interval '1 hour'
+       WHERE user_id = ${activeUser};
+    `);
+
+    // Use a 10 minute cutoff so the back-dated pending row is stale and
+    // the freshly-inserted pending row is not.
+    const pruned = await mfa.pruneStalePendingMfaEnrollments(10 * 60 * 1000);
+    expect(pruned).toBe(1);
+
+    const remaining = await db.execute<{ user_id: string; status: string }>(sql`
+      SELECT user_id, status FROM mfa_enrollments
+       WHERE user_id IN (${stalePendingUser}, ${freshPendingUser}, ${activeUser})
+       ORDER BY user_id;
+    `);
+    const byUser = new Map(remaining.rows.map((r) => [r.user_id, r.status]));
+    expect(byUser.has(stalePendingUser)).toBe(false);
+    expect(byUser.get(freshPendingUser)).toBe("pending");
+    expect(byUser.get(activeUser)).toBe("active");
+
+    // Idempotent: second run finds nothing to prune.
+    const second = await mfa.pruneStalePendingMfaEnrollments(10 * 60 * 1000);
+    expect(second).toBe(0);
+  });
+
+  it("pruneStalePendingMfaEnrollments uses the default ~10 minute window when no arg is supplied", async () => {
+    expect(mfa.DEFAULT_MFA_PENDING_PRUNE_MAX_AGE_MS).toBe(10 * 60 * 1000);
+
+    const justInsideUser = makeUserId();
+    const justOutsideUser = makeUserId();
+
+    await mfa.setupTotp(justInsideUser, `${justInsideUser}@example.com`);
+    await mfa.setupTotp(justOutsideUser, `${justOutsideUser}@example.com`);
+
+    // Back-date one row to 9 minutes ago (still inside the 10 min window)
+    // and the other to 11 minutes ago (outside).
+    await db.execute(sql`
+      UPDATE mfa_enrollments
+         SET updated_at = now() - interval '9 minutes'
+       WHERE user_id = ${justInsideUser};
+    `);
+    await db.execute(sql`
+      UPDATE mfa_enrollments
+         SET updated_at = now() - interval '11 minutes'
+       WHERE user_id = ${justOutsideUser};
+    `);
+
+    const pruned = await mfa.pruneStalePendingMfaEnrollments();
+    expect(pruned).toBe(1);
+
+    const remaining = await db.execute<{ user_id: string }>(sql`
+      SELECT user_id FROM mfa_enrollments
+       WHERE user_id IN (${justInsideUser}, ${justOutsideUser});
+    `);
+    const ids = remaining.rows.map((r) => r.user_id);
+    expect(ids).toContain(justInsideUser);
+    expect(ids).not.toContain(justOutsideUser);
+  });
+
   it("disableMfa removes both enrolment and challenge rows for the user", async () => {
     const userId = makeUserId();
     const result = await mfa.setupTotp(userId, `${userId}@example.com`);

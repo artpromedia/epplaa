@@ -102,8 +102,10 @@ export interface TotpSetupResult {
  * Begin TOTP enrolment. Persists a `pending` row with the encrypted
  * secret + hashed backup codes, and returns the plaintext secret +
  * backup codes ONCE so the SPA can render the QR code and the recovery
- * sheet. Verify must be called within the next ~5 minutes to flip status
- * to `active`; pending rows older than that are pruned by a future job.
+ * sheet. Verify must be called within `MFA_PENDING_PRUNE_MAX_AGE_MS`
+ * (default ~10 minutes) to flip status to `active`; pending rows older
+ * than that are pruned by `pruneStalePendingMfaEnrollments`, which is
+ * scheduled at boot in `app.ts`.
  */
 export async function setupTotp(
   userId: string,
@@ -208,6 +210,72 @@ export async function consumeBackupCode(
   if (upd.rows.length === 0) return false;
   await recordChallenge(userId, "totp");
   return true;
+}
+
+/**
+ * Default window after which an unconfirmed `pending` enrolment is
+ * considered stale and reaped. The QR code is shown to the user once
+ * and the SPA expects them to type the 6-digit code within a couple of
+ * minutes; ten minutes is generous enough for a slow first-time user
+ * but short enough that abandoned enrolments don't sit in the DB
+ * encrypting a secret nobody will ever use.
+ *
+ * Overridable via the `MFA_PENDING_PRUNE_MAX_AGE_MS` env var (positive
+ * integer milliseconds). Invalid values fall back to the default with a
+ * warning so a typo in the env doesn't silently disable pruning.
+ */
+export const DEFAULT_MFA_PENDING_PRUNE_MAX_AGE_MS = 10 * 60 * 1000;
+
+function configuredPruneMaxAgeMs(): number {
+  const raw = process.env.MFA_PENDING_PRUNE_MAX_AGE_MS;
+  if (!raw) return DEFAULT_MFA_PENDING_PRUNE_MAX_AGE_MS;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) {
+    logger.warn(
+      { value: raw },
+      "mfa_pending_prune_max_age_invalid_using_default",
+    );
+    return DEFAULT_MFA_PENDING_PRUNE_MAX_AGE_MS;
+  }
+  return Math.floor(n);
+}
+
+/**
+ * Delete `mfa_enrollments` rows whose `status = 'pending'` and whose
+ * `updated_at` is older than `maxAgeMs` ago. Active enrolments — even
+ * very old ones — are never touched. Returns the number of rows pruned
+ * and logs the count for observability.
+ *
+ * Safe to call concurrently: the DELETE is a single atomic statement
+ * and overlapping ticks are a no-op once the first one wins.
+ */
+export async function pruneStalePendingMfaEnrollments(
+  maxAgeMs: number = configuredPruneMaxAgeMs(),
+): Promise<number> {
+  const cutoff = new Date(Date.now() - maxAgeMs);
+  const res = await db.execute<{ id: string }>(sql`
+    DELETE FROM mfa_enrollments
+     WHERE status = 'pending'
+       AND updated_at < ${cutoff.toISOString()}
+    RETURNING id;
+  `);
+  const pruned = res.rows.length;
+  // Always log a concrete count so dashboards / log-based metrics can
+  // chart "rows pruned per run" without inferring zeros from missing
+  // log lines. Drop to debug on no-op so the noisier 5-min cadence
+  // doesn't dominate INFO logs.
+  if (pruned > 0) {
+    logger.info(
+      { pruned, maxAgeMs, cutoff: cutoff.toISOString() },
+      "mfa_pending_enrollments_pruned",
+    );
+  } else {
+    logger.debug(
+      { pruned: 0, maxAgeMs, cutoff: cutoff.toISOString() },
+      "mfa_pending_enrollments_prune_noop",
+    );
+  }
+  return pruned;
 }
 
 export async function disableMfa(userId: string): Promise<void> {
