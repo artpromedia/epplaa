@@ -56,8 +56,9 @@ function stubScreen(input: ScreenInput): ScreenResult {
 function selectProvider(): "stub" {
   const provider = process.env.SANCTIONS_PROVIDER;
   if (!provider || provider === "stub") return "stub";
-  // Real providers would be initialized here. We log and fall back to stub
-  // in non-prod, fail-closed in prod.
+  // Real providers (ComplyAdvantage, Trulioo, Refinitiv) would be wired in
+  // here keyed off SANCTIONS_PROVIDER. Until that integration lands the
+  // unknown-provider branch fails-closed in production.
   if (process.env.NODE_ENV === "production") {
     throw new Error(`SANCTIONS_PROVIDER=${provider} is not implemented`);
   }
@@ -65,9 +66,43 @@ function selectProvider(): "stub" {
   return "stub";
 }
 
+/**
+ * Screen a subject against the configured sanctions provider. In production
+ * the stub provider is treated as a hard fail-closed: every screen returns
+ * `status='blocked'` so payouts halt rather than letting an un-vetted
+ * recipient through. This satisfies the "no real money moves until OFAC/UN/
+ * EU/Nigeria coverage is in place" guarantee even though the provider
+ * integration itself is owned by a separate task. Operators must set
+ * SANCTIONS_PROVIDER to a real provider AND extend the dispatch below
+ * before the production payout gate will open.
+ */
 export async function screenSubject(input: ScreenInput): Promise<ScreenResult> {
   const provider = selectProvider();
-  const result = provider === "stub" ? stubScreen(input) : stubScreen(input);
+  const isProd = process.env.NODE_ENV === "production";
+  const failClosed = provider === "stub" && isProd;
+  const result: ScreenResult = failClosed
+    ? {
+        provider: "stub",
+        matchScore: 100,
+        listHits: [
+          {
+            listName: "internal",
+            entryName: "no_real_sanctions_provider_configured",
+            score: 100,
+          },
+        ],
+        status: "blocked",
+        nextReviewAt: new Date(Date.now() + 24 * 3600 * 1000), // re-check daily
+      }
+    : provider === "stub"
+      ? stubScreen(input)
+      : stubScreen(input);
+  if (failClosed) {
+    logger.error(
+      { userId: input.userId },
+      "sanctions_failclosed_no_real_provider_in_production",
+    );
+  }
   const id = `sx_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
   await db.insert(schema.sanctionsScreeningsTable).values({
     id,

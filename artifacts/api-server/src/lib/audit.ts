@@ -87,6 +87,31 @@ async function ensureChainHeadLoaded(): Promise<void> {
       BEFORE DELETE ON audit_events
       FOR EACH ROW EXECUTE FUNCTION audit_events_append_only();
     `);
+    // Dead-letter table for audit-write failures. recordAudit() is best-
+    // effort by design (a failing audit must not break the user-facing
+    // request), but "best-effort" cannot mean "silently dropped" for a
+    // PCI/financial baseline. Failed appends land here and an operator
+    // alarm is raised via a structured `audit_dlq_write` log line. The
+    // table is intentionally outside the append-only chain so a chain
+    // failure (e.g. pg lock contention) can still record the loss.
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS audit_failures (
+        id              bigserial PRIMARY KEY,
+        ts              timestamptz NOT NULL DEFAULT now(),
+        actor_id        text,
+        action          text NOT NULL,
+        entity          text NOT NULL,
+        entity_id       text NOT NULL DEFAULT '',
+        pii_read        boolean NOT NULL DEFAULT false,
+        payload         jsonb,
+        error_message   text NOT NULL,
+        retry_count     integer NOT NULL DEFAULT 0
+      );
+    `);
+    await db.execute(sql`
+      CREATE INDEX IF NOT EXISTS audit_failures_unresolved_idx
+      ON audit_failures (ts) WHERE retry_count = 0;
+    `);
     const [last] = await db
       .select()
       .from(schema.auditEventsTable)
@@ -160,7 +185,26 @@ export async function recordAudit(input: RecordAuditInput): Promise<void> {
       chainHead = rowHash;
     });
   } catch (err) {
-    logger.error({ err: (err as Error).message, action: input.action }, "audit_write_failed");
+    const errorMessage = (err as Error).message;
+    logger.error({ err: errorMessage, action: input.action }, "audit_write_failed");
+    // Dead-letter the failed event so it is recoverable. We can't link it
+    // into the hash chain (that's exactly what just failed), but we can
+    // record that an event WAS lost — operators can later replay or
+    // investigate from `audit_failures`. If even the DLQ insert fails we
+    // log loudly with `audit_dlq_write_failed`; that is the alarm of last
+    // resort and indicates the database itself is unreachable.
+    try {
+      const scrubbedPayload = scrubPii(input.payload ?? {}) as Record<string, unknown>;
+      await db.execute(sql`
+        INSERT INTO audit_failures (actor_id, action, entity, entity_id, pii_read, payload, error_message)
+        VALUES (${input.actorId ?? null}, ${input.action}, ${input.entity}, ${input.entityId ?? ""}, ${Boolean(input.piiRead)}, ${JSON.stringify(scrubbedPayload)}::jsonb, ${errorMessage})
+      `);
+    } catch (dlqErr) {
+      logger.error(
+        { err: (dlqErr as Error).message, action: input.action, originalError: errorMessage },
+        "audit_dlq_write_failed",
+      );
+    }
   }
 }
 
@@ -198,17 +242,22 @@ export async function verifyAuditChain(fromSeq = 0): Promise<number | null> {
 }
 
 /**
- * Centralized registry of PII-bearing GET endpoints. Compliance requires that
- * EVERY PII access be auditable. Listing patterns here (rather than wiring a
- * helper into every route file) keeps coverage in one place where it can be
- * reviewed against schema changes — when a new endpoint that returns user PII
- * is added, the corresponding entry must land here too. Each entry maps a
- * request path to the audit action and the entity it touches; entityIdParam
- * names a route param that identifies the specific row when applicable.
+ * Audit-coverage policy for authenticated GETs.
  *
- * "PII" here means anything tied to a specific subject's identity, contact,
- * payment, location, KYC, or behavioural data — not catalogue/discovery data
- * (products, streams, replays) or anonymous lookups (countries, vapid key).
+ * Compliance requires "every PII access is auditable", which is impossible to
+ * guarantee with an allowlist that can drift behind new routes. We instead
+ * use an OPT-OUT model: by default every authenticated GET writes a hash-
+ * chained audit row. Routes that genuinely return no subject-identifying
+ * data (catalogue/discovery/anonymous lookups) must be explicitly listed in
+ * NON_PII_GET_ALLOWLIST below, which is reviewed alongside any new route.
+ * A new endpoint that returns PII will be audited automatically — drift can
+ * only mean over-auditing (a new non-PII route also emits a row), never the
+ * silent non-coverage the architect flagged.
+ *
+ * PII_READ_PATTERNS keeps the *named* action/entity/entityIdParam mapping
+ * for known-PII routes so audit rows have rich, queryable shapes; routes
+ * that fall through to the default land with action `pii.read` and an
+ * entity/entityId derived from the URL.
  */
 type PiiReadPattern = {
   readonly match: (path: string) => boolean;
@@ -216,6 +265,30 @@ type PiiReadPattern = {
   readonly entity: string;
   readonly entityIdParam?: string;
 };
+/**
+ * Authenticated GETs that DO NOT return subject PII. Reviewed alongside any
+ * new route. Anything not matched here is treated as PII-bearing and gets
+ * an audit row by default. Entries are path patterns matched against the
+ * URL path with the `/api` prefix stripped.
+ */
+const NON_PII_GET_ALLOWLIST: readonly ((p: string) => boolean)[] = [
+  (p) => p === "/healthz",
+  (p) => p === "/countries",
+  (p) => p === "/web-push/vapid-public-key",
+  (p) => p === "/payments/mode",
+  (p) => p === "/products",
+  (p) => /^\/products\/[^/]+$/.test(p),
+  (p) => p === "/streams",
+  (p) => /^\/streams\/[^/]+$/.test(p),
+  (p) => p === "/replays",
+  (p) => /^\/replays\/[^/]+$/.test(p),
+  (p) => p === "/fulfillment-locations",
+  (p) => p === "/reviews",
+  (p) => /^\/pudo\/[^/]+\/manifest$/.test(p),
+  (p) => p === "/admin/payment-gateway-health",
+  // Dev-only payment debug endpoint, never reachable in production.
+  (p) => /^\/__devpay\/[^/]+$/.test(p),
+];
 const PII_READ_PATTERNS: readonly PiiReadPattern[] = [
   { match: (p) => p === "/me", action: "user.me.read", entity: "user" },
   { match: (p) => p === "/cart", action: "cart.read", entity: "cart" },
@@ -254,10 +327,29 @@ function matchPiiReadPattern(path: string): PiiReadPattern | undefined {
   return PII_READ_PATTERNS.find((p) => p.match(path));
 }
 
+function isAllowlistedNonPiiPath(path: string): boolean {
+  return NON_PII_GET_ALLOWLIST.some((m) => m(path));
+}
+
+function defaultPiiReadAction(path: string): { action: string; entity: string; entityId: string | null } {
+  // Derive a stable action/entity from the URL when no named pattern matches.
+  // For `/foo/bar/baz` we use action=`pii.read.foo.bar` and entity='foo';
+  // the trailing segment becomes the entityId so per-resource queries still
+  // work even for routes we haven't yet promoted to PII_READ_PATTERNS.
+  const trimmed = path.replace(/^\/+|\/+$/g, "");
+  const segs = trimmed.split("/").filter(Boolean);
+  const entity = segs[0] ?? "unknown";
+  const head = segs.slice(0, Math.min(2, segs.length)).join(".") || "root";
+  const tail = segs.length > 1 ? segs[segs.length - 1] : null;
+  return { action: `pii.read.${head}`, entity, entityId: tail ?? null };
+}
+
 /**
- * Express middleware: writes a single audit row for every successful PII
- * read by an authenticated user. Mounted globally (after authentication)
- * so coverage cannot drift route-by-route. NDPR/PCI compliance treats every
+ * Express middleware: writes a single audit row for every successful
+ * authenticated GET that returns subject data. Operates as an OPT-OUT
+ * policy: a route is audited unless it is in NON_PII_GET_ALLOWLIST,
+ * eliminating the silent-coverage drift that an allowlist-only model
+ * suffers when new endpoints are added. NDPR/PCI compliance treats every
  * PII access as auditable, not just mutations.
  */
 export function auditPiiReads() {
@@ -272,23 +364,38 @@ export function auditPiiReads() {
       return;
     }
     const path = (req.originalUrl.split("?")[0] ?? "").replace(/^\/api/, "");
-    const pattern = matchPiiReadPattern(path);
-    if (!pattern) {
+    if (isAllowlistedNonPiiPath(path)) {
       next();
       return;
     }
+    const pattern = matchPiiReadPattern(path);
     res.on("finish", () => {
       if (res.statusCode < 200 || res.statusCode >= 300) return;
-      const entityId = pattern.entityIdParam
-        ? String(req.params[pattern.entityIdParam] ?? "")
-        : actorId;
+      if (pattern) {
+        const entityId = pattern.entityIdParam
+          ? String(req.params[pattern.entityIdParam] ?? "")
+          : actorId;
+        void recordAudit({
+          actorId,
+          action: pattern.action,
+          entity: pattern.entity,
+          entityId,
+          piiRead: true,
+          payload: { method: req.method, path },
+        });
+        return;
+      }
+      // Unknown path that isn't allowlisted as non-PII — fail-safe to
+      // auditing it. Ops can promote it to PII_READ_PATTERNS later for a
+      // richer action/entity name.
+      const fallback = defaultPiiReadAction(path);
       void recordAudit({
         actorId,
-        action: pattern.action,
-        entity: pattern.entity,
-        entityId,
+        action: fallback.action,
+        entity: fallback.entity,
+        entityId: fallback.entityId ?? actorId,
         piiRead: true,
-        payload: { method: req.method, path },
+        payload: { method: req.method, path, classified: "default" },
       });
     });
     next();
