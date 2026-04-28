@@ -97,6 +97,16 @@ router.post("/auth/otp/verify", async (req: Request, res: Response) => {
 /**
  * Authenticated: link a verified phone to the existing Clerk user.
  * Used when a user signed in with email and now wants to add their phone.
+ *
+ * Critical: this MUST also attach the phone number to the Clerk user
+ * itself, otherwise a subsequent /auth/otp/verify on the same number
+ * would fail to resolve via clerkClient.users.getUserList({ phoneNumber })
+ * and would mint a brand-new Clerk identity — splitting the account.
+ *
+ * If Clerk already has another user with this phone (i.e. it was used to
+ * create a phone-only account previously), we 409 so the client can
+ * surface a "phone already linked to another account" path. We do NOT
+ * silently take over.
  */
 router.patch("/me/phone", async (req: Request, res: Response) => {
   const userId = requireUserId(req, res);
@@ -111,6 +121,49 @@ router.patch("/me/phone", async (req: Request, res: Response) => {
   const result = await verifyOtp({ phone, code });
   if (!result.ok) {
     res.status(400).json({ error: result.reason ?? "verify_failed" });
+    return;
+  }
+  // Conflict check: another Clerk user already owns this phone.
+  try {
+    const matches = await clerkClient.users.getUserList({ phoneNumber: [phone], limit: 2 });
+    const list = (matches as unknown as { data?: unknown[] }).data ?? (matches as unknown as unknown[]);
+    const arr = Array.isArray(list) ? list : [];
+    const owners = arr
+      .map((u) => (u as { id?: string }).id)
+      .filter((id): id is string => typeof id === "string");
+    const otherOwner = owners.find((id) => id !== userId);
+    if (otherOwner) {
+      res.status(409).json({ error: "phone_taken", detail: "Phone is linked to another account" });
+      return;
+    }
+    if (!owners.includes(userId)) {
+      // Attach the phone to the Clerk user so phone sign-in resolves to
+      // this same account. Clerk's Backend API exposes phone management on
+      // the users namespace; signature variations are tolerated by passing
+      // through `unknown`.
+      const usersApi = clerkClient.users as unknown as {
+        createPhoneNumber?: (args: { userId: string; phoneNumber: string; verified?: boolean; primary?: boolean }) => Promise<unknown>;
+        updateUser?: (id: string, args: { phoneNumber?: string[] }) => Promise<unknown>;
+      };
+      try {
+        if (typeof usersApi.createPhoneNumber === "function") {
+          await usersApi.createPhoneNumber({ userId, phoneNumber: phone, verified: true, primary: true });
+        } else if (typeof usersApi.updateUser === "function") {
+          await usersApi.updateUser(userId, { phoneNumber: [phone] });
+        } else {
+          logger.error("clerk_phone_attach_unsupported");
+          res.status(500).json({ error: "clerk_attach_failed" });
+          return;
+        }
+      } catch (err) {
+        logger.error({ err: (err as Error).message, userId }, "clerk_phone_attach_failed");
+        res.status(502).json({ error: "clerk_attach_failed" });
+        return;
+      }
+    }
+  } catch (err) {
+    logger.error({ err: (err as Error).message }, "clerk_phone_conflict_check_failed");
+    res.status(502).json({ error: "clerk_lookup_failed" });
     return;
   }
   await db

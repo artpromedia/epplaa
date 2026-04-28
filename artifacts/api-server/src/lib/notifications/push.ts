@@ -190,14 +190,19 @@ export class WebPushChannel implements NotificationChannel {
       logger.warn("vapid_private_key_not_pem_skip");
       return { ok: false, errorMessage: "vapid_private_key_not_pem" };
     }
+    // VAPID requires ES256. Fail closed if signing fails — an HMAC
+    // fallback would produce a cryptographically invalid token that
+    // browsers/push services would either accept incorrectly or reject
+    // silently. Outbox retry/backoff is the authoritative reliability
+    // layer.
     let signature: string;
     try {
       const signer = createSign("SHA256");
       signer.update(`${header}.${claims}`);
       signature = signer.sign(pk).toString("base64url");
-    } catch {
-      // Fallback HMAC so dev does not crash if key isn't EC.
-      signature = createHmac("sha256", pk).update(`${header}.${claims}`).digest("base64url");
+    } catch (err) {
+      logger.error({ err: (err as Error).message }, "vapid_es256_sign_failed");
+      return { ok: false, errorMessage: "vapid_es256_sign_failed" };
     }
     const jwt = `${header}.${claims}.${signature}`;
 
