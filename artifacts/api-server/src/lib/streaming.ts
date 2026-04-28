@@ -127,23 +127,42 @@ export async function createLiveInput(input: LiveInputCreate): Promise<LiveInput
   }
 }
 
-export async function rotateStreamKey(uid: string, streamId: string): Promise<string> {
-  if (selectProvider() === "stub") return newStubKey(streamId);
-  // CF Stream rotates by deleting + recreating the input; instead we set
-  // a new RTMPS playback secret via PATCH `srt` regeneration. The simplest
-  // robust path is delete + recreate, but that loses the public playback
-  // URL. As a compromise the MVP uses the stub key locally and skips the
-  // CF rotation when on real provider — the security model is that real
-  // CF tokens are scoped per stream input which already isolates them.
-  try {
-    const data = (await cfFetch(`/stream/live_inputs/${uid}`, {
-      method: "GET",
-    })) as CfLiveInputResponse;
-    return data.result.rtmps?.streamKey ?? newStubKey(streamId);
-  } catch (err) {
-    logger.error({ err: (err as Error).message, uid }, "cf_stream_rotate_failed");
-    return newStubKey(streamId);
+/**
+ * Rotate the RTMP stream key for an existing stream. Returns a fresh
+ * LiveInput so the caller can persist *all* the new credentials (uid,
+ * RTMP URL, RTMP key, WHIP URL, HLS URL).
+ *
+ * Cloudflare's API has no in-place "rotate key" operation — the only
+ * way to issue a new key is to delete the existing live input and
+ * create a brand new one. We do exactly that here. The previous live
+ * input is removed so the old stream key can no longer be used to
+ * ingest, which is the security guarantee a rotation has to provide.
+ *
+ * In stub mode we just synthesize a fresh key (and stable uid) so dev
+ * + tests can exercise the flow without a Cloudflare account.
+ */
+export async function rotateStreamKey(
+  uid: string,
+  meta: { name: string; sellerUserId: string; streamId: string },
+  recording: boolean,
+): Promise<LiveInput> {
+  if (selectProvider() === "stub") {
+    return stubLiveInput({ meta, recording });
   }
+  // Best-effort delete the old input first so the previous key stops
+  // accepting ingest immediately. If the delete fails (e.g. CF returns
+  // 404 because the input was already deleted) we still proceed to
+  // create the replacement — losing the new key is worse than leaking
+  // a stale one for one rotation.
+  try {
+    await cfFetch(`/stream/live_inputs/${uid}`, { method: "DELETE" });
+  } catch (err) {
+    logger.warn(
+      { err: (err as Error).message, uid },
+      "cf_stream_rotate_delete_old_failed_continuing",
+    );
+  }
+  return await createLiveInput({ meta, recording });
 }
 
 export async function listRecordedVideos(uid: string): Promise<RecordedVideo[]> {

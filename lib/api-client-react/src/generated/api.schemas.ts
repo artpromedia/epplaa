@@ -123,6 +123,8 @@ export interface Replay {
   productIds: string[];
   /** @nullable */
   liveStreamId?: string | null;
+  /** @nullable */
+  playbackUrl?: string | null;
 }
 
 export interface FulfillmentLocation {

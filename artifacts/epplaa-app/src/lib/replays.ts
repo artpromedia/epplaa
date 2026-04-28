@@ -16,6 +16,9 @@ export interface Replay {
   // Whether the same host is currently live again — surfaces a "Watch live now"
   // CTA on the replay detail page.
   liveStreamId?: string;
+  // HLS manifest URL for the recorded VOD (real streams only). Undefined on
+  // the seed entries which are static placeholders.
+  playbackUrl?: string | null;
 }
 
 const now = Date.now();

@@ -46,6 +46,9 @@ export async function persistReplayForEndedStream(streamId: string): Promise<voi
       viewCount: String(stream.peakViewers),
       productIds: stream.currentProductId ? [stream.currentProductId] : [],
       liveStreamId: stream.id,
+      // VOD HLS manifest from the recording. Replay detail uses this
+      // to mount the same hls.js player as the live page.
+      playbackUrl: v.hlsUrl || null,
     });
     await db
       .update(schema.streamsTable)

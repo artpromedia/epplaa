@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Hls from "hls.js";
-import { Heart, MessageCircle, Share2, Gift, X, Send } from "lucide-react";
+import { Heart, MessageCircle, Share2, Gift, X, Send, Gauge } from "lucide-react";
 import { TippingSheet } from "@/components/tipping-sheet";
 import { Link, useParams, useLocation } from "wouter";
 import { useTheme } from "@/lib/theme-context";
@@ -86,6 +86,12 @@ export default function LiveShopping() {
   // seed/bot experience so demo streams under SEED_STREAMS still work.
   const [realPlayback, setRealPlayback] = useState<StreamPlayback | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  // Live hls.js instance, retained so the Lite-mode toggle can cap or
+  // uncap the bitrate ladder without remounting the player.
+  const hlsRef = useRef<Hls | null>(null);
+  // Lite mode pins playback to the lowest quality rendition — useful on
+  // mobile networks. When false hls.js auto-selects based on bandwidth.
+  const [liteMode, setLiteMode] = useState(false);
 
   // Real-stream metadata overrides: when the playback row exists, the host
   // name / poster / pinned product MUST come from the DB, not from the seed
@@ -232,10 +238,28 @@ export default function LiveShopping() {
       const hls = new Hls({ enableWorker: true, lowLatencyMode: true });
       hls.loadSource(url);
       hls.attachMedia(video);
-      return () => hls.destroy();
+      hlsRef.current = hls;
+      // Re-apply current Lite-mode preference once the manifest has
+      // loaded (levels aren't known before MANIFEST_PARSED fires).
+      hls.on(Hls.Events.MANIFEST_PARSED, () => {
+        hls.autoLevelCapping = liteMode ? 0 : -1;
+      });
+      return () => {
+        hls.destroy();
+        hlsRef.current = null;
+      };
     }
     return undefined;
-  }, [realPlayback?.hlsUrl]);
+  }, [realPlayback?.hlsUrl, liteMode]);
+
+  // Keep hls.js in sync when the user toggles Lite mode after manifest
+  // has already loaded. autoLevelCapping=0 pins to the lowest rendition
+  // (data saver); -1 lets ABR pick the best level for the bandwidth.
+  useEffect(() => {
+    const hls = hlsRef.current;
+    if (!hls) return;
+    hls.autoLevelCapping = liteMode ? 0 : -1;
+  }, [liteMode]);
 
   // Real socket: presence + live chat + reaction bursts. Joins the room
   // for this stream id; tears down on stream change/unmount. The same
@@ -695,6 +719,39 @@ export default function LiveShopping() {
 
           {/* Action Rail */}
           <div className="flex flex-col gap-4">
+            {/* Lite mode (data saver). Caps the HLS bitrate ladder to the
+                lowest rendition; only meaningful when a real stream is
+                playing through hls.js. Hidden when no real playback is
+                attached so it doesn't lie to the user. */}
+            {realPlayback?.hlsUrl && (
+              <div className="flex flex-col items-center gap-1">
+                <button
+                  onClick={() => setLiteMode((v) => !v)}
+                  data-testid="button-quality-toggle"
+                  aria-pressed={liteMode}
+                  aria-label={liteMode ? "Disable Lite mode" : "Enable Lite mode"}
+                  className={`h-12 w-12 rounded-full backdrop-blur-md border flex items-center justify-center hover:scale-110 active:scale-95 transition-transform ${
+                    liteMode
+                      ? isDark
+                        ? "bg-[#FF8855]/30 border-[#FF8855]/60 text-[#FF8855] shadow-[0_0_15px_rgba(255,136,85,0.3)]"
+                        : "bg-[#E6502E]/15 border-[#E6502E]/40 text-[#E6502E] shadow-sm"
+                      : isDark
+                        ? "bg-black/40 border-white/10 text-white hover:bg-white/20"
+                        : "bg-[#fff5d8]/75 border-stone-400/55 text-stone-900 hover:bg-stone-300/40"
+                  }`}
+                >
+                  <Gauge className="h-6 w-6" />
+                </button>
+                <span
+                  className={`text-[10px] font-bold ${
+                    isDark ? "text-white" : "text-stone-800"
+                  }`}
+                  data-testid="text-quality-label"
+                >
+                  {liteMode ? "Lite" : "Auto"}
+                </span>
+              </div>
+            )}
             <div className="flex flex-col items-center gap-1">
               <button
                 onClick={spawnHeart}

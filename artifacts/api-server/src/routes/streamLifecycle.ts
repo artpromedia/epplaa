@@ -192,10 +192,25 @@ router.post("/streams/:streamId/rotate-key", async (req, res) => {
     res.status(400).json({ error: "no_live_input" });
     return;
   }
-  const newKey = await rotateStreamKey(row.cfInputId, row.id);
+  // Real rotation requires a new live input — Cloudflare doesn't expose
+  // an in-place key rotation. The old input is deleted (so the old
+  // ingest key stops working immediately) and a fresh one is created.
+  const fresh = await rotateStreamKey(
+    row.cfInputId,
+    { name: row.title, sellerUserId: userId, streamId: row.id },
+    true,
+  );
   const [updated] = await db
     .update(schema.streamsTable)
-    .set({ rtmpStreamKey: newKey, keyRotatedAt: new Date() })
+    .set({
+      cfInputId: fresh.uid,
+      rtmpUrl: fresh.rtmpUrl,
+      rtmpStreamKey: fresh.rtmpStreamKey,
+      whipUrl: fresh.whipUrl,
+      hlsUrl: fresh.hlsUrl,
+      provider: fresh.provider,
+      keyRotatedAt: new Date(),
+    })
     .where(eq(schema.streamsTable.id, row.id))
     .returning();
   await recordAudit({

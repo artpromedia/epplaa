@@ -460,6 +460,7 @@ export const ListReplaysResponseItem = zod.object({
   recordedAtIso: zod.string(),
   productIds: zod.array(zod.string()),
   liveStreamId: zod.string().nullish(),
+  playbackUrl: zod.string().nullish(),
 });
 export const ListReplaysResponse = zod.array(ListReplaysResponseItem);
 
@@ -479,6 +480,7 @@ export const GetReplayResponse = zod.object({
   recordedAtIso: zod.string(),
   productIds: zod.array(zod.string()),
   liveStreamId: zod.string().nullish(),
+  playbackUrl: zod.string().nullish(),
 });
 
 export const ListFulfillmentLocationsQueryParams = zod.object({

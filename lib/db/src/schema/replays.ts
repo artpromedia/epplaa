@@ -12,6 +12,10 @@ export const replaysTable = pgTable("replays", {
   recordedAt: timestamp("recorded_at", { withTimezone: true }).notNull().defaultNow(),
   productIds: text("product_ids").array().notNull().default([]),
   liveStreamId: text("live_stream_id"),
+  // HLS manifest URL for the recorded VOD. Populated from the streaming
+  // provider after the stream ends (Cloudflare returns one per recording).
+  // Nullable for legacy / stub seed rows that don't have a real recording.
+  playbackUrl: text("playback_url"),
 });
 
 export type Replay = typeof replaysTable.$inferSelect;

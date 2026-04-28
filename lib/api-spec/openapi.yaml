@@ -1774,6 +1774,7 @@ components:
           type: array
           items: { type: string }
         liveStreamId: { type: ["string", "null"] }
+        playbackUrl: { type: ["string", "null"] }
 
     FulfillmentLocation:
       type: object

@@ -1,10 +1,13 @@
+import { useEffect, useRef, useState } from "react";
 import { Link, useParams, useLocation } from "wouter";
 import { Play, X, Eye, Clock, Radio } from "lucide-react";
+import Hls from "hls.js";
 import { useTheme } from "@/lib/theme-context";
 import { useCountry } from "@/lib/country-context";
-import { getReplayById, relativeTime } from "@/lib/replays";
+import { getReplayById, relativeTime, type Replay } from "@/lib/replays";
 import { SEED_PRODUCTS } from "@/lib/seed";
 import { formatPrice } from "@/lib/format";
+import { useGetReplay } from "@workspace/api-client-react";
 
 export default function ReplayDetail() {
   const { replayId } = useParams<{ replayId: string }>();
@@ -13,7 +16,48 @@ export default function ReplayDetail() {
   const { country } = useCountry();
   const [, navigate] = useLocation();
 
-  const replay = getReplayById(replayId ?? "");
+  // Try the API first; if the id matches a seed entry instead (e.g. a
+  // demo replay shipped with the app), fall back to the static row so
+  // the existing UX keeps working without a backend record.
+  const { data: apiReplay, isLoading } = useGetReplay(replayId ?? "");
+  const seedReplay = getReplayById(replayId ?? "");
+  const replay: Replay | undefined =
+    (apiReplay as Replay | undefined) ?? seedReplay;
+
+  // Mount hls.js for the recorded VOD when the API returned a real
+  // playback URL. Stub URLs (used in dev when CF isn't configured) are
+  // skipped so we don't spam MEDIA_ERR cycles, and Safari uses native
+  // HLS via the <video src> attribute path.
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const playbackUrl = replay?.playbackUrl ?? null;
+  const hasRealPlayback =
+    !!playbackUrl && !playbackUrl.includes("stub-playback.epplaa.local");
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video || !hasRealPlayback || !playbackUrl) return undefined;
+    if (video.canPlayType("application/vnd.apple.mpegurl")) {
+      video.src = playbackUrl;
+      return undefined;
+    }
+    if (Hls.isSupported()) {
+      const hls = new Hls({ enableWorker: true });
+      hls.loadSource(playbackUrl);
+      hls.attachMedia(video);
+      return () => hls.destroy();
+    }
+    return undefined;
+  }, [playbackUrl, hasRealPlayback]);
+
+  if (isLoading && !seedReplay) {
+    return (
+      <div className="flex flex-col items-center justify-center h-full text-center px-6">
+        <p className="text-sm font-bold mb-2">Loading replay…</p>
+      </div>
+    );
+  }
+
   if (!replay) {
     return (
       <div className="flex flex-col items-center justify-center h-full text-center px-6">
@@ -40,15 +84,28 @@ export default function ReplayDetail() {
         isDark ? "bg-[#0F1525] text-white" : "bg-[#fbeed3] text-stone-900"
       }`}
     >
-      {/* Poster as the still video frame */}
+      {/* Real VOD player when available; poster fallback otherwise. */}
       <div className="absolute inset-0">
-        <img
-          src={replay.posterImage}
-          alt={replay.title}
-          className="w-full h-full object-cover opacity-90"
-        />
+        {hasRealPlayback ? (
+          <video
+            ref={videoRef}
+            data-testid="video-replay"
+            className="w-full h-full object-cover"
+            poster={replay.posterImage}
+            controls
+            playsInline
+            onPlay={() => setIsPlaying(true)}
+            onPause={() => setIsPlaying(false)}
+          />
+        ) : (
+          <img
+            src={replay.posterImage}
+            alt={replay.title}
+            className="w-full h-full object-cover opacity-90"
+          />
+        )}
         <div
-          className={`absolute inset-0 bg-gradient-to-b ${
+          className={`absolute inset-0 pointer-events-none bg-gradient-to-b ${
             isDark
               ? "from-black/60 via-black/40 to-black/95"
               : "from-black/40 via-black/30 to-black/85"
@@ -93,18 +150,21 @@ export default function ReplayDetail() {
         </div>
       </div>
 
-      {/* Centered play overlay */}
-      <div className="absolute inset-0 flex items-center justify-center z-10 pointer-events-none">
-        <div
-          className={`h-20 w-20 rounded-full backdrop-blur-md flex items-center justify-center border bg-black/50 border-white/30 text-white`}
-        >
-          <Play className="h-9 w-9 fill-current ml-1" />
+      {/* Centered play overlay (only when we don't have a real player or
+          it's currently paused — controls are still on the video). */}
+      {(!hasRealPlayback || !isPlaying) && (
+        <div className="absolute inset-0 flex items-center justify-center z-10 pointer-events-none">
+          <div
+            className={`h-20 w-20 rounded-full backdrop-blur-md flex items-center justify-center border bg-black/50 border-white/30 text-white`}
+          >
+            <Play className="h-9 w-9 fill-current ml-1" />
+          </div>
         </div>
-      </div>
+      )}
 
       {/* Bottom sheet: title + showcased products */}
-      <div className="absolute bottom-0 left-0 right-0 p-4 pb-8 z-10 flex flex-col gap-3 max-h-[55%] overflow-y-auto no-scrollbar">
-        <div className="text-white">
+      <div className="absolute bottom-0 left-0 right-0 p-4 pb-8 z-10 flex flex-col gap-3 max-h-[55%] overflow-y-auto no-scrollbar pointer-events-none">
+        <div className="text-white pointer-events-auto">
           <h1 className="text-base font-black leading-tight">
             {replay.title}
           </h1>
@@ -124,7 +184,7 @@ export default function ReplayDetail() {
           <Link
             href={`/live/${replay.liveStreamId}`}
             data-testid="link-watch-live-now"
-            className={`flex items-center justify-center gap-2 h-10 rounded-full font-bold text-sm ${
+            className={`pointer-events-auto flex items-center justify-center gap-2 h-10 rounded-full font-bold text-sm ${
               isDark
                 ? "bg-[#FF8855] text-black hover:bg-[#FF6B35] shadow-[0_0_15px_rgba(255,136,85,0.5)]"
                 : "bg-[#E6502E] text-white hover:bg-[#C4441E] shadow-md"
@@ -135,7 +195,7 @@ export default function ReplayDetail() {
           </Link>
         )}
 
-        <div>
+        <div className="pointer-events-auto">
           <p className="text-[10px] font-bold uppercase tracking-wider text-white/70 mb-2">
             Featured in this stream
           </p>

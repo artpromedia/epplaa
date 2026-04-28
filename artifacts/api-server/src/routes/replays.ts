@@ -17,6 +17,7 @@ function rowToReplay(r: typeof schema.replaysTable.$inferSelect) {
     recordedAtIso: r.recordedAt.toISOString(),
     productIds: r.productIds,
     liveStreamId: r.liveStreamId,
+    playbackUrl: r.playbackUrl,
   };
 }
 
