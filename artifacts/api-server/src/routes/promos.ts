@@ -13,10 +13,11 @@ const router: IRouter = Router();
  * worker filters.
  *
  * Body: { userIds: string[], title, body, url? }
- * Returns: { ok, enqueued } where enqueued is the number of outbox rows
- * actually written (a user with promos disabled will have one row that
- * the worker drops on resolveChannels — that is still enqueued from this
- * endpoint's POV; suppression is downstream).
+ * Returns: { ok, enqueued, attempted } — `attempted` is the number of input
+ * userIds; `enqueued` is the actual count of outbox rows written across all
+ * users. Preferences (promos toggle) and quiet hours are resolved inside
+ * enqueueNotification at enqueue time, so a user with promos disabled
+ * contributes 0 rows here — they are not silently delivered later.
  */
 const MAX_BROADCAST = 1000;
 router.post("/promos/broadcast", async (req, res) => {
