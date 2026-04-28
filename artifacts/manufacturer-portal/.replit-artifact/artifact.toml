@@ -1,0 +1,31 @@
+kind = "web"
+previewPath = "/manufacturer/"
+title = "Epplaa Manufacturers"
+version = "1.0.0"
+id = "artifacts/manufacturer-portal"
+router = "path"
+
+[[integratedSkills]]
+name = "react-vite"
+version = "1.0.0"
+
+[[services]]
+name = "web"
+paths = [ "/manufacturer/" ]
+localPort = 24728
+
+[services.development]
+run = "pnpm --filter @workspace/manufacturer-portal run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/manufacturer-portal", "run", "build" ]
+publicDir = "artifacts/manufacturer-portal/dist/public"
+serve = "static"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "24728"
+BASE_PATH = "/manufacturer/"

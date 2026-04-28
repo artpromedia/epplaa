@@ -14,6 +14,8 @@ import { drainOutbox } from "./lib/notifications";
 import { autoReturnExpiredBoxReservations } from "./routes/box";
 import { auditMutations, auditPiiReads, initAuditChain } from "./lib/audit";
 import { initAdminSchema } from "./lib/roles";
+import { initManufacturerSchema } from "./lib/manufacturers";
+import { refreshFxRates, seedFxRatesIfEmpty } from "./lib/fx";
 import { processDueNdprRequests, requireProcessingNotRestricted } from "./lib/ndpr";
 import { quarterlyResweep, bootstrapAllManufacturerScreenings } from "./lib/sanctions";
 import { runRetentionSweep } from "./lib/retention";
@@ -214,6 +216,17 @@ if (process.env.NODE_ENV !== "test") {
   void initAdminSchema().catch((err) =>
     logger.error({ err: (err as Error).message }, "admin_schema_init_failed"),
   );
+  // Cross-border manufacturer schema (Task #8): manufacturers,
+  // manufacturer_kyc, manufacturer_listings, wholesale_orders,
+  // freight_bookings, customs_events, bonded_warehouse_inventory, fx_rates.
+  // Additive-only (CREATE TABLE IF NOT EXISTS / ADD COLUMN IF NOT EXISTS) —
+  // matches the initAuditChain / initAdminSchema pattern. Also adds
+  // additive `kind` and `currency_code` columns to `payouts` so the
+  // payouts table can carry `kind="manufacturer_share"` rows in origin
+  // currency without a separate table.
+  void initManufacturerSchema()
+    .then(() => seedFxRatesIfEmpty())
+    .catch((err) => logger.error({ err: (err as Error).message }, "manufacturer_schema_init_failed"));
   // Backfill sanctions screening for every manufacturer attributed to a
   // product. Manufacturers don't have a dedicated onboarding route in this
   // codebase — they're seeded/imported externally — so without this pass

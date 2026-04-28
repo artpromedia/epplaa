@@ -156,6 +156,7 @@ export default function ProductDetail() {
           originCountry={product.originCountry}
           destinationCode={country.code}
           currencyCode={country.currency.code}
+          wholesaleListingId={(product as { wholesaleListingId?: string }).wholesaleListingId}
         />
 
         {/* Variants */}
@@ -346,16 +347,18 @@ function LandedCostPreview({
   originCountry,
   destinationCode,
   currencyCode,
+  wholesaleListingId,
 }: {
   isDark: boolean;
   productPriceMinor: number;
   originCountry: string;
   destinationCode: import("@/lib/countries").CountryCode;
   currencyCode: string;
+  wholesaleListingId?: string;
 }) {
   const [open, setOpen] = useState(false);
   const [mode, setMode] = useState<ShipMode>("air");
-  const breakdown = useMemo(
+  const clientEstimate = useMemo(
     () =>
       computeLandedCost({
         productPriceMinor,
@@ -365,9 +368,69 @@ function LandedCostPreview({
       }),
     [productPriceMinor, originCountry, destinationCode, mode],
   );
+  // When the product is backed by a wholesale listing, prefer the server-side
+  // landed-cost quote (real FX + HS-driven duty + actual freight). Falls back
+  // to the client-side estimate while loading or when no listing id is set.
+  const [serverBreakdown, setServerBreakdown] = useState<typeof clientEstimate | null>(null);
+  const [serverEtaLabel, setServerEtaLabel] = useState<string | null>(null);
+  useEffect(() => {
+    if (!wholesaleListingId) {
+      setServerBreakdown(null);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/wholesale/quote", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({
+            listingId: wholesaleListingId,
+            qty: 1,
+            destinationCountryCode: destinationCode,
+            shipMode: mode,
+          }),
+        });
+        if (!res.ok || cancelled) return;
+        const data = (await res.json()) as {
+          breakdown: {
+            fobInDestMinor: number;
+            freightMinor: number;
+            insuranceMinor: number;
+            dutyMinor: number;
+            vatMinor: number;
+            clearanceMinor: number;
+            landedTotalMinor: number;
+          };
+          leadDays: number;
+          transitDays: number;
+          productionLeadDays: number;
+        };
+        if (cancelled) return;
+        setServerBreakdown({
+          fobMinor: data.breakdown.fobInDestMinor,
+          freightMinor: data.breakdown.freightMinor,
+          insuranceMinor: data.breakdown.insuranceMinor,
+          dutyMinor: data.breakdown.dutyMinor,
+          vatMinor: data.breakdown.vatMinor,
+          clearanceMinor: data.breakdown.clearanceMinor,
+          totalMinor: data.breakdown.landedTotalMinor,
+          etaLabel: `${data.transitDays} days transit · ${data.productionLeadDays}d production`,
+        });
+        setServerEtaLabel(`${data.transitDays} days transit · ${data.productionLeadDays}d production`);
+      } catch {
+        // Network failure — silently fall back to the client estimate.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [wholesaleListingId, destinationCode, mode]);
+  const breakdown = serverBreakdown ?? clientEstimate;
   const subtle = isDark ? "text-white/50" : "text-stone-600";
-  const fees =
-    breakdown.totalMinor - breakdown.fobMinor;
+  const fees = breakdown.totalMinor - breakdown.fobMinor;
+  const etaLabel = serverEtaLabel ?? breakdown.etaLabel;
 
   if (!isImport(originCountry)) {
     return (
@@ -459,9 +522,12 @@ function LandedCostPreview({
             </span>
           </div>
           <p className={`pt-1 text-[11px] ${subtle}`}>
-            ETA: {breakdown.etaLabel}. Duties paid by Epplaa at clearance, included
+            ETA: {etaLabel}. Duties paid by Epplaa at clearance, included
             above.
           </p>
+          {serverBreakdown && (
+            <p className={`pt-1 text-[10px] ${subtle}`}>Live quote · real FX + HS-coded duty</p>
+          )}
         </div>
       )}
     </div>

@@ -34,6 +34,9 @@ import boxRouter from "./box";
 import pudoRouter from "./pudo";
 import kycRouter from "./kyc";
 import ndprRouter from "./ndpr";
+import manufacturerRouter from "./manufacturer";
+import wholesaleRouter from "./wholesale";
+import manufacturerAdminRouter from "./manufacturerAdmin";
 
 const router: IRouter = Router();
 
@@ -75,5 +78,8 @@ router.use(boxRouter);
 router.use(pudoRouter);
 router.use(kycRouter);
 router.use(ndprRouter);
+router.use(manufacturerRouter);
+router.use(wholesaleRouter);
+router.use(manufacturerAdminRouter);
 
 export default router;
