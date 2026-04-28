@@ -117,14 +117,16 @@ export async function setupTotp(
   const hashedCodes = backupCodes.map(hashBackupCode);
   const id = newSafeId("mfa_");
   // UPSERT — re-enrolment overwrites a previous pending row. The
-  // backup-code array is passed as a single parameterised value (pg
-  // serialises a JS string[] into a text[] when the literal cast is
-  // attached) — never interpolate the array into the SQL string, even
-  // though the codes are internally generated; it would be a latent
-  // injection sink the moment the input source ever changes.
+  // backup-code array is passed as a single Postgres array literal
+  // text parameter ({a,b,c}) and cast to text[]. Drizzle's `sql`
+  // template tag expands raw JS arrays into a comma-separated list of
+  // placeholders ($n,$m,...) which Postgres reads as a row constructor —
+  // not what we want. Hashes are sha256 hex ([0-9a-f]{64}) so there is
+  // no interpolation risk in the literal; we still parameterise it.
+  const codesLiteral = `{${hashedCodes.join(",")}}`;
   await db.execute(sql`
     INSERT INTO mfa_enrollments (id, user_id, kind, secret_encrypted, status, backup_codes_hashed)
-    VALUES (${id}, ${userId}, 'totp', ${encryptSecret(secret)}, 'pending', ${hashedCodes}::text[])
+    VALUES (${id}, ${userId}, 'totp', ${encryptSecret(secret)}, 'pending', ${codesLiteral}::text[])
     ON CONFLICT (user_id, kind) DO UPDATE SET
       secret_encrypted = EXCLUDED.secret_encrypted,
       status = 'pending',

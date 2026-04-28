@@ -508,6 +508,29 @@ export default function Profile() {
                 />
               </Link>
               <Link
+                href="/account/security"
+                className={`w-full flex items-center justify-between p-4 border-b ${
+                  isDark
+                    ? "border-white/10 hover:bg-white/5"
+                    : "border-stone-200 hover:bg-stone-50"
+                }`}
+                data-testid="link-security"
+              >
+                <div className="flex items-center gap-3">
+                  <ShieldCheck
+                    className={`w-5 h-5 ${
+                      isDark ? "text-white/70" : "text-stone-500"
+                    }`}
+                  />
+                  <span className="font-medium">Security &amp; MFA</span>
+                </div>
+                <ChevronRight
+                  className={`w-4 h-4 ${
+                    isDark ? "text-white/30" : "text-stone-400"
+                  }`}
+                />
+              </Link>
+              <Link
                 href="/account/settings"
                 className={`w-full flex items-center justify-between p-4 ${
                   isDark ? "hover:bg-white/5" : "hover:bg-stone-50"

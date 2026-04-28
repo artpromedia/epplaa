@@ -39,6 +39,7 @@ import type {
   AdminRunReconciliation200,
   AdminScanTextBody,
   AdminTransitionCaseBody,
+  ApiError,
   AppendReturnMessageBody,
   ApplySellerBody,
   ApproveKycVerificationBody,
@@ -83,6 +84,11 @@ import type {
   ListReviewsParams,
   ListStreamMessages200,
   ListStreamMessagesParams,
+  MfaBackupCodeBody,
+  MfaSetupBody,
+  MfaSetupResult,
+  MfaStatus,
+  MfaVerifyBody,
   ModerationCase,
   ModerationCaseDetail,
   ModerationScanResult,
@@ -10346,6 +10352,426 @@ export const useRequestNdprRestrict = <
   TContext
 > => {
   return useMutation(getRequestNdprRestrictMutationOptions(options));
+};
+
+/**
+ * @summary Returns enrolment + assertion status and whether MFA is required for this user.
+ */
+export const getGetMfaStatusUrl = () => {
+  return `/api/mfa/status`;
+};
+
+export const getMfaStatus = async (
+  options?: RequestInit,
+): Promise<MfaStatus> => {
+  return customFetch<MfaStatus>(getGetMfaStatusUrl(), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetMfaStatusQueryKey = () => {
+  return [`/api/mfa/status`] as const;
+};
+
+export const getGetMfaStatusQueryOptions = <
+  TData = Awaited<ReturnType<typeof getMfaStatus>>,
+  TError = ErrorType<UnauthorizedResponse>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getMfaStatus>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetMfaStatusQueryKey();
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof getMfaStatus>>> = ({
+    signal,
+  }) => getMfaStatus({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getMfaStatus>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetMfaStatusQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getMfaStatus>>
+>;
+export type GetMfaStatusQueryError = ErrorType<UnauthorizedResponse>;
+
+/**
+ * @summary Returns enrolment + assertion status and whether MFA is required for this user.
+ */
+
+export function useGetMfaStatus<
+  TData = Awaited<ReturnType<typeof getMfaStatus>>,
+  TError = ErrorType<UnauthorizedResponse>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getMfaStatus>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetMfaStatusQueryOptions(options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Begin TOTP enrolment. Returns secret, otpauth URL, QR data URL, and one-time backup codes.
+ */
+export const getSetupMfaTotpUrl = () => {
+  return `/api/mfa/totp/setup`;
+};
+
+export const setupMfaTotp = async (
+  mfaSetupBody?: MfaSetupBody,
+  options?: RequestInit,
+): Promise<MfaSetupResult> => {
+  return customFetch<MfaSetupResult>(getSetupMfaTotpUrl(), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(mfaSetupBody),
+  });
+};
+
+export const getSetupMfaTotpMutationOptions = <
+  TError = ErrorType<UnauthorizedResponse | ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof setupMfaTotp>>,
+    TError,
+    { data: BodyType<MfaSetupBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof setupMfaTotp>>,
+  TError,
+  { data: BodyType<MfaSetupBody> },
+  TContext
+> => {
+  const mutationKey = ["setupMfaTotp"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof setupMfaTotp>>,
+    { data: BodyType<MfaSetupBody> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return setupMfaTotp(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type SetupMfaTotpMutationResult = NonNullable<
+  Awaited<ReturnType<typeof setupMfaTotp>>
+>;
+export type SetupMfaTotpMutationBody = BodyType<MfaSetupBody>;
+export type SetupMfaTotpMutationError = ErrorType<
+  UnauthorizedResponse | ApiError
+>;
+
+/**
+ * @summary Begin TOTP enrolment. Returns secret, otpauth URL, QR data URL, and one-time backup codes.
+ */
+export const useSetupMfaTotp = <
+  TError = ErrorType<UnauthorizedResponse | ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof setupMfaTotp>>,
+    TError,
+    { data: BodyType<MfaSetupBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof setupMfaTotp>>,
+  TError,
+  { data: BodyType<MfaSetupBody> },
+  TContext
+> => {
+  return useMutation(getSetupMfaTotpMutationOptions(options));
+};
+
+/**
+ * @summary Verify a 6-digit TOTP code. mode=activate flips a pending enrolment to active; mode=assert satisfies a recent-challenge requirement.
+ */
+export const getVerifyMfaTotpUrl = () => {
+  return `/api/mfa/totp/verify`;
+};
+
+export const verifyMfaTotp = async (
+  mfaVerifyBody: MfaVerifyBody,
+  options?: RequestInit,
+): Promise<Ok> => {
+  return customFetch<Ok>(getVerifyMfaTotpUrl(), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(mfaVerifyBody),
+  });
+};
+
+export const getVerifyMfaTotpMutationOptions = <
+  TError = ErrorType<BadRequestResponse | ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof verifyMfaTotp>>,
+    TError,
+    { data: BodyType<MfaVerifyBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof verifyMfaTotp>>,
+  TError,
+  { data: BodyType<MfaVerifyBody> },
+  TContext
+> => {
+  const mutationKey = ["verifyMfaTotp"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof verifyMfaTotp>>,
+    { data: BodyType<MfaVerifyBody> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return verifyMfaTotp(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type VerifyMfaTotpMutationResult = NonNullable<
+  Awaited<ReturnType<typeof verifyMfaTotp>>
+>;
+export type VerifyMfaTotpMutationBody = BodyType<MfaVerifyBody>;
+export type VerifyMfaTotpMutationError = ErrorType<
+  BadRequestResponse | ApiError
+>;
+
+/**
+ * @summary Verify a 6-digit TOTP code. mode=activate flips a pending enrolment to active; mode=assert satisfies a recent-challenge requirement.
+ */
+export const useVerifyMfaTotp = <
+  TError = ErrorType<BadRequestResponse | ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof verifyMfaTotp>>,
+    TError,
+    { data: BodyType<MfaVerifyBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof verifyMfaTotp>>,
+  TError,
+  { data: BodyType<MfaVerifyBody> },
+  TContext
+> => {
+  return useMutation(getVerifyMfaTotpMutationOptions(options));
+};
+
+/**
+ * @summary Consume a single-use backup code as an MFA assertion.
+ */
+export const getConsumeMfaBackupCodeUrl = () => {
+  return `/api/mfa/backup-code`;
+};
+
+export const consumeMfaBackupCode = async (
+  mfaBackupCodeBody: MfaBackupCodeBody,
+  options?: RequestInit,
+): Promise<Ok> => {
+  return customFetch<Ok>(getConsumeMfaBackupCodeUrl(), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(mfaBackupCodeBody),
+  });
+};
+
+export const getConsumeMfaBackupCodeMutationOptions = <
+  TError = ErrorType<BadRequestResponse | ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof consumeMfaBackupCode>>,
+    TError,
+    { data: BodyType<MfaBackupCodeBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof consumeMfaBackupCode>>,
+  TError,
+  { data: BodyType<MfaBackupCodeBody> },
+  TContext
+> => {
+  const mutationKey = ["consumeMfaBackupCode"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof consumeMfaBackupCode>>,
+    { data: BodyType<MfaBackupCodeBody> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return consumeMfaBackupCode(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type ConsumeMfaBackupCodeMutationResult = NonNullable<
+  Awaited<ReturnType<typeof consumeMfaBackupCode>>
+>;
+export type ConsumeMfaBackupCodeMutationBody = BodyType<MfaBackupCodeBody>;
+export type ConsumeMfaBackupCodeMutationError = ErrorType<
+  BadRequestResponse | ApiError
+>;
+
+/**
+ * @summary Consume a single-use backup code as an MFA assertion.
+ */
+export const useConsumeMfaBackupCode = <
+  TError = ErrorType<BadRequestResponse | ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof consumeMfaBackupCode>>,
+    TError,
+    { data: BodyType<MfaBackupCodeBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof consumeMfaBackupCode>>,
+  TError,
+  { data: BodyType<MfaBackupCodeBody> },
+  TContext
+> => {
+  return useMutation(getConsumeMfaBackupCodeMutationOptions(options));
+};
+
+/**
+ * @summary Remove the TOTP factor. Requires a recent assertion; otherwise returns 403.
+ */
+export const getDisableMfaTotpUrl = () => {
+  return `/api/mfa/totp/disable`;
+};
+
+export const disableMfaTotp = async (options?: RequestInit): Promise<Ok> => {
+  return customFetch<Ok>(getDisableMfaTotpUrl(), {
+    ...options,
+    method: "POST",
+  });
+};
+
+export const getDisableMfaTotpMutationOptions = <
+  TError = ErrorType<UnauthorizedResponse | ForbiddenResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof disableMfaTotp>>,
+    TError,
+    void,
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof disableMfaTotp>>,
+  TError,
+  void,
+  TContext
+> => {
+  const mutationKey = ["disableMfaTotp"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof disableMfaTotp>>,
+    void
+  > = () => {
+    return disableMfaTotp(requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type DisableMfaTotpMutationResult = NonNullable<
+  Awaited<ReturnType<typeof disableMfaTotp>>
+>;
+
+export type DisableMfaTotpMutationError = ErrorType<
+  UnauthorizedResponse | ForbiddenResponse
+>;
+
+/**
+ * @summary Remove the TOTP factor. Requires a recent assertion; otherwise returns 403.
+ */
+export const useDisableMfaTotp = <
+  TError = ErrorType<UnauthorizedResponse | ForbiddenResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof disableMfaTotp>>,
+    TError,
+    void,
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof disableMfaTotp>>,
+  TError,
+  void,
+  TContext
+> => {
+  return useMutation(getDisableMfaTotpMutationOptions(options));
 };
 
 export const getAdminDashboardUrl = () => {

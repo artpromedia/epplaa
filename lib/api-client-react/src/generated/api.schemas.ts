@@ -816,6 +816,81 @@ export interface Ok {
   ok: boolean;
 }
 
+/**
+ * @nullable
+ */
+export type MfaStatusKind =
+  | (typeof MfaStatusKind)[keyof typeof MfaStatusKind]
+  | null;
+
+export const MfaStatusKind = {
+  totp: "totp",
+} as const;
+
+/**
+ * @nullable
+ */
+export type MfaStatusRequiredReason =
+  | (typeof MfaStatusRequiredReason)[keyof typeof MfaStatusRequiredReason]
+  | null;
+
+export const MfaStatusRequiredReason = {
+  admin_role: "admin_role",
+  high_velocity: "high_velocity",
+} as const;
+
+export interface MfaStatus {
+  enrolled: boolean;
+  /** @nullable */
+  kind: MfaStatusKind;
+  /** @nullable */
+  enrolledAt: string | null;
+  /** @nullable */
+  lastUsedAt: string | null;
+  backupCodesRemaining: number;
+  recentlyAsserted: boolean;
+  required: boolean;
+  /** @nullable */
+  requiredReason: MfaStatusRequiredReason;
+  velocityNgnMinor: number;
+  velocityThresholdNgnMinor: number;
+}
+
+export interface MfaSetupBody {
+  /** Label rendered in the authenticator app (defaults to user id). */
+  accountLabel?: string;
+}
+
+export interface MfaSetupResult {
+  enrollmentId: string;
+  otpauthUrl: string;
+  qrCodeDataUrl: string;
+  secret: string;
+  backupCodes: string[];
+}
+
+/**
+ * activate flips a pending enrolment to active; assert satisfies a recent challenge for an already-active factor.
+ */
+export type MfaVerifyBodyMode =
+  (typeof MfaVerifyBodyMode)[keyof typeof MfaVerifyBodyMode];
+
+export const MfaVerifyBodyMode = {
+  activate: "activate",
+  assert: "assert",
+} as const;
+
+export interface MfaVerifyBody {
+  /** 6-digit TOTP code. */
+  code: string;
+  /** activate flips a pending enrolment to active; assert satisfies a recent challenge for an already-active factor. */
+  mode?: MfaVerifyBodyMode;
+}
+
+export interface MfaBackupCodeBody {
+  code: string;
+}
+
 export interface ReferralActivity {
   id: string;
   inviteeHandle: string;

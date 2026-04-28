@@ -14,12 +14,17 @@ import {
   Tag,
   Users,
   Wallet,
+  ShieldCheck,
+  ShieldAlert,
+  ChevronRight,
 } from "lucide-react";
+import { Link } from "wouter";
 import { enableWebPush, disableWebPush } from "@/lib/push";
 import { useTheme } from "@/lib/theme-context";
 import { useCountry } from "@/lib/country-context";
 import { useNotificationPrefs } from "@/lib/notification-prefs";
 import { useClerk } from "@clerk/clerk-react";
+import { useGetMfaStatus } from "@workspace/api-client-react";
 import { PageHeader } from "@/components/page-header";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { Switch } from "@/components/ui/switch";
@@ -33,6 +38,10 @@ export default function Settings() {
   const [prefs, setPrefs] = useNotificationPrefs();
   const { signOut } = useClerk();
   const [confirmingClear, setConfirmingClear] = useState(false);
+  const mfaStatusQuery = useGetMfaStatus({
+    query: { staleTime: 30_000 } as never,
+  });
+  const mfaStatus = mfaStatusQuery.data;
 
   const cardClass = isDark
     ? "bg-white/5 border-white/10"
@@ -74,6 +83,83 @@ export default function Settings() {
     <div className="flex flex-col h-full w-full">
       <PageHeader title="Settings" />
       <div className="px-4 pb-24 space-y-6">
+        {mfaStatus && mfaStatus.required && !mfaStatus.enrolled && (
+          <Link
+            href="/account/security"
+            className="block rounded-xl border border-red-500/40 bg-red-500/10 p-4"
+            data-testid="banner-mfa-required"
+          >
+            <div className="flex items-start gap-3">
+              <ShieldAlert className="w-5 h-5 text-red-500 mt-0.5 shrink-0" />
+              <div className="flex-1 min-w-0">
+                <p className="font-bold">MFA required</p>
+                <p
+                  className={`text-sm ${
+                    isDark ? "text-white/70" : "text-stone-600"
+                  }`}
+                >
+                  {mfaStatus.requiredReason === "high_velocity"
+                    ? "Your sales crossed the high-velocity threshold — set up MFA to keep selling."
+                    : "Operators must enrol an authenticator app."}
+                </p>
+              </div>
+              <ChevronRight
+                className={`w-4 h-4 mt-1 shrink-0 ${
+                  isDark ? "text-white/40" : "text-stone-400"
+                }`}
+              />
+            </div>
+          </Link>
+        )}
+
+        <section>
+          <h3 className={sectionLabel}>Security</h3>
+          <div className={`rounded-xl border overflow-hidden ${cardClass}`}>
+            <Link
+              href="/account/security"
+              className={`flex items-center justify-between p-4 ${
+                isDark ? "hover:bg-white/5" : "hover:bg-stone-50"
+              }`}
+              data-testid="link-account-security"
+            >
+              <div className="flex items-center gap-3 min-w-0">
+                <div
+                  className={`shrink-0 w-9 h-9 rounded-full flex items-center justify-center ${
+                    isDark
+                      ? "bg-white/10 text-white/80"
+                      : "bg-stone-100 text-stone-700"
+                  }`}
+                >
+                  <ShieldCheck className="w-5 h-5" />
+                </div>
+                <div className="min-w-0">
+                  <p className="font-medium truncate">
+                    Multi-factor authentication
+                  </p>
+                  <p
+                    className={`text-sm truncate ${
+                      isDark ? "text-white/50" : "text-stone-500"
+                    }`}
+                  >
+                    {mfaStatusQuery.isLoading
+                      ? "Loading…"
+                      : mfaStatus?.enrolled
+                        ? `Active · ${mfaStatus.backupCodesRemaining} backup codes left`
+                        : mfaStatus?.required
+                          ? "Required — set up your authenticator"
+                          : "Optional — recommended for sellers"}
+                  </p>
+                </div>
+              </div>
+              <ChevronRight
+                className={`w-4 h-4 shrink-0 ${
+                  isDark ? "text-white/30" : "text-stone-400"
+                }`}
+              />
+            </Link>
+          </div>
+        </section>
+
         <section>
           <h3 className={sectionLabel}>Notifications</h3>
           <div className={`rounded-xl border overflow-hidden ${cardClass}`}>

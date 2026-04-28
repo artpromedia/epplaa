@@ -1998,6 +1998,81 @@ export const RequestNdprRestrictResponse = zod.object({
   failureReason: zod.string().nullish(),
 });
 
+/**
+ * @summary Returns enrolment + assertion status and whether MFA is required for this user.
+ */
+export const GetMfaStatusResponse = zod.object({
+  enrolled: zod.boolean(),
+  kind: zod.union([zod.literal("totp"), zod.literal(null)]).nullable(),
+  enrolledAt: zod.string().nullable(),
+  lastUsedAt: zod.string().nullable(),
+  backupCodesRemaining: zod.number(),
+  recentlyAsserted: zod.boolean(),
+  required: zod.boolean(),
+  requiredReason: zod
+    .union([
+      zod.literal("admin_role"),
+      zod.literal("high_velocity"),
+      zod.literal(null),
+    ])
+    .nullable(),
+  velocityNgnMinor: zod.number(),
+  velocityThresholdNgnMinor: zod.number(),
+});
+
+/**
+ * @summary Begin TOTP enrolment. Returns secret, otpauth URL, QR data URL, and one-time backup codes.
+ */
+export const SetupMfaTotpBody = zod.object({
+  accountLabel: zod
+    .string()
+    .optional()
+    .describe("Label rendered in the authenticator app (defaults to user id)."),
+});
+
+export const SetupMfaTotpResponse = zod.object({
+  enrollmentId: zod.string(),
+  otpauthUrl: zod.string(),
+  qrCodeDataUrl: zod.string(),
+  secret: zod.string(),
+  backupCodes: zod.array(zod.string()),
+});
+
+/**
+ * @summary Verify a 6-digit TOTP code. mode=activate flips a pending enrolment to active; mode=assert satisfies a recent-challenge requirement.
+ */
+export const VerifyMfaTotpBody = zod.object({
+  code: zod.string().describe("6-digit TOTP code."),
+  mode: zod
+    .enum(["activate", "assert"])
+    .optional()
+    .describe(
+      "activate flips a pending enrolment to active; assert satisfies a recent challenge for an already-active factor.",
+    ),
+});
+
+export const VerifyMfaTotpResponse = zod.object({
+  ok: zod.boolean(),
+});
+
+/**
+ * @summary Consume a single-use backup code as an MFA assertion.
+ */
+export const ConsumeMfaBackupCodeBody = zod.object({
+  code: zod.string(),
+});
+
+export const ConsumeMfaBackupCodeResponse = zod.object({
+  ok: zod.boolean(),
+});
+
+/**
+ * @summary Remove the TOTP factor. Requires a recent assertion; otherwise returns 403.
+ */
+export const DisableMfaTotpResponse = zod.object({
+  ok: zod.boolean(),
+});
+
 export const AdminDashboardResponse = zod.object({
   openCases: zod.number(),
   dueSoon: zod.number(),

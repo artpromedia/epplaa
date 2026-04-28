@@ -32,6 +32,7 @@ tags:
   - { name: seller }
   - { name: admin }
   - { name: csrf }
+  - { name: mfa }
 paths:
   /healthz:
     get:
@@ -1723,6 +1724,67 @@ paths:
         "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/NdprRequest" } } } }
         "401": { $ref: "#/components/responses/Unauthorized" }
 
+  # --- MFA (TOTP enrolment) ---------------------------------------------------
+  /mfa/status:
+    get:
+      operationId: getMfaStatus
+      tags: [mfa]
+      summary: Returns enrolment + assertion status and whether MFA is required for this user.
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/MfaStatus" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /mfa/totp/setup:
+    post:
+      operationId: setupMfaTotp
+      tags: [mfa]
+      summary: Begin TOTP enrolment. Returns secret, otpauth URL, QR data URL, and one-time backup codes.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MfaSetupBody" }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/MfaSetupResult" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "500": { description: Setup failed, content: { application/json: { schema: { $ref: "#/components/schemas/ApiError" } } } }
+  /mfa/totp/verify:
+    post:
+      operationId: verifyMfaTotp
+      tags: [mfa]
+      summary: Verify a 6-digit TOTP code. mode=activate flips a pending enrolment to active; mode=assert satisfies a recent-challenge requirement.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MfaVerifyBody" }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Ok" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { description: Code rejected, content: { application/json: { schema: { $ref: "#/components/schemas/ApiError" } } } }
+  /mfa/backup-code:
+    post:
+      operationId: consumeMfaBackupCode
+      tags: [mfa]
+      summary: Consume a single-use backup code as an MFA assertion.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MfaBackupCodeBody" }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Ok" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { description: Code rejected, content: { application/json: { schema: { $ref: "#/components/schemas/ApiError" } } } }
+  /mfa/totp/disable:
+    post:
+      operationId: disableMfaTotp
+      tags: [mfa]
+      summary: Remove the TOTP factor. Requires a recent assertion; otherwise returns 403.
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Ok" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
   # --- Admin operator console -------------------------------------------------
   /admin/dashboard:
     get:
@@ -2852,6 +2914,64 @@ components:
       required: [ok]
       properties:
         ok: { type: boolean }
+
+    MfaStatus:
+      type: object
+      required:
+        [
+          enrolled,
+          kind,
+          enrolledAt,
+          lastUsedAt,
+          backupCodesRemaining,
+          recentlyAsserted,
+          required,
+          requiredReason,
+          velocityNgnMinor,
+          velocityThresholdNgnMinor,
+        ]
+      properties:
+        enrolled: { type: boolean }
+        kind: { type: ["string", "null"], enum: ["totp", null] }
+        enrolledAt: { type: ["string", "null"] }
+        lastUsedAt: { type: ["string", "null"] }
+        backupCodesRemaining: { type: integer }
+        recentlyAsserted: { type: boolean }
+        required: { type: boolean }
+        requiredReason:
+          type: ["string", "null"]
+          enum: ["admin_role", "high_velocity", null]
+        velocityNgnMinor: { type: integer }
+        velocityThresholdNgnMinor: { type: integer }
+    MfaSetupBody:
+      type: object
+      properties:
+        accountLabel: { type: string, description: "Label rendered in the authenticator app (defaults to user id)." }
+    MfaSetupResult:
+      type: object
+      required: [enrollmentId, otpauthUrl, qrCodeDataUrl, secret, backupCodes]
+      properties:
+        enrollmentId: { type: string }
+        otpauthUrl: { type: string }
+        qrCodeDataUrl: { type: string }
+        secret: { type: string }
+        backupCodes:
+          type: array
+          items: { type: string }
+    MfaVerifyBody:
+      type: object
+      required: [code]
+      properties:
+        code: { type: string, description: "6-digit TOTP code." }
+        mode:
+          type: string
+          enum: [activate, assert]
+          description: "activate flips a pending enrolment to active; assert satisfies a recent challenge for an already-active factor."
+    MfaBackupCodeBody:
+      type: object
+      required: [code]
+      properties:
+        code: { type: string }
 
     ReferralActivity:
       type: object

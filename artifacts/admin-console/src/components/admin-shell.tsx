@@ -2,6 +2,8 @@ import { ReactNode } from "react";
 import { Link, useLocation } from "wouter";
 import { useUser, UserButton } from "@clerk/clerk-react";
 import {
+  ShieldAlert,
+  ShieldCheck,
   LayoutDashboard,
   Inbox,
   Scale,
@@ -9,8 +11,9 @@ import {
   Ban,
   Users,
   TestTube2,
+  KeyRound,
 } from "lucide-react";
-import { useAdminMyRoles } from "@workspace/api-client-react";
+import { useAdminMyRoles, useGetMfaStatus } from "@workspace/api-client-react";
 import { cn } from "@/lib/utils";
 import epplaaLogo from "@assets/epplaa-logo-color-nobg.png";
 
@@ -28,6 +31,7 @@ const NAV: NavItem[] = [
   { href: "/takedowns", label: "Takedowns", icon: Ban },
   { href: "/users", label: "Users & roles", icon: Users },
   { href: "/scan", label: "Scan bench", icon: TestTube2 },
+  { href: "/security", label: "Security", icon: KeyRound },
 ];
 
 export function AdminShell({ children }: { children: ReactNode }) {
@@ -115,10 +119,43 @@ export function AdminShell({ children }: { children: ReactNode }) {
 
         <main className="flex-1 min-w-0 overflow-x-auto">
           <div className="px-4 sm:px-6 lg:px-8 py-6 max-w-7xl mx-auto w-full">
+            <MfaRequiredBanner />
             {children}
           </div>
         </main>
       </div>
+    </div>
+  );
+}
+
+function MfaRequiredBanner() {
+  const [location] = useLocation();
+  const statusQuery = useGetMfaStatus({ query: { staleTime: 30_000 } as never });
+  const status = statusQuery.data;
+  if (!status) return null;
+  if (location.startsWith("/security")) return null;
+  if (!status.required || status.enrolled) return null;
+  return (
+    <div
+      className="mb-4 flex items-start gap-3 rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm"
+      data-testid="banner-mfa-required"
+    >
+      <ShieldAlert className="w-5 h-5 mt-0.5 text-destructive shrink-0" />
+      <div className="flex-1 min-w-0">
+        <p className="font-medium text-destructive">MFA required</p>
+        <p className="text-xs text-muted-foreground mt-0.5">
+          {status.requiredReason === "admin_role"
+            ? "Operators must enrol an authenticator app before they can act on cases or payouts."
+            : "Your account crossed the high-velocity threshold and now requires MFA."}
+        </p>
+      </div>
+      <Link
+        href="/security"
+        data-testid="link-mfa-setup"
+        className="shrink-0 inline-flex items-center gap-1 rounded-md border border-destructive/40 bg-background px-3 py-1.5 text-xs font-medium hover-elevate"
+      >
+        <ShieldCheck className="w-3.5 h-3.5" /> Set up MFA
+      </Link>
     </div>
   );
 }
