@@ -21,6 +21,10 @@ import { __test__, getRateLimitStoreKind, pingRateLimitRedis } from "./apiRateLi
 beforeEach(() => {
   sentryCalls.exceptions.length = 0;
   sentryCalls.messages.length = 0;
+  // The module-level watcher is shared across cases and now also gets
+  // poked by every successful RedisStore.bump (recordSuccess). Reset it
+  // so leftover streak/breach state from a prior case can't bleed in.
+  __test__.redisFailureWatcher.__reset();
 });
 
 describe("InMemoryStore bucket exhaustion", () => {
@@ -279,6 +283,142 @@ describe("pingRateLimitRedis (module-level helper)", () => {
     // The helper must report `null` so /readyz skips the redis check.
     expect(__test__.store).toBeInstanceOf(__test__.InMemoryStore);
     await expect(pingRateLimitRedis(100)).resolves.toBeNull();
+  });
+});
+
+describe("RedisFailureWatcher recovery signaling", () => {
+  it("emits a paired recovery message after a degradation that paged on-call", () => {
+    const watcher = new __test__.RedisFailureWatcher({ threshold: 3, cooldownMs: 60_000 });
+    const t0 = 5_500_000;
+    // Three failures cross the threshold and emit the degraded alert.
+    for (let i = 0; i < 3; i++) {
+      watcher.record("rate_limit_redis_bump_failed", new Error("x"), t0 + i * 100);
+    }
+    expect(sentryCalls.messages).toHaveLength(1);
+    expect(sentryCalls.messages[0]!.message).toBe(
+      "rate_limit_redis_failure_threshold_breached",
+    );
+
+    // First success after the streak emits the recovery signal.
+    watcher.recordSuccess(t0 + 5_000);
+    expect(sentryCalls.messages).toHaveLength(2);
+    const recovery = sentryCalls.messages[1]!;
+    expect(recovery.message).toBe("rate_limit_redis_recovered");
+    const opts = recovery.options as {
+      level: string;
+      tags: Record<string, string>;
+      fingerprint: string[];
+      extra: Record<string, unknown>;
+    };
+    expect(opts.level).toBe("info");
+    expect(opts.tags).toEqual({
+      subsystem: "rate_limit",
+      alert: "rate_limit_store_recovered",
+    });
+    expect(opts.fingerprint).toEqual(["rate-limit-redis-recovered"]);
+    expect(opts.extra).toMatchObject({ durationMs: 5_000, failureCount: 3 });
+  });
+
+  it("stays silent for sub-threshold blips that never paged on-call", () => {
+    const watcher = new __test__.RedisFailureWatcher({ threshold: 5, cooldownMs: 60_000 });
+    const t0 = 5_600_000;
+    watcher.record("rate_limit_redis_bump_failed", new Error("x"), t0);
+    watcher.record("rate_limit_redis_bump_failed", new Error("x"), t0 + 1);
+    expect(sentryCalls.messages).toHaveLength(0);
+    watcher.recordSuccess(t0 + 100);
+    // No paired recovery event because no degraded alert ever fired.
+    expect(sentryCalls.messages).toHaveLength(0);
+  });
+
+  it("re-pages immediately after recovery when failures resume", () => {
+    const watcher = new __test__.RedisFailureWatcher({ threshold: 2, cooldownMs: 60_000 });
+    const t0 = 5_700_000;
+    watcher.record("rate_limit_redis_bump_failed", new Error("x"), t0);
+    watcher.record("rate_limit_redis_bump_failed", new Error("x"), t0 + 10);
+    expect(sentryCalls.messages).toHaveLength(1);
+    watcher.recordSuccess(t0 + 1_000);
+    expect(sentryCalls.messages).toHaveLength(2);
+    expect(sentryCalls.messages[1]!.message).toBe("rate_limit_redis_recovered");
+    // Recovery clears the cooldown gate and the rate-based window still
+    // contains the prior failures, so the very next failure re-pages
+    // instead of being silenced by leftover within-incident throttling.
+    watcher.record("rate_limit_redis_bump_failed", new Error("x"), t0 + 2_000);
+    expect(sentryCalls.messages).toHaveLength(3);
+    expect(sentryCalls.messages[2]!.message).toBe(
+      "rate_limit_redis_failure_threshold_breached",
+    );
+  });
+
+  it("still pages on a flapping outage where successes interleave with failures", () => {
+    // Locks in the rate-based breach detector: even with successes
+    // between failures, crossing the rolling-minute threshold must page.
+    // (Earlier prototype reset the rolling window on every success and
+    // would have silently missed a partial outage like this one.)
+    const watcher = new __test__.RedisFailureWatcher({ threshold: 3, cooldownMs: 60_000 });
+    const t0 = 5_800_000;
+    watcher.record("rate_limit_redis_bump_failed", new Error("x"), t0);
+    watcher.recordSuccess(t0 + 100);
+    watcher.record("rate_limit_redis_bump_failed", new Error("x"), t0 + 200);
+    watcher.recordSuccess(t0 + 300);
+    expect(sentryCalls.messages).toHaveLength(0);
+    // Third failure inside the rolling 60s window crosses threshold even
+    // though two successes have happened in between.
+    watcher.record("rate_limit_redis_bump_failed", new Error("x"), t0 + 400);
+    expect(sentryCalls.messages).toHaveLength(1);
+    expect(sentryCalls.messages[0]!.message).toBe(
+      "rate_limit_redis_failure_threshold_breached",
+    );
+  });
+});
+
+describe("RedisStore.bump emits recovery after a failure streak", () => {
+  it("notifies on first success after a streak that crossed the alert threshold", async () => {
+    let shouldFail = true;
+    const fakeRedis = {
+      defineCommand: () => {},
+      rateLimitBump: async () => {
+        if (shouldFail) throw new Error("simulated outage");
+        return [1, 0];
+      },
+    };
+    const store = new __test__.RedisStore(fakeRedis as never);
+    const threshold = __test__.redisFailureWatcher.thresholdPerMin;
+    const t0 = 6_500_000;
+    // Drive enough failures to cross the configured threshold. Each
+    // bump degrades open (allowed=true) but records a failure.
+    for (let i = 0; i < threshold; i++) {
+      const r = await store.bump("k", t0 + i, 1000, 5);
+      expect(r.allowed).toBe(true);
+    }
+    expect(
+      sentryCalls.messages.some(
+        (m) => m.message === "rate_limit_redis_failure_threshold_breached",
+      ),
+    ).toBe(true);
+
+    // Redis comes back; the next successful bump must emit the recovery
+    // signal so on-call can close the incident without polling /healthz.
+    shouldFail = false;
+    const recovered = await store.bump("k", t0 + 4_200, 1000, 5);
+    expect(recovered.allowed).toBe(true);
+    const recovery = sentryCalls.messages.find(
+      (m) => m.message === "rate_limit_redis_recovered",
+    );
+    expect(recovery).toBeDefined();
+    const opts = recovery!.options as {
+      tags: Record<string, string>;
+      extra: { durationMs: number; failureCount: number };
+    };
+    expect(opts.tags.alert).toBe("rate_limit_store_recovered");
+    expect(opts.extra.failureCount).toBe(threshold);
+    // Streak began at t0; recovery clock at t0 + 4_200 — duration must
+    // reflect the full incident window, not just the moment of recovery.
+    expect(opts.extra.durationMs).toBe(4_200);
+
+    // Subsequent successful bumps must not re-emit recovery.
+    const before = sentryCalls.messages.length;
+    await store.bump("k", t0 + 5_000, 1000, 5);
+    expect(sentryCalls.messages.length).toBe(before);
   });
 });
 

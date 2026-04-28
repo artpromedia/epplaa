@@ -58,8 +58,21 @@ interface BucketStore {
  *      avoid spamming on-call during a sustained outage.
  */
 class RedisFailureWatcher {
+  // Breach detection state — rate-based, untouched by recordSuccess so a
+  // partial outage where Redis flaps still trips the alert when the
+  // failure rate over the rolling 60s window crosses threshold.
   private timestamps: number[] = [];
   private lastBreachAt = 0;
+  // Recovery-incident state — describes the current "streak" between the
+  // last clean state and the next success. Reset on every recordSuccess
+  // independently of the breach detector above.
+  //   firstFailureAt          — when this streak began (for durationMs)
+  //   failuresSinceFirstFailure — how many failures it spans (for failureCount)
+  //   breachedThisIncident    — gates whether we actually emit recovery
+  //                             on the next success (avoid noise for blips)
+  private firstFailureAt: number | null = null;
+  private failuresSinceFirstFailure = 0;
+  private breachedThisIncident = false;
   readonly thresholdPerMin: number;
   readonly cooldownMs: number;
 
@@ -81,6 +94,11 @@ class RedisFailureWatcher {
       tags: { subsystem: "rate_limit", kind },
       level: "error",
     });
+    if (this.firstFailureAt === null) {
+      this.firstFailureAt = now;
+      this.failuresSinceFirstFailure = 0;
+    }
+    this.failuresSinceFirstFailure += 1;
     const cutoff = now - 60_000;
     this.timestamps.push(now);
     while (this.timestamps.length > 0 && this.timestamps[0]! <= cutoff) {
@@ -91,6 +109,7 @@ class RedisFailureWatcher {
       now - this.lastBreachAt >= this.cooldownMs
     ) {
       this.lastBreachAt = now;
+      this.breachedThisIncident = true;
       logger.error(
         { count: this.timestamps.length, threshold: this.thresholdPerMin },
         "rate_limit_redis_failure_threshold_breached",
@@ -113,10 +132,63 @@ class RedisFailureWatcher {
     }
   }
 
+  /**
+   * Called by `RedisStore.bump` after a successful Lua roundtrip. If we
+   * previously crossed the degraded-alert threshold (i.e. on-call was
+   * paged with `rate_limit_store_degraded`), emit a paired
+   * `rate_limit_store_recovered` signal so the incident timeline closes
+   * itself instead of relying on Sentry's auto-resolve / a manual
+   * `/healthz` poke.
+   *
+   * Recovery only fires for incidents we actually paged on. Sub-threshold
+   * blips reset the streak silently — emitting a "recovered" event for
+   * a degradation the team never saw would be pure noise.
+   */
+  recordSuccess(now: number = Date.now()): void {
+    const hadBreach = this.breachedThisIncident;
+    const startedAt = this.firstFailureAt;
+    const failureCount = this.failuresSinceFirstFailure;
+    // Reset recovery-incident state up front so a misbehaving Sentry
+    // transport can't leave us pinned in a degraded state. Note we do
+    // NOT touch `timestamps` or `lastBreachAt` here — those belong to
+    // the rate-based breach detector and must keep their rolling-minute
+    // semantics across partial outages where Redis flaps. See class doc.
+    this.firstFailureAt = null;
+    this.failuresSinceFirstFailure = 0;
+    this.breachedThisIncident = false;
+    if (!hadBreach || startedAt === null) return;
+    // Recovery is the true close of an alert window: drop the cooldown
+    // gate so a fresh outage right after recovery can re-page on-call
+    // instead of being silenced by leftover within-incident throttling.
+    this.lastBreachAt = 0;
+    const durationMs = Math.max(0, now - startedAt);
+    logger.info(
+      { durationMs, failureCount },
+      "rate_limit_redis_recovered",
+    );
+    captureMessage("rate_limit_redis_recovered", {
+      level: "info",
+      tags: {
+        subsystem: "rate_limit",
+        alert: "rate_limit_store_recovered",
+      },
+      extra: {
+        durationMs,
+        failureCount,
+      },
+      // Pair with the breach fingerprint so dashboards can correlate
+      // degraded↔recovered transitions for the same logical incident.
+      fingerprint: ["rate-limit-redis-recovered"],
+    });
+  }
+
   /** Test-only: reset internal counters between cases. */
   __reset(): void {
     this.timestamps = [];
     this.lastBreachAt = 0;
+    this.firstFailureAt = null;
+    this.failuresSinceFirstFailure = 0;
+    this.breachedThisIncident = false;
   }
 }
 
@@ -251,6 +323,11 @@ class RedisStore implements BucketStore {
         String(max),
         member,
       );
+      // Notify the failure watcher that Redis is healthy again. The
+      // watcher only emits a recovery signal when the prior streak
+      // actually crossed the degraded-alert threshold, so the common
+      // happy path is an O(1) bookkeeping reset.
+      redisFailureWatcher.recordSuccess(now);
       return {
         allowed: Number(allowed) === 1,
         retryAfterMs: Number(retryAfter),
@@ -265,7 +342,11 @@ class RedisStore implements BucketStore {
         { err: (err as Error).message },
         "rate_limit_redis_bump_failed",
       );
-      redisFailureWatcher.record("rate_limit_redis_bump_failed", err);
+      // Thread the bump's `now` so the watcher's first-failure timestamp
+      // and the eventual recovery `durationMs` share a clock — important
+      // for tests that drive synthetic time, and harmless in production
+      // where `now` is always Date.now().
+      redisFailureWatcher.record("rate_limit_redis_bump_failed", err, now);
       return { allowed: true, retryAfterMs: 0 };
     }
   }
