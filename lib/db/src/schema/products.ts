@@ -26,6 +26,14 @@ export const productsTable = pgTable("products", {
    */
   manufacturerUserId: text("manufacturer_user_id"),
   manufacturerShareBp: integer("manufacturer_share_bp").notNull().default(0),
+  /**
+   * Optional link to the underlying `manufacturer_listings.id` that this
+   * retail product is sourced from. When set, the buyer-facing product page
+   * can call `/api/wholesale/quote` against this listing to render a
+   * server-computed landed-cost preview (FOB + freight + duty + VAT + clearance)
+   * instead of falling back to a client-side estimate.
+   */
+  wholesaleListingId: text("wholesale_listing_id"),
   freeShipping: boolean("free_shipping").notNull().default(false),
   viewCount: integer("view_count").notNull().default(0),
   // search_vector tsvector GENERATED ALWAYS AS (

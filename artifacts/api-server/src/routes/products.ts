@@ -21,6 +21,13 @@ function rowToProduct(row: typeof schema.productsTable.$inferSelect) {
     variants: row.variants,
     category: row.category,
     countryCode: row.countryCode,
+    // Cross-border attribution + wholesale linkage. Buyer product page uses
+    // `wholesaleListingId` to fetch a server-computed landed-cost preview
+    // from `/api/wholesale/quote`; `manufacturerUserId` is exposed for
+    // attribution UI ("Imported by: <factory>").
+    manufacturerUserId: row.manufacturerUserId ?? null,
+    manufacturerShareBp: row.manufacturerShareBp,
+    wholesaleListingId: row.wholesaleListingId ?? null,
   };
 }
 

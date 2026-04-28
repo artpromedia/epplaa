@@ -736,6 +736,42 @@ async function loadSellerForUser(userId: string) {
 }
 
 /**
+ * Resolve the disbursement destination for a payout. Sellers and wallet
+ * withdrawals route through the seller profile (or the payout row itself
+ * for wallet kind). Manufacturer payouts route through the manufacturer
+ * profile — bank fields are stored in `manufacturers.application` jsonb
+ * so this returns a seller-shaped `{ application }` slice that the
+ * downstream gateway-call code can consume without a fork.
+ */
+async function loadPayoutDestination(
+  payout: typeof schema.payoutsTable.$inferSelect,
+): Promise<{ application: { bankCode?: string; bankAccount?: string; bankName?: string } | null } | null> {
+  if (payout.kind === "manufacturer_share") {
+    const [mfr] = await db
+      .select()
+      .from(schema.manufacturersTable)
+      .where(eq(schema.manufacturersTable.userId, payout.userId))
+      .limit(1);
+    if (!mfr) return null;
+    const app = (mfr.application as
+      | { bankCode?: string; bankAccount?: string; bankName?: string }
+      | null) ?? null;
+    return { application: app };
+  }
+  const seller = await loadSellerForUser(payout.userId);
+  if (!seller) return null;
+  // The downstream payout-call code reads `application.bankCode`,
+  // `application.bankAccount`, `application.bankName`. Sellers store
+  // those in `sellers.application` jsonb; cast through to the shared
+  // shape so both branches return the same projected slice.
+  return {
+    application: (seller.application as
+      | { bankCode?: string; bankAccount?: string; bankName?: string }
+      | null) ?? null,
+  };
+}
+
+/**
  * Run all due payouts whose hold has expired. Called by the payouts cron.
  * Returns the count of payouts processed.
  */
@@ -884,13 +920,14 @@ export async function processDuePayouts(): Promise<{ processed: number; failed: 
   let processed = 0;
   let failed = 0;
   for (const payout of stillDue) {
-    // Wallet withdrawals carry the destination on the payout row itself
-    // (non-seller users have no `sellers.application`). Seller- and
-    // manufacturer-share payouts still resolve from the seller profile.
-    const seller =
-      payout.kind === "wallet_withdrawal" ? null : await loadSellerForUser(payout.userId);
-    const application =
-      (seller?.application as { bankCode?: string; bankAccount?: string; bankName?: string } | null) ?? null;
+    // Wallet withdrawals carry the destination on the payout row itself.
+    // Seller payouts resolve from the seller profile; manufacturer payouts
+    // resolve from the manufacturer profile (Flutterwave international
+    // rail). loadPayoutDestination handles the dispatch and returns a
+    // seller-shaped `{ application }` slice in both cases.
+    const dest =
+      payout.kind === "wallet_withdrawal" ? null : await loadPayoutDestination(payout);
+    const application = dest?.application ?? null;
     const bankCode = (payout.bankCode || application?.bankCode || "").trim();
     const accountNumber = ((payout as { bankAccount?: string }).bankAccount || application?.bankAccount || "").trim();
     const accountName =

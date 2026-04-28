@@ -409,6 +409,9 @@ function LandedCostPreview({
         };
         if (cancelled) return;
         setServerBreakdown({
+          isImport: true,
+          shipMode: mode,
+          originCountry,
           fobMinor: data.breakdown.fobInDestMinor,
           freightMinor: data.breakdown.freightMinor,
           insuranceMinor: data.breakdown.insuranceMinor,

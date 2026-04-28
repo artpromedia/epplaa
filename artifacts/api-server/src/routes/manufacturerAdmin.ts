@@ -262,6 +262,18 @@ router.post("/admin/bonded-inventory/:wholesaleOrderId/arrived", requireRole(ADM
     })
     .returning();
   await db.update(schema.wholesaleOrdersTable).set({ status: "warehoused" }).where(eq(schema.wholesaleOrdersTable.id, orderId));
+  // Append a customs/timeline event so the manufacturer + seller order pages
+  // see the bonded-warehouse arrival in the chronological timeline alongside
+  // shipping and customs events. The order-detail UI orders these by
+  // createdAt asc so the new "warehouse_arrived" row appears in sequence.
+  await db.insert(schema.customsEventsTable).values({
+    id: newCustomsEventId(),
+    wholesaleOrderId: orderId,
+    kind: "warehouse_arrived",
+    note: `Arrived at bonded warehouse ${warehouseCode}`,
+    actorUserId: adminId,
+    payload: { warehouseCode, qty: finalQty },
+  });
   await recordAudit({
     actorId: adminId,
     action: "admin.bonded.arrived",
@@ -318,6 +330,20 @@ router.post("/admin/bonded-inventory/:wholesaleOrderId/released", requireRole(AD
       logger.error({ err: (err as Error).message, orderId }, "manufacturer_payout_enqueue_failed");
     }
   }
+  // Timeline event for bonded release. Mirrors the warehouse_arrived event
+  // and is what the manufacturer-portal Order Detail page renders next to
+  // customs clearance and freight legs.
+  await db.insert(schema.customsEventsTable).values({
+    id: newCustomsEventId(),
+    wholesaleOrderId: orderId,
+    kind: "warehouse_released",
+    note:
+      newOnHand === 0
+        ? `Fully released from bonded warehouse (${releaseQty} units)`
+        : `Released ${releaseQty} units; ${newOnHand} remain in bonded warehouse`,
+    actorUserId: adminId,
+    payload: { releaseQty, qtyOnHand: newOnHand, fullyDelivered: newOnHand === 0 },
+  });
   await recordAudit({
     actorId: adminId,
     action: "admin.bonded.released",

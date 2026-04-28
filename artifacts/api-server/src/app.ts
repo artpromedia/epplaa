@@ -226,7 +226,17 @@ if (process.env.NODE_ENV !== "test") {
   // currency without a separate table.
   void initManufacturerSchema()
     .then(() => seedFxRatesIfEmpty())
+    .then(() => refreshFxRates())
     .catch((err) => logger.error({ err: (err as Error).message }, "manufacturer_schema_init_failed"));
+  // Daily FX refresh — pulls fresh CBN/OXR rates so quoted/landed prices in
+  // Naira don't drift. The seed/refresh on boot covers cold start; the
+  // setInterval ensures long-running processes refresh every 24h without
+  // an external cron.
+  setInterval(() => {
+    refreshFxRates().catch((err) =>
+      logger.error({ err: (err as Error).message }, "fx_rates_refresh_failed"),
+    );
+  }, 24 * 60 * 60 * 1000);
   // Backfill sanctions screening for every manufacturer attributed to a
   // product. Manufacturers don't have a dedicated onboarding route in this
   // codebase — they're seeded/imported externally — so without this pass

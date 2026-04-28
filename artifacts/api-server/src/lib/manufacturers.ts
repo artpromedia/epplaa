@@ -178,6 +178,17 @@ export async function initManufacturerSchema(): Promise<void> {
   await db.execute(sql`ALTER TABLE payouts ADD COLUMN IF NOT EXISTS kind text NOT NULL DEFAULT 'seller_share';`);
   await db.execute(sql`ALTER TABLE payouts ADD COLUMN IF NOT EXISTS currency_code text NOT NULL DEFAULT 'NGN';`);
 
+  // Additive link from a retail `products` row to its underlying wholesale
+  // listing. Lets the buyer product page fetch a server-side landed-cost
+  // quote instead of estimating client-side. Nullable — products that are
+  // not sourced cross-border simply leave it unset.
+  await db.execute(
+    sql`ALTER TABLE products ADD COLUMN IF NOT EXISTS wholesale_listing_id text;`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS products_wholesale_listing_idx ON products (wholesale_listing_id);`,
+  );
+
   logger.info("manufacturer_schema_initialised");
 }
 
