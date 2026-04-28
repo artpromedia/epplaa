@@ -41,6 +41,18 @@ export async function initSecuritySchema(): Promise<void> {
   await db.execute(
     sql`CREATE INDEX IF NOT EXISTS mfa_enrollments_user_idx ON mfa_enrollments (user_id);`,
   );
+  // Bookkeeping for the low-backup-codes email nudge. Stores the most
+  // strict threshold the user has already been emailed about ("low" or
+  // "empty"). NULL means "never nudged" (or freshly regenerated). The
+  // scheduled `nudgeLowBackupCodes` job only emails when the current
+  // remaining count crosses INTO a stricter threshold than this value,
+  // so daily ticks don't loop emails on every run. Cleared back to NULL
+  // by `regenerateBackupCodes` so a user who refills to 10 codes can be
+  // nudged again next time they drain below the threshold.
+  await db.execute(sql`
+    ALTER TABLE mfa_enrollments
+    ADD COLUMN IF NOT EXISTS last_low_backup_codes_nudge_threshold text;
+  `);
 
   await db.execute(sql`
     CREATE TABLE IF NOT EXISTS mfa_challenges (

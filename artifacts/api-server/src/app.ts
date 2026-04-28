@@ -27,7 +27,7 @@ import { initOtel } from "./lib/otel";
 import { refreshFxRates, seedFxRatesIfEmpty } from "./lib/fx";
 import { processDueNdprRequests, requireProcessingNotRestricted } from "./lib/ndpr";
 import { quarterlyResweep, bootstrapAllManufacturerScreenings } from "./lib/sanctions";
-import { pruneStalePendingMfaEnrollments } from "./lib/mfa";
+import { nudgeLowBackupCodes, pruneStalePendingMfaEnrollments } from "./lib/mfa";
 import { runRetentionSweep } from "./lib/retention";
 import { securityHeaders } from "./middlewares/securityHeaders";
 import { csrfMiddleware } from "./middlewares/csrf";
@@ -248,6 +248,28 @@ function startScheduledJobs(): void {
       );
     }, MFA_PRUNE_INTERVAL_MS);
   }, 75_000);
+  // Email a nudge when a seller's TOTP backup codes are running low
+  // (fewer than 3 remaining) or have run out. Daily cadence is enough
+  // because backup codes are consumed at most a handful of times a year
+  // by any one user; the per-row threshold marker prevents the same
+  // user being re-emailed on every tick. Stagger the first run so boot
+  // isn't blocked.
+  setTimeout(() => {
+    void nudgeLowBackupCodes().catch((err) =>
+      logger.error(
+        { err: (err as Error).message },
+        "mfa_backup_codes_low_nudge_failed",
+      ),
+    );
+    setInterval(() => {
+      void nudgeLowBackupCodes().catch((err) =>
+        logger.error(
+          { err: (err as Error).message },
+          "mfa_backup_codes_low_nudge_failed",
+        ),
+      );
+    }, DAY_MS);
+  }, 210_000);
 }
 
 if (process.env.NODE_ENV !== "test") {

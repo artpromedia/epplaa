@@ -221,6 +221,11 @@ export async function consumeBackupCode(
  *
  * The UPDATE is gated on `status = 'active'` so a stale `pending` row
  * cannot be used to mint codes for an unverified secret.
+ *
+ * Side effect: clears `last_low_backup_codes_nudge_threshold` so a user
+ * who refills to 10 codes can be nudged again the next time they drain
+ * below the threshold. Without this reset, a seller who hit "empty",
+ * regenerated, then drained back down would never see a second email.
  */
 export async function regenerateBackupCodes(
   userId: string,
@@ -231,6 +236,7 @@ export async function regenerateBackupCodes(
   const upd = await db.execute<{ id: string }>(sql`
     UPDATE mfa_enrollments
     SET backup_codes_hashed = ${codesLiteral}::text[],
+        last_low_backup_codes_nudge_threshold = NULL,
         updated_at = now()
     WHERE user_id = ${userId} AND kind = 'totp' AND status = 'active'
     RETURNING id;
@@ -408,10 +414,185 @@ export async function thirtyDayVelocityNgnMinor(userId: string): Promise<number>
   }
 }
 
+/**
+ * Threshold the low-backup-codes email nudge fires under. Anything
+ * strictly below this counts as "low". Kept generous (3) to match the
+ * in-app banner copy that already tells users they have "fewer than 3
+ * remaining". Overridable for tests.
+ */
+export const LOW_BACKUP_CODES_THRESHOLD = 3;
+
+/**
+ * Severity strings stored in `mfa_enrollments.last_low_backup_codes_nudge_threshold`.
+ * Ordered from least to most severe — `severityRank` is what the job
+ * uses to decide if the user has crossed INTO a stricter threshold and
+ * therefore deserves a fresh email.
+ */
+type NudgeThreshold = "low" | "empty";
+
+function severityRank(t: NudgeThreshold | null): number {
+  if (t === "empty") return 2;
+  if (t === "low") return 1;
+  return 0;
+}
+
+function thresholdForRemaining(remaining: number): NudgeThreshold | null {
+  if (remaining <= 0) return "empty";
+  if (remaining < LOW_BACKUP_CODES_THRESHOLD) return "low";
+  return null;
+}
+
+interface NudgeRow extends Record<string, unknown> {
+  user_id: string;
+  remaining: number;
+  last_threshold: NudgeThreshold | null;
+}
+
+export interface NudgeLowBackupCodesResult {
+  scanned: number;
+  emailed: number;
+}
+
+/**
+ * Scan active TOTP enrolments and email each user once per crossing
+ * into a stricter backup-code threshold ("low" → fewer than
+ * `LOW_BACKUP_CODES_THRESHOLD` remaining; "empty" → zero remaining).
+ *
+ * Loop-safety: every nudge updates `last_low_backup_codes_nudge_threshold`
+ * to the threshold we just emailed about. Subsequent ticks compare the
+ * current threshold's severity against the stored one and only re-send
+ * when it climbs (e.g. previously "low", now "empty"). A user sitting
+ * stably at "low" for weeks gets exactly one email; if they then run
+ * out, they get one more for "empty". Regenerating codes resets the
+ * marker to NULL (see `regenerateBackupCodes`) so a future drain
+ * triggers fresh nudges.
+ *
+ * Channel selection: the underlying `enqueueNotification` resolves the
+ * `mfa_backup_codes_low` event to email per the defaults in
+ * `notifications/prefs.ts`. The category gate is `null` for this event
+ * type, so a seller who has muted promotional categories still receives
+ * this security nudge.
+ *
+ * The DB UPDATE is `RETURNING id` and gated on the previous threshold
+ * value still matching, so two overlapping ticks cannot both stamp the
+ * row and double-send. The nudge is enqueued only when the UPDATE
+ * actually claimed the row.
+ */
+export async function nudgeLowBackupCodes(): Promise<NudgeLowBackupCodesResult> {
+  // Lazy import to break a potential init-order cycle between mfa.ts
+  // and the notifications module (notifications imports schema, which
+  // touches db on first import; mfa.ts is also pulled in at boot).
+  const { enqueueNotification } = await import("./notifications");
+  // Only consider rows where the live remaining count is in a nudge
+  // band — otherwise we'd scan every active enrolment every day.
+  const res = await db.execute<NudgeRow>(sql`
+    SELECT user_id,
+           COALESCE(array_length(backup_codes_hashed, 1), 0) AS remaining,
+           last_low_backup_codes_nudge_threshold AS last_threshold
+    FROM mfa_enrollments
+    WHERE kind = 'totp'
+      AND status = 'active'
+      AND COALESCE(array_length(backup_codes_hashed, 1), 0) < ${LOW_BACKUP_CODES_THRESHOLD};
+  `);
+  const rows = res.rows;
+  let emailed = 0;
+  for (const row of rows) {
+    const remaining = Number(row.remaining ?? 0);
+    const current = thresholdForRemaining(remaining);
+    if (!current) continue;
+    if (severityRank(current) <= severityRank(row.last_threshold)) {
+      continue;
+    }
+    // Atomic claim: only stamp + emit if the row's stored threshold
+    // hasn't already been advanced by a concurrent worker AND the
+    // remaining count still maps to the same threshold we read from
+    // the SELECT snapshot. The `IS NOT DISTINCT FROM` form treats NULL
+    // as a value so the guard works for users who have never been
+    // nudged before. The remaining-count predicate closes the
+    // SELECT-then-UPDATE race where a user regenerated codes (refilled
+    // to 10) between the scan and the claim — without it we could
+    // stamp + email a "low" nudge for a user who is now at 10.
+    const remainingPredicate =
+      current === "empty"
+        ? sql`COALESCE(array_length(backup_codes_hashed, 1), 0) = 0`
+        : sql`COALESCE(array_length(backup_codes_hashed, 1), 0) BETWEEN 1 AND ${LOW_BACKUP_CODES_THRESHOLD - 1}`;
+    const stamped = await db.execute<{ id: string }>(sql`
+      UPDATE mfa_enrollments
+      SET last_low_backup_codes_nudge_threshold = ${current},
+          updated_at = now()
+      WHERE user_id = ${row.user_id}
+        AND kind = 'totp'
+        AND status = 'active'
+        AND last_low_backup_codes_nudge_threshold IS NOT DISTINCT FROM ${row.last_threshold}
+        AND ${remainingPredicate}
+      RETURNING id;
+    `);
+    if (stamped.rows.length === 0) continue;
+    const isEmpty = current === "empty";
+    const title = isEmpty
+      ? "You're out of MFA backup codes"
+      : "Your MFA backup codes are running low";
+    const body = isEmpty
+      ? "You have no backup codes left for two-factor sign-in. Generate a new set now so you don't lose access to your account."
+      : `You have ${remaining} backup code${remaining === 1 ? "" : "s"} left for two-factor sign-in. Generate a fresh set so you stay covered if you ever lose your authenticator app.`;
+    try {
+      await enqueueNotification({
+        userId: row.user_id,
+        eventType: "mfa_backup_codes_low",
+        payload: {
+          title,
+          body,
+          url: "/account/security",
+          remaining,
+          threshold: current,
+        },
+      });
+      emailed++;
+    } catch (err) {
+      // Roll the marker back so the next tick retries this user. We
+      // logged the failure; we'd rather double-email later than fail
+      // silently and lock the user out of ever being warned. The
+      // rollback is gated on the marker still equalling the value we
+      // just stamped so a concurrent worker that legitimately
+      // advanced the marker further (e.g. crossed into "empty") is
+      // not regressed back to a weaker threshold by this rollback.
+      logger.warn(
+        { userId: row.user_id, err: (err as Error).message },
+        "mfa_backup_codes_low_enqueue_failed",
+      );
+      await db
+        .execute(sql`
+          UPDATE mfa_enrollments
+          SET last_low_backup_codes_nudge_threshold = ${row.last_threshold},
+              updated_at = now()
+          WHERE user_id = ${row.user_id}
+            AND kind = 'totp'
+            AND status = 'active'
+            AND last_low_backup_codes_nudge_threshold IS NOT DISTINCT FROM ${current};
+        `)
+        .catch(() => undefined);
+    }
+  }
+  if (emailed > 0) {
+    logger.info(
+      { scanned: rows.length, emailed },
+      "mfa_backup_codes_low_nudge_run",
+    );
+  } else {
+    logger.debug(
+      { scanned: rows.length, emailed: 0 },
+      "mfa_backup_codes_low_nudge_noop",
+    );
+  }
+  return { scanned: rows.length, emailed };
+}
+
 export const __test__ = {
   hashBackupCode,
   generateBackupCodes,
   encryptionKey,
+  thresholdForRemaining,
+  severityRank,
 };
 
 // Re-exports kept for tree-shaking-friendly imports in tests.

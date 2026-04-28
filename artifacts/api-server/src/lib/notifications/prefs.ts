@@ -22,6 +22,10 @@ const EVENT_CHANNEL_DEFAULTS: Record<EventType, ChannelKind[]> = {
   wallet_credit: ["push", "whatsapp"],
   low_stock: ["push", "email"],
   box_reservation_expired: ["whatsapp", "sms", "push"],
+  // Security nudge — email only. The whole point of this event is to
+  // reach a seller who hasn't opened the app in months, so transient
+  // channels (push/whatsapp) aren't the right delivery surface.
+  mfa_backup_codes_low: ["email"],
 };
 
 /**
@@ -43,6 +47,9 @@ const EVENT_CATEGORY: Record<EventType, "orderUpdates" | "liveDrops" | "promos" 
   wallet_credit: "walletCredits",
   low_stock: "orderUpdates",
   box_reservation_expired: "orderUpdates",
+  // Security: never gated by user preference categories — if you have
+  // MFA enabled, you get told when your backup codes run out.
+  mfa_backup_codes_low: null,
 };
 
 const COUNTRY_TZ: Record<string, string> = {

@@ -46,6 +46,9 @@ d("mfa db integration", () => {
     await db.execute(
       sql`DELETE FROM mfa_challenges WHERE user_id LIKE ${TEST_USER_PREFIX + "%"};`,
     );
+    await db.execute(
+      sql`DELETE FROM notifications_outbox WHERE user_id LIKE ${TEST_USER_PREFIX + "%"};`,
+    );
   }
 
   beforeAll(async () => {
@@ -287,6 +290,169 @@ d("mfa db integration", () => {
     const ids = remaining.rows.map((r) => r.user_id);
     expect(ids).toContain(justInsideUser);
     expect(ids).not.toContain(justOutsideUser);
+  });
+
+  /*
+   * --- Low-backup-codes email nudge ---
+   *
+   * The job scans active TOTP enrolments and emails users when the
+   * remaining backup-code count drops below the warning threshold (3)
+   * or hits zero. We assert:
+   *   1. A user with plenty of codes is left alone.
+   *   2. A user newly under the threshold is emailed exactly once
+   *      across multiple ticks (no loop).
+   *   3. Crossing into "empty" after a prior "low" nudge sends a fresh
+   *      email at the higher severity.
+   *   4. Regenerating codes back to 10 clears the marker, so a future
+   *      drain triggers the nudge again.
+   *
+   * The notifications outbox is the side-effect surface — the job
+   * enqueues a row per delivery channel via the existing pipeline, and
+   * the test inspects the resulting `notifications_outbox` rows
+   * directly so we don't need to spin up the drain worker.
+   */
+
+  async function setupActiveUser(remaining: number): Promise<string> {
+    const userId = makeUserId();
+    const result = await mfa.setupTotp(userId, `${userId}@example.com`);
+    authenticator.options = { window: 1, step: 30 };
+    await mfa.verifyTotpAndActivate(userId, authenticator.generate(result.secret));
+    if (remaining < 10) {
+      // Truncate the backup-code array directly so we don't have to
+      // round-trip through hashBackupCode + consumeBackupCode for each
+      // entry. The exact hash values aren't observed by the nudge.
+      await db.execute(sql`
+        UPDATE mfa_enrollments
+           SET backup_codes_hashed = backup_codes_hashed[1:${remaining}],
+               last_low_backup_codes_nudge_threshold = NULL,
+               updated_at = now()
+         WHERE user_id = ${userId};
+      `);
+    }
+    return userId;
+  }
+
+  async function outboxRowsFor(userId: string): Promise<
+    { event_type: string; channel: string; payload: Record<string, unknown> }[]
+  > {
+    const r = await db.execute<{
+      event_type: string;
+      channel: string;
+      payload: Record<string, unknown>;
+    }>(sql`
+      SELECT event_type, channel, payload
+        FROM notifications_outbox
+       WHERE user_id = ${userId}
+       ORDER BY created_at ASC;
+    `);
+    return r.rows;
+  }
+
+  it("nudgeLowBackupCodes leaves users with >= threshold codes untouched", async () => {
+    const fineUser = await setupActiveUser(7);
+    const result = await mfa.nudgeLowBackupCodes();
+    expect(result.emailed).toBe(0);
+    expect(await outboxRowsFor(fineUser)).toHaveLength(0);
+    const row = await db.execute<{ last: string | null }>(sql`
+      SELECT last_low_backup_codes_nudge_threshold AS last
+        FROM mfa_enrollments WHERE user_id = ${fineUser};
+    `);
+    expect(row.rows[0]!.last).toBeNull();
+  });
+
+  it("nudgeLowBackupCodes emails a low user exactly once across repeated ticks", async () => {
+    const lowUser = await setupActiveUser(2);
+
+    const first = await mfa.nudgeLowBackupCodes();
+    expect(first.emailed).toBeGreaterThanOrEqual(1);
+
+    const rowsAfterFirst = await outboxRowsFor(lowUser);
+    expect(rowsAfterFirst).toHaveLength(1);
+    expect(rowsAfterFirst[0]!.event_type).toBe("mfa_backup_codes_low");
+    expect(rowsAfterFirst[0]!.channel).toBe("email");
+    const payload = rowsAfterFirst[0]!.payload as Record<string, unknown>;
+    expect(payload.threshold).toBe("low");
+    expect(payload.remaining).toBe(2);
+    expect(String(payload.url)).toBe("/account/security");
+    expect(String(payload.title)).toMatch(/running low/i);
+
+    const stamped = await db.execute<{ last: string | null }>(sql`
+      SELECT last_low_backup_codes_nudge_threshold AS last
+        FROM mfa_enrollments WHERE user_id = ${lowUser};
+    `);
+    expect(stamped.rows[0]!.last).toBe("low");
+
+    // Subsequent ticks while the user is still at "low" must be a no-op.
+    await mfa.nudgeLowBackupCodes();
+    await mfa.nudgeLowBackupCodes();
+    expect(await outboxRowsFor(lowUser)).toHaveLength(1);
+  });
+
+  it("nudgeLowBackupCodes escalates to a fresh 'empty' email after a prior 'low' nudge", async () => {
+    const u = await setupActiveUser(2);
+    await mfa.nudgeLowBackupCodes();
+    expect((await outboxRowsFor(u)).filter((r) => (r.payload as { threshold?: string }).threshold === "low"))
+      .toHaveLength(1);
+
+    // Drain the rest of the codes — now the user is at zero.
+    await db.execute(sql`
+      UPDATE mfa_enrollments SET backup_codes_hashed = ARRAY[]::text[]
+       WHERE user_id = ${u};
+    `);
+
+    const second = await mfa.nudgeLowBackupCodes();
+    expect(second.emailed).toBeGreaterThanOrEqual(1);
+
+    const rows = await outboxRowsFor(u);
+    expect(rows).toHaveLength(2);
+    const last = rows[1]!;
+    const lastPayload = last.payload as Record<string, unknown>;
+    expect(lastPayload.threshold).toBe("empty");
+    expect(lastPayload.remaining).toBe(0);
+    expect(String(lastPayload.title)).toMatch(/out of/i);
+
+    const stamped = await db.execute<{ last: string | null }>(sql`
+      SELECT last_low_backup_codes_nudge_threshold AS last
+        FROM mfa_enrollments WHERE user_id = ${u};
+    `);
+    expect(stamped.rows[0]!.last).toBe("empty");
+
+    // A third tick at empty must NOT enqueue another row.
+    await mfa.nudgeLowBackupCodes();
+    expect(await outboxRowsFor(u)).toHaveLength(2);
+  });
+
+  it("regenerateBackupCodes clears the nudge marker so a future drain re-emails", async () => {
+    const u = await setupActiveUser(1);
+    await mfa.nudgeLowBackupCodes();
+    expect(await outboxRowsFor(u)).toHaveLength(1);
+
+    const regenerated = await mfa.regenerateBackupCodes(u);
+    expect(regenerated).not.toBeNull();
+    expect(regenerated).toHaveLength(10);
+
+    const cleared = await db.execute<{ last: string | null; remaining: number }>(sql`
+      SELECT last_low_backup_codes_nudge_threshold AS last,
+             COALESCE(array_length(backup_codes_hashed, 1), 0) AS remaining
+        FROM mfa_enrollments WHERE user_id = ${u};
+    `);
+    expect(cleared.rows[0]!.last).toBeNull();
+    expect(Number(cleared.rows[0]!.remaining)).toBe(10);
+
+    // Nothing should fire while the user is back above the threshold.
+    await mfa.nudgeLowBackupCodes();
+    expect(await outboxRowsFor(u)).toHaveLength(1);
+
+    // Drain again and re-run — a fresh "low" email is expected because
+    // the marker was cleared by regeneration.
+    await db.execute(sql`
+      UPDATE mfa_enrollments SET backup_codes_hashed = backup_codes_hashed[1:1]
+       WHERE user_id = ${u};
+    `);
+    await mfa.nudgeLowBackupCodes();
+    const rows = await outboxRowsFor(u);
+    expect(rows).toHaveLength(2);
+    expect((rows[1]!.payload as { threshold?: string }).threshold).toBe("low");
   });
 
   it("disableMfa removes both enrolment and challenge rows for the user", async () => {
