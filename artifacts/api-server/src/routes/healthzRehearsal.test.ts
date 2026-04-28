@@ -22,7 +22,9 @@ vi.mock("../lib/logger", () => ({
 }));
 
 const { dbHealthWatcher } = await import("../lib/subsystemHealth");
-const { default: rehearsalRouter } = await import("./healthzRehearsal");
+const { default: rehearsalRouter, assertRehearsalKillSwitchSafe } = await import(
+  "./healthzRehearsal"
+);
 const { csrfMiddleware } = await import("../middlewares/csrf");
 
 function buildApp(): Express {
@@ -388,5 +390,104 @@ describe("integration: rehearsal endpoints behind real CSRF middleware", () => {
       .send({});
     expect(res.status).toBe(403);
     expect(res.body.error).toBe("csrf_failed");
+  });
+});
+
+describe("assertRehearsalKillSwitchSafe — boot-time guard", () => {
+  // The boot-time guard turns the runbook's "enable on staging only -
+  // never production" sentence into a technical control: if the env
+  // ever drifts (e.g. a copy-paste of staging env vars into a prod
+  // deploy), the api-server refuses to start instead of silently
+  // exposing /api/_rehearsal/inject-stuck-degraded. We verify both the
+  // staging-allowed path (must not block) and the production-rejected
+  // path (must block + log a clear error explaining why).
+
+  type ErrorCall = [obj: unknown, msg: string];
+  function buildLogSink(): {
+    error: (obj: unknown, msg: string) => void;
+    calls: ErrorCall[];
+  } {
+    const calls: ErrorCall[] = [];
+    return {
+      error: (obj, msg) => {
+        calls.push([obj, msg]);
+      },
+      calls,
+    };
+  }
+
+  it("allows boot when HEALTHZ_REHEARSAL_ENABLED=1 in a non-production environment (staging)", () => {
+    const log = buildLogSink();
+    const result = assertRehearsalKillSwitchSafe(
+      { NODE_ENV: "staging", HEALTHZ_REHEARSAL_ENABLED: "1" },
+      log,
+    );
+    expect(result.ok).toBe(true);
+    expect(log.calls).toEqual([]);
+  });
+
+  it("allows boot when HEALTHZ_REHEARSAL_ENABLED=1 with NODE_ENV=development", () => {
+    // Local-dev parity with staging — the kill switch is allowed
+    // anywhere that isn't literally NODE_ENV=production.
+    const log = buildLogSink();
+    const result = assertRehearsalKillSwitchSafe(
+      { NODE_ENV: "development", HEALTHZ_REHEARSAL_ENABLED: "1" },
+      log,
+    );
+    expect(result.ok).toBe(true);
+    expect(log.calls).toEqual([]);
+  });
+
+  it("allows boot in production when HEALTHZ_REHEARSAL_ENABLED is unset (the common, correct case)", () => {
+    const log = buildLogSink();
+    const result = assertRehearsalKillSwitchSafe(
+      { NODE_ENV: "production" },
+      log,
+    );
+    expect(result.ok).toBe(true);
+    expect(log.calls).toEqual([]);
+  });
+
+  it("allows boot in production when HEALTHZ_REHEARSAL_ENABLED is anything other than '1'", () => {
+    // Mirrors the request-time guard: only the literal "1" trips the
+    // boot guard, so a leftover `HEALTHZ_REHEARSAL_ENABLED=0` doesn't
+    // block legitimate prod deploys.
+    const log = buildLogSink();
+    for (const bogus of ["0", "true", "false", "yes", "no", "on", "off", " 1 "]) {
+      const result = assertRehearsalKillSwitchSafe(
+        { NODE_ENV: "production", HEALTHZ_REHEARSAL_ENABLED: bogus },
+        log,
+      );
+      expect(result.ok, `bogus=${bogus}`).toBe(true);
+    }
+    expect(log.calls).toEqual([]);
+  });
+
+  it("REJECTS boot when HEALTHZ_REHEARSAL_ENABLED=1 with NODE_ENV=production", () => {
+    const log = buildLogSink();
+    const result = assertRehearsalKillSwitchSafe(
+      { NODE_ENV: "production", HEALTHZ_REHEARSAL_ENABLED: "1" },
+      log,
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("unreachable");
+    // The error message must be actionable enough that an operator
+    // reading the crash log knows exactly which env var to unset and
+    // where to read more.
+    expect(result.reason).toMatch(/HEALTHZ_REHEARSAL_ENABLED/);
+    expect(result.reason).toMatch(/NODE_ENV=production/);
+    expect(result.reason).toMatch(/staging-only/i);
+    expect(result.reason).toMatch(/runbook|rate-limit-store/i);
+
+    // The structured log must surface the offending env so the
+    // pager-page recipient can confirm the misconfiguration without
+    // shelling onto the box.
+    expect(log.calls).toHaveLength(1);
+    const [obj, msg] = log.calls[0]!;
+    expect(obj).toMatchObject({
+      node_env: "production",
+      healthz_rehearsal_enabled: "1",
+    });
+    expect(msg).toMatch(/healthz_rehearsal_kill_switch_on_in_production/);
   });
 });

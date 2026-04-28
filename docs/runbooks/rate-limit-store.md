@@ -371,6 +371,21 @@ schedule.
 - `HEALTHZ_REHEARSAL_ENABLED=1`
 - `HEALTHZ_REHEARSAL_TOKEN=<long random secret matching the GitHub secret above>`
 
+> **Boot-time guard.** As a defense-in-depth backstop to the
+> "staging only" rule above, the api-server entrypoint
+> (`artifacts/api-server/src/index.ts`) refuses to start when
+> `HEALTHZ_REHEARSAL_ENABLED=1` is observed while `NODE_ENV=production`.
+> The check (`assertRehearsalKillSwitchSafe` in
+> `artifacts/api-server/src/routes/healthzRehearsal.ts`) logs
+> `healthz_rehearsal_kill_switch_on_in_production` and exits 1 before
+> binding the listener, so a copy-paste of staging env vars into a
+> production deploy crash-loops loudly in platform health checks
+> instead of silently exposing `/api/_rehearsal/inject-stuck-degraded`.
+> If you see this error in a production crash log, unset
+> `HEALTHZ_REHEARSAL_ENABLED` on that deploy and restart — do **not**
+> work around it by setting `NODE_ENV` to something other than
+> `production`.
+
 ### Interpreting a failed rehearsal run
 
 When the rehearsal workflow fails, walk the steps top-down:

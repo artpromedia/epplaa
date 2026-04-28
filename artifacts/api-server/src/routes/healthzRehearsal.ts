@@ -72,6 +72,61 @@ function readGuardConfig(): RehearsalGuardConfig {
 }
 
 /**
+ * Boot-time defense-in-depth guard. The runtime gate above (404 unless
+ * HEALTHZ_REHEARSAL_ENABLED=1) plus the human runbook ("enable on
+ * staging only — never production") is a *process* control: it relies
+ * on operators not copy-pasting the staging env file into a production
+ * deploy. That has gone wrong before in other systems, and the cost of
+ * the failure is high — a successful inject from a leaked production
+ * URL would page real on-call with a synthetic outage and erode trust
+ * in the alerting channel.
+ *
+ * To turn that into a *technical* control we additionally fail-fast at
+ * boot: if `HEALTHZ_REHEARSAL_ENABLED=1` is observed while
+ * `NODE_ENV=production`, the process refuses to start and logs a clear
+ * error instructing the operator to unset the kill switch. Staging
+ * (NODE_ENV !== "production") is unaffected and continues to opt in
+ * normally.
+ *
+ * This is intentionally checked before the HTTP listener binds so a
+ * misconfigured deploy crash-loops loudly in the platform health
+ * checks rather than silently exposing the injector.
+ *
+ * Pure function — takes `env` and a `log` sink so the unit test can
+ * exercise both the staging-allowed and production-rejected paths
+ * without poisoning `process.env` or piping pino output. Returns the
+ * outcome instead of calling `process.exit` so the caller (and the
+ * test) controls termination.
+ */
+export type RehearsalBootGuardOutcome =
+  | { ok: true }
+  | { ok: false; reason: string };
+
+export function assertRehearsalKillSwitchSafe(
+  env: NodeJS.ProcessEnv,
+  log: { error: (obj: unknown, msg: string) => void },
+): RehearsalBootGuardOutcome {
+  const enabled = env.HEALTHZ_REHEARSAL_ENABLED === "1";
+  const isProduction = env.NODE_ENV === "production";
+  if (enabled && isProduction) {
+    const reason =
+      "HEALTHZ_REHEARSAL_ENABLED=1 must never be set when NODE_ENV=production. " +
+      "The /api/_rehearsal/* injector is staging-only — see " +
+      "docs/runbooks/rate-limit-store.md (Automated weekly rehearsal). " +
+      "Unset HEALTHZ_REHEARSAL_ENABLED on this deploy and restart.";
+    log.error(
+      {
+        node_env: env.NODE_ENV,
+        healthz_rehearsal_enabled: env.HEALTHZ_REHEARSAL_ENABLED,
+      },
+      `healthz_rehearsal_kill_switch_on_in_production: ${reason}`,
+    );
+    return { ok: false, reason };
+  }
+  return { ok: true };
+}
+
+/**
  * Constant-time token compare. Buffers must have equal length for
  * `timingSafeEqual` so we pre-pad the supplied token to the expected
  * length and reject mismatched lengths separately.
