@@ -37,6 +37,19 @@ function isConfigured(): boolean {
   return Boolean(process.env.OKHI_API_KEY && process.env.OKHI_BRANCH_ID);
 }
 
+/**
+ * Stub fallback is allowed only when the integration is unconfigured (so
+ * dev/CI flows still work) OR when an explicit `STUB_FULFILLMENT=1`
+ * escape hatch is set. In production with credentials configured we
+ * never silently substitute fake data on real-call failure: we throw and
+ * let the caller surface a clear error to the buyer.
+ */
+function allowStubFallback(): boolean {
+  if (!isConfigured()) return true;
+  if (process.env.STUB_FULFILLMENT === "1") return true;
+  return process.env.NODE_ENV !== "production";
+}
+
 function deterministicPlaceId(input: OkHiVerifyInput): string {
   const h = createHash("sha256")
     .update(`${input.countryCode}|${input.line}|${input.area}|${input.city}|${input.lat ?? ""}|${input.lng ?? ""}`)
@@ -78,6 +91,10 @@ export async function verifyAddress(input: OkHiVerifyInput): Promise<OkHiVerifyR
       }),
     });
     if (!res.ok) {
+      if (!allowStubFallback()) {
+        logger.error({ status: res.status }, "okhi_verify_http_failed_no_fallback");
+        throw new Error(`okhi_http_${res.status}`);
+      }
       logger.warn({ status: res.status }, "okhi_verify_http_failed_falling_back_stub");
       return {
         ok: true,
@@ -100,6 +117,10 @@ export async function verifyAddress(input: OkHiVerifyInput): Promise<OkHiVerifyR
       suggestion: data.suggestion,
     };
   } catch (err) {
+    if (!allowStubFallback()) {
+      logger.error({ err: (err as Error).message }, "okhi_verify_threw_no_fallback");
+      throw err;
+    }
     logger.warn({ err: (err as Error).message }, "okhi_verify_threw_falling_back_stub");
     return {
       ok: true,

@@ -196,6 +196,7 @@ export default function CheckoutReview() {
             serviceLabel: pickedRate.serviceLabel,
             rateMinor: pickedRate.priceMinor,
             rateRaw: pickedRate.raw,
+            ...(pickedRate.quoteToken ? { quoteToken: pickedRate.quoteToken } : {}),
           }
         : {}),
       ...(draft.placeId ? { placeId: draft.placeId } : {}),

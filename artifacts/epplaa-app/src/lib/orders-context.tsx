@@ -55,6 +55,10 @@ export interface OrderFulfillment {
   /** Signed token from /fulfillment/verify-address; required by the
    *  server to accept a home-delivery order. */
   verificationToken?: string;
+  /** Signed token from /fulfillment/rates that authenticates the chosen
+   *  carrier/service/price tuple — required by the server for non-pickup
+   *  orders so the chargeable shipping amount is server-of-record. */
+  quoteToken?: string;
 }
 
 export interface OrderPayment {

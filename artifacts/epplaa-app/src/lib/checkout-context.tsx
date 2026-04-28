@@ -14,6 +14,10 @@ export interface FulfillmentRatePick {
   priceMinor: number;
   currencyCode: string;
   etaLabel: string;
+  /** Server-issued signed token; required by POST /orders so the server
+   *  can authenticate the chosen quote and bind the chargeable shipping
+   *  amount to a real /fulfillment/rates response. */
+  quoteToken?: string;
   raw?: Record<string, unknown>;
 }
 

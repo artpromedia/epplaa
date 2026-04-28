@@ -293,6 +293,7 @@ export interface RateQuote {
   etaLabel: string;
   etaDaysMin?: number;
   etaDaysMax?: number;
+  quoteToken?: string;
   raw?: RateQuoteRaw;
 }
 

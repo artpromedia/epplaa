@@ -2,6 +2,7 @@ import { Router, type IRouter } from "express";
 import { eq, and, desc, inArray } from "drizzle-orm";
 import { db, schema } from "../lib/db";
 import { addressFingerprint, verifyVerificationToken } from "../lib/fulfillment/verifyToken";
+import { cartFingerprint, verifyQuoteToken } from "../lib/fulfillment/quoteToken";
 import { requireUserId } from "../lib/auth";
 import { newOrderId, newOtp } from "../lib/ids";
 import { createPaymentIntent } from "../lib/payments";
@@ -334,10 +335,67 @@ router.post("/orders", async (req, res) => {
     (deliveryAddress as Record<string, unknown>).confidencePct = verdict.confidencePct;
   }
 
-  // Resolve totals + line snapshot server-side. Client-supplied priceMinor
-  // and subtotal/total are NEVER trusted — only productId + qty are honored.
+  // Server-side shipping price binding. For non-pickup options, the buyer
+  // MUST submit a server-issued, signed quote token from /fulfillment/rates
+  // bound to (this user, this address, this cart, the chosen carrier+service).
+  // We then derive the chargeable shipping amount from the token's claims —
+  // never from the client's totalsMinor.shipping. This closes the underpayment
+  // tampering vector where a client could fabricate a small shipping figure
+  // and trigger a real dispatch post-payment.
   const totalsRaw = (body.totalsMinor as Record<string, number> | undefined) ?? {};
-  const shipping = Math.max(0, Number(totalsRaw.shipping ?? 0));
+  let shipping = Math.max(0, Number(totalsRaw.shipping ?? 0));
+  if (!isPickup) {
+    const carrier = String(fulfillment.carrier ?? "").trim();
+    const service = String(fulfillment.service ?? "").trim();
+    const quoteToken = String(fulfillment.quoteToken ?? "");
+    if (!carrier || !service) {
+      res.status(400).json({
+        error: "rate_required",
+        detail: "A carrier+service quote is required for home delivery. Please pick a delivery option.",
+      });
+      return;
+    }
+    const dest = (fulfillment.deliveryAddress as Record<string, unknown> | undefined) ?? {};
+    const addrLine = String(dest.street ?? dest.line ?? "").trim();
+    const addrArea = String(dest.area ?? "").trim();
+    const addrCity = String(dest.city ?? "").trim();
+    const addrLat = typeof dest.lat === "number" ? (dest.lat as number) : undefined;
+    const addrLng = typeof dest.lng === "number" ? (dest.lng as number) : undefined;
+    const addrHashForQuote = addressFingerprint({
+      countryCode,
+      line: addrLine,
+      area: addrArea,
+      city: addrCity,
+      lat: addrLat,
+      lng: addrLng,
+    });
+    const cartHashForQuote = cartFingerprint(
+      ((body.items as ClientItemInput[] | undefined) ?? []).map((it) => ({
+        productId: String(it.productId ?? ""),
+        qty: Math.max(1, Math.floor(Number(it.qty ?? 0))),
+      })),
+    );
+    const quoteVerdict = verifyQuoteToken(quoteToken, {
+      userId,
+      carrier,
+      service,
+      currencyCode,
+      addrHash: addrHashForQuote,
+      cartHash: cartHashForQuote,
+    });
+    if (!quoteVerdict.ok) {
+      res.status(400).json({
+        error: "rate_invalid",
+        detail: `Shipping quote could not be validated (${quoteVerdict.reason}). Please re-select a delivery option.`,
+      });
+      return;
+    }
+    // The chargeable shipping number is the one the server signed —
+    // overwrite anything the client claimed.
+    shipping = quoteVerdict.priceMinor;
+    fulfillment.feeMinor = quoteVerdict.priceMinor;
+    fulfillment.rateMinor = quoteVerdict.priceMinor;
+  }
   const discount = Math.max(0, Number(totalsRaw.discount ?? 0));
   const shippingDiscount = Math.max(0, Number(totalsRaw.shippingDiscount ?? 0));
   const computed = await resolveOrderTotals({

@@ -27,11 +27,28 @@ export class ShipbubbleCarrier implements Carrier {
     return Boolean(process.env.SHIPBUBBLE_API_KEY);
   }
 
+  /**
+   * Stub fallback is allowed only when the carrier is unconfigured (dev/CI)
+   * OR when an explicit `STUB_FULFILLMENT=1` escape hatch is set. In
+   * production with credentials configured we never silently substitute
+   * fake quotes/labels on real-call failure — the caller will surface an
+   * error so the buyer doesn't get charged against a synthetic shipment.
+   */
+  private allowStubFallback(): boolean {
+    if (!this.isConfigured()) return true;
+    if (process.env.STUB_FULFILLMENT === "1") return true;
+    return process.env.NODE_ENV !== "production";
+  }
+
   async quote(req: RateRequest): Promise<RateQuote[]> {
     if (this.isConfigured()) {
       try {
         return await this.realQuote(req);
       } catch (err) {
+        if (!this.allowStubFallback()) {
+          logger.error({ err: (err as Error).message }, "shipbubble_quote_real_failed_no_fallback");
+          throw err;
+        }
         logger.warn({ err: (err as Error).message }, "shipbubble_quote_real_failed_falling_back_stub");
       }
     }
@@ -43,6 +60,13 @@ export class ShipbubbleCarrier implements Carrier {
       try {
         return await this.realDispatch(req);
       } catch (err) {
+        if (!this.allowStubFallback()) {
+          logger.error(
+            { err: (err as Error).message, orderId: req.orderId },
+            "shipbubble_dispatch_real_failed_no_fallback",
+          );
+          throw err;
+        }
         logger.warn({ err: (err as Error).message, orderId: req.orderId }, "shipbubble_dispatch_real_failed_falling_back_stub");
       }
     }
@@ -80,6 +104,10 @@ export class ShipbubbleCarrier implements Carrier {
       try {
         return await this.realReverse(req);
       } catch (err) {
+        if (!this.allowStubFallback()) {
+          logger.error({ err: (err as Error).message }, "shipbubble_reverse_failed_no_fallback");
+          throw err;
+        }
         logger.warn({ err: (err as Error).message }, "shipbubble_reverse_failed_falling_back_stub");
       }
     }

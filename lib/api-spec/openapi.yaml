@@ -1490,6 +1490,7 @@ components:
         etaLabel: { type: string }
         etaDaysMin: { type: integer }
         etaDaysMax: { type: integer }
+        quoteToken: { type: string }
         raw:
           type: object
           additionalProperties: true

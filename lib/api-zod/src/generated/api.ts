@@ -326,6 +326,7 @@ export const RateShipmentResponse = zod.object({
       etaLabel: zod.string(),
       etaDaysMin: zod.number().optional(),
       etaDaysMax: zod.number().optional(),
+      quoteToken: zod.string().optional(),
       raw: zod.record(zod.string(), zod.unknown()).optional(),
     }),
   ),

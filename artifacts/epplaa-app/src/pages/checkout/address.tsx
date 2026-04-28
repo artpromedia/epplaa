@@ -179,6 +179,7 @@ export default function CheckoutAddress() {
                 priceMinor: sorted[0].priceMinor,
                 currencyCode: sorted[0].currencyCode,
                 etaLabel: sorted[0].etaLabel,
+                quoteToken: (sorted[0] as { quoteToken?: string }).quoteToken,
                 raw: (sorted[0].raw as Record<string, unknown> | undefined) ?? {},
               },
             });
@@ -208,6 +209,7 @@ export default function CheckoutAddress() {
         priceMinor: q.priceMinor,
         currencyCode: q.currencyCode,
         etaLabel: q.etaLabel,
+        quoteToken: (q as { quoteToken?: string }).quoteToken,
         raw: (q.raw as Record<string, unknown> | undefined) ?? {},
       },
     });

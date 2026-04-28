@@ -25,11 +25,27 @@ export class GigCarrier implements Carrier {
     return Boolean(process.env.GIG_API_KEY && process.env.GIG_USERNAME);
   }
 
+  /**
+   * Stub fallback is allowed only when the carrier is unconfigured (dev/CI)
+   * OR when an explicit `STUB_FULFILLMENT=1` escape hatch is set.
+   * Production calls with credentials configured fail closed: we throw
+   * instead of silently returning a synthetic GIG quote/label.
+   */
+  private allowStubFallback(): boolean {
+    if (!this.isConfigured()) return true;
+    if (process.env.STUB_FULFILLMENT === "1") return true;
+    return process.env.NODE_ENV !== "production";
+  }
+
   async quote(req: RateRequest): Promise<RateQuote[]> {
     if (!this.isConfigured()) return this.stubQuotes(req);
     try {
       return await this.realQuote(req);
     } catch (err) {
+      if (!this.allowStubFallback()) {
+        logger.error({ err: (err as Error).message }, "gig_quote_failed_no_fallback");
+        throw err;
+      }
       logger.warn({ err: (err as Error).message }, "gig_quote_failed_falling_back_stub");
       return this.stubQuotes(req);
     }
@@ -40,6 +56,10 @@ export class GigCarrier implements Carrier {
     try {
       return await this.realDispatch(req);
     } catch (err) {
+      if (!this.allowStubFallback()) {
+        logger.error({ err: (err as Error).message, orderId: req.orderId }, "gig_dispatch_failed_no_fallback");
+        throw err;
+      }
       logger.warn({ err: (err as Error).message }, "gig_dispatch_failed_falling_back_stub");
       return this.stubDispatch(req);
     }

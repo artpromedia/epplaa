@@ -5,6 +5,8 @@ import { logger } from "../lib/logger";
 import { aggregateQuotes, verifyAddress } from "../lib/fulfillment";
 import type { ShipmentItem, ShippingAddress } from "../lib/fulfillment";
 import { addressFingerprint, issueVerificationToken } from "../lib/fulfillment/verifyToken";
+import { cartFingerprint, issueQuoteToken } from "../lib/fulfillment/quoteToken";
+import { getUserId } from "../lib/auth";
 
 const router: IRouter = Router();
 
@@ -129,7 +131,39 @@ router.post("/fulfillment/rates", async (req, res) => {
       currencyCode,
       optionId: body.optionId,
     });
-    res.json({ quotes });
+    // Sign each quote so POST /orders can validate that the buyer is
+    // submitting a real server-issued (carrier, service, priceMinor) tuple
+    // for THIS user, address, and cart — and not a tampered shipping
+    // amount. Anonymous callers get unsigned quotes (the order endpoint
+    // will reject them at submission time, steering the buyer to sign
+    // in).
+    const userId = getUserId(req);
+    const addrHash = addressFingerprint({
+      countryCode: destination.countryCode,
+      line: destination.line,
+      area: destination.area,
+      city: destination.city,
+      lat: destination.lat,
+      lng: destination.lng,
+    });
+    const cartHash = cartFingerprint(cleanItems);
+    const signed = quotes.map((q) => ({
+      ...q,
+      ...(userId
+        ? {
+            quoteToken: issueQuoteToken({
+              userId,
+              carrier: q.carrier,
+              service: q.service,
+              priceMinor: q.priceMinor,
+              currencyCode: q.currencyCode,
+              addrHash,
+              cartHash,
+            }),
+          }
+        : {}),
+    }));
+    res.json({ quotes: signed });
   } catch (err) {
     logger.error({ err: (err as Error).message }, "rates_failed");
     res.status(500).json({ error: "rates_failed" });
