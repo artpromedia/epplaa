@@ -14,6 +14,7 @@ import { KeyboardProvider } from "react-native-keyboard-controller";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 
 import { ErrorBoundary } from "@/components/ErrorBoundary";
+import { useCsrfToken } from "@/lib/csrf";
 
 // Prevent the splash screen from auto-hiding before asset loading is complete.
 SplashScreen.preventAutoHideAsync();
@@ -21,6 +22,14 @@ SplashScreen.preventAutoHideAsync();
 const queryClient = new QueryClient();
 
 function RootLayoutNav() {
+  // CSRF wiring is mounted (symmetrical with the SPAs) but disabled today:
+  // mobile authenticates with Clerk bearer tokens and has no cookie jar, so
+  // the server's CSRF middleware exempts every request we send. When a
+  // cookie-session surface lands on mobile (live-chat WebView, session bridge,
+  // etc.) flip `enabled` to `true` and pass the user id + API base URL.
+  // See `@/lib/csrf` for the full ship-or-skip rationale.
+  useCsrfToken({ enabled: false });
+
   return (
     <Stack screenOptions={{ headerBackTitle: "Back" }}>
       <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
