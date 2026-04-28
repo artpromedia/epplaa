@@ -62,8 +62,8 @@ jobs:
       - name: Typecheck
         run: pnpm run typecheck
 
-      - name: Vitest unit tests
-        run: pnpm run test
+      - name: Vitest unit tests with coverage threshold
+        run: pnpm run test:coverage
         env:
           MFA_ENCRYPTION_KEY: 0000000000000000000000000000000000000000000000000000000000000000
 
@@ -78,7 +78,7 @@ jobs:
       image: returntocorp/semgrep
     steps:
       - uses: actions/checkout@v4
-      - run: semgrep --config auto --error --severity ERROR --severity WARNING --json --output semgrep.sarif --sarif || true
+      - run: semgrep --config auto --error --severity ERROR --severity WARNING --sarif --output semgrep.sarif
       - uses: actions/upload-artifact@v4
         with:
           name: semgrep-sarif

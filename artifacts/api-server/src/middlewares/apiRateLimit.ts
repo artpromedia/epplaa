@@ -118,18 +118,32 @@ export interface ApiRateLimitOptions {
   windowMs?: number;
   /** Per-tier override (multiplied against base). */
   tierMultiplier?: Partial<Record<Tier, number>>;
+  /**
+   * When true (default for the un-named global mount), the bucket is
+   * additionally keyed by `${method}:${path}` so abuse on one endpoint
+   * cannot exhaust quota for the rest of the API. Per-route mounts
+   * (those passing an explicit `name`) opt out by default since their
+   * bucket name is already route-scoped.
+   */
+  perRoute?: boolean;
 }
 
 export function apiRateLimit(opts: ApiRateLimitOptions = {}): RequestHandler {
   const name = opts.name ?? "api";
   const windowMs = opts.windowMs ?? 60_000;
   const mult = opts.tierMultiplier ?? {};
+  const perRoute = opts.perRoute ?? opts.name === undefined;
   return (req, res, next) => {
     void (async () => {
       const { tier, identity } = await resolveTier(req);
       const base = DEFAULTS[tier];
       const max = Math.max(1, Math.floor(base * (mult[tier] ?? 1)));
-      const key = `${name}:${tier}:${identity}`;
+      // Per-route + per-identity key. Using `req.route?.path` would be
+      // ideal but it's only populated after the matching layer runs;
+      // `req.path` is stable here. We strip query string to avoid
+      // unbounded cardinality on attacker-controlled query params.
+      const routeKey = perRoute ? `${req.method}:${req.path.split("?")[0]}` : "*";
+      const key = `${name}:${tier}:${routeKey}:${identity}`;
       const result = store.bump(key, Date.now(), windowMs, max);
       if (!result.allowed) {
         res.setHeader("Retry-After", Math.ceil(result.retryAfterMs / 1000));
