@@ -6,14 +6,21 @@ import { startOtp, verifyOtp, normalizePhone, type OtpChannel } from "../lib/otp
 import { ensureWalletBootstrapped } from "../lib/wallet";
 import { logger } from "../lib/logger";
 import { requireUserId } from "../lib/auth";
+import { ipRateLimit } from "../middlewares/ipRateLimit";
 
 const router: IRouter = Router();
+
+// IP-level throttle on OTP send: defense-in-depth against SMS/WhatsApp cost
+// abuse. A single source can issue at most 10 OTP sends per 10 minutes,
+// regardless of how many phone numbers it rotates through. Per-phone limit
+// (3/10min) inside startOtp() still applies on top of this.
+const otpStartIpLimit = ipRateLimit({ name: "otp_start", windowMs: 10 * 60 * 1000, max: 10 });
 
 /**
  * Public: start a phone OTP for sign-in/sign-up. Returns the dev code when
  * Termii isn't configured so the SPA can complete e2e tests offline.
  */
-router.post("/auth/otp/start", async (req: Request, res: Response) => {
+router.post("/auth/otp/start", otpStartIpLimit, async (req: Request, res: Response) => {
   const body = req.body as { phone?: string; channel?: OtpChannel; phoneCountry?: string };
   const phone = normalizePhone(String(body.phone ?? ""));
   const channel: OtpChannel = body.channel === "sms" ? "sms" : "whatsapp";
