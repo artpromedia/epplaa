@@ -123,20 +123,53 @@ export async function convertMinor(
 }
 
 /**
- * Daily refresh job. In production this would hit CBN + OpenExchangeRates;
- * here we mark the seed rates as today's rate so the table has a fresh row.
- * Wired into the boot scheduler in `app.ts` (24-hour interval).
+ * Daily FX refresh job, wired into the boot scheduler in `app.ts` on a
+ * 24-hour interval. Two operating modes:
+ *
+ *   1. Production: when `FX_RATES_API_URL` (e.g. CBN feed or OpenExchangeRates
+ *      proxy) is set, `fetchLiveRatesToNGN()` pulls JSON of the form
+ *      `{ "USD": 1612.5, "CNY": 224.1, ... }` and rows are tagged
+ *      `source: "live"` so consumers can distinguish them from fallback data.
+ *
+ *   2. Dev / no-network fallback: when the env var is absent or the upstream
+ *      fetch errors, today's rates are inserted from the static `SEED_RATES_TO_NGN`
+ *      table tagged `source: "dev-seed"`. This keeps the lookup path working
+ *      offline without lying about the data lineage in the audit/source column.
+ *
+ * Out of scope for this task (per project objective): live FX hedging and
+ * intraday volatility handling — both are tracked as follow-ups.
  */
+async function fetchLiveRatesToNGN(): Promise<Record<string, number> | null> {
+  const url = process.env.FX_RATES_API_URL;
+  if (!url) return null;
+  try {
+    const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
+    if (!res.ok) return null;
+    const json = (await res.json()) as Record<string, unknown>;
+    const out: Record<string, number> = {};
+    for (const ccy of Object.keys(SEED_RATES_TO_NGN)) {
+      const v = Number(json[ccy]);
+      if (Number.isFinite(v) && v > 0) out[ccy] = v;
+    }
+    return Object.keys(out).length > 0 ? out : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function refreshFxRates(): Promise<void> {
   const today = new Date().toISOString().slice(0, 10);
+  const live = await fetchLiveRatesToNGN();
+  const ratesToNGN = live ?? SEED_RATES_TO_NGN;
+  const sourceLabel = live ? "live" : "dev-seed";
   const rows: (typeof schema.fxRatesTable.$inferInsert)[] = [];
-  for (const [base, rate] of Object.entries(SEED_RATES_TO_NGN)) {
+  for (const [base, rate] of Object.entries(ratesToNGN)) {
     rows.push({
       id: newFxRateId(),
       baseCurrency: base,
       quoteCurrency: "NGN",
       rate,
-      source: "cbn",
+      source: sourceLabel,
       asOfDate: today,
     });
     rows.push({
@@ -144,12 +177,12 @@ export async function refreshFxRates(): Promise<void> {
       baseCurrency: "NGN",
       quoteCurrency: base,
       rate: 1 / rate,
-      source: "cbn",
+      source: sourceLabel,
       asOfDate: today,
     });
   }
   await db.insert(schema.fxRatesTable).values(rows).onConflictDoNothing();
-  logger.info({ count: rows.length, asOf: today }, "fx_rates_refreshed");
+  logger.info({ count: rows.length, asOf: today, source: sourceLabel }, "fx_rates_refreshed");
 }
 
 /** Currencies the manufacturer side accepts. */
