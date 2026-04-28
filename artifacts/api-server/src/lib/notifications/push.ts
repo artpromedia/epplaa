@@ -190,16 +190,18 @@ export class WebPushChannel implements NotificationChannel {
       logger.warn("vapid_private_key_not_pem_skip");
       return { ok: false, errorMessage: "vapid_private_key_not_pem" };
     }
-    // VAPID requires ES256. Fail closed if signing fails — an HMAC
-    // fallback would produce a cryptographically invalid token that
-    // browsers/push services would either accept incorrectly or reject
-    // silently. Outbox retry/backoff is the authoritative reliability
-    // layer.
+    // VAPID requires ES256. JWT (JOSE) ES256 mandates IEEE P1363 (r||s,
+    // 64 bytes raw) signature encoding — NOT Node's default DER. Pass
+    // `dsaEncoding: "ieee-p1363"` so push services (FCM, Mozilla autopush,
+    // Edge) accept the token. Fail closed on signing error; outbox
+    // retry/backoff is the authoritative reliability layer.
     let signature: string;
     try {
       const signer = createSign("SHA256");
       signer.update(`${header}.${claims}`);
-      signature = signer.sign(pk).toString("base64url");
+      signature = signer
+        .sign({ key: pk, dsaEncoding: "ieee-p1363" })
+        .toString("base64url");
     } catch (err) {
       logger.error({ err: (err as Error).message }, "vapid_es256_sign_failed");
       return { ok: false, errorMessage: "vapid_es256_sign_failed" };
