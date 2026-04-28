@@ -116,10 +116,15 @@ export async function setupTotp(
   const backupCodes = generateBackupCodes();
   const hashedCodes = backupCodes.map(hashBackupCode);
   const id = newSafeId("mfa_");
-  // UPSERT — re-enrolment overwrites a previous pending row.
+  // UPSERT — re-enrolment overwrites a previous pending row. The
+  // backup-code array is passed as a single parameterised value (pg
+  // serialises a JS string[] into a text[] when the literal cast is
+  // attached) — never interpolate the array into the SQL string, even
+  // though the codes are internally generated; it would be a latent
+  // injection sink the moment the input source ever changes.
   await db.execute(sql`
     INSERT INTO mfa_enrollments (id, user_id, kind, secret_encrypted, status, backup_codes_hashed)
-    VALUES (${id}, ${userId}, 'totp', ${encryptSecret(secret)}, 'pending', ${sql.raw(`ARRAY[${hashedCodes.map((c) => `'${c}'`).join(",")}]::text[]`)})
+    VALUES (${id}, ${userId}, 'totp', ${encryptSecret(secret)}, 'pending', ${hashedCodes}::text[])
     ON CONFLICT (user_id, kind) DO UPDATE SET
       secret_encrypted = EXCLUDED.secret_encrypted,
       status = 'pending',

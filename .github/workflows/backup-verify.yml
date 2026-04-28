@@ -1,0 +1,66 @@
+name: Backup verify (weekly)
+
+# Weekly restore-from-dump smoke test. The actual nightly pg_dump is owned
+# by the deployment platform / managed Postgres provider, not GitHub
+# Actions — we cannot reach the production network from here. This workflow
+# acts as a fallback "did the dump survive transport and is it restorable"
+# check that runs against a documented backup share (e.g. S3/GCS pre-signed
+# URL synced into the runner) and a throwaway sandbox database.
+#
+# Required repo variables / secrets:
+#   vars.BACKUP_VERIFY_ENABLED   — must equal "1" to opt-in
+#   secrets.RESTORE_DATABASE_URL — sandbox DB URL (NEVER prod)
+#   secrets.BACKUP_FETCH_CMD     — shell snippet that downloads the latest
+#                                   dump into ./backups/<date>.dump
+#
+# Schedule: Sunday 03:00 UTC. Tweak `cron` if your backup window shifts.
+# Manual runs via workflow_dispatch are encouraged for ad-hoc validation.
+
+on:
+  schedule:
+    - cron: "0 3 * * 0"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: pg_restore + smoke psql
+    if: ${{ vars.BACKUP_VERIFY_ENABLED == '1' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+
+      - name: Install pg client tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Fetch latest backup dump
+        env:
+          BACKUP_FETCH_CMD: ${{ secrets.BACKUP_FETCH_CMD }}
+        run: |
+          mkdir -p ./backups
+          if [ -z "$BACKUP_FETCH_CMD" ]; then
+            echo "BACKUP_FETCH_CMD secret missing; cannot fetch dump." >&2
+            exit 2
+          fi
+          eval "$BACKUP_FETCH_CMD"
+          ls -la ./backups
+
+      - name: Run verifyBackup.ts
+        env:
+          BACKUP_DIR: ${{ github.workspace }}/backups
+          RESTORE_DATABASE_URL: ${{ secrets.RESTORE_DATABASE_URL }}
+        run: pnpm --filter @workspace/scripts exec tsx src/verifyBackup.ts

@@ -1,0 +1,27 @@
+kind = "mobile"
+previewPath = "/mobile/"
+title = "Epplaa Mobile"
+version = "1.0.0"
+id = "artifacts/epplaa-mobile"
+router = "expo-domain"
+
+[[integratedSkills]]
+name = "expo"
+version = "1.0.0"
+
+[[services]]
+ensurePreviewReachable = "/status"
+name = "expo"
+paths = [ "/mobile/" ]
+localPort = 21273
+
+[services.development]
+run = "pnpm --filter @workspace/epplaa-mobile run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/epplaa-mobile", "run", "build" ]
+run = [ "pnpm", "--filter", "@workspace/epplaa-mobile", "run", "serve" ]
+
+[services.env]
+PORT = "21273"
+BASE_PATH = "/mobile/"

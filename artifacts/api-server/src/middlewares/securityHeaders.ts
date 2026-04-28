@@ -44,8 +44,15 @@ export function securityHeaders(): RequestHandler[] {
           "'self'",
           (_req, res) =>
             `'nonce-${(res as unknown as { locals: { cspNonce: string } }).locals.cspNonce}'`,
+          // Clerk frontend API surfaces. `clerk.accounts.dev` hosts the
+          // tenant frontend API for dev instances; `clerk.dev` /
+          // `clerk.com` host the production CDN + APIs. Add custom
+          // tenant frontend domains via CSP_EXTRA_CONNECT_SRC if you
+          // wire one up in Clerk dashboard.
           "https://*.clerk.dev",
           "https://*.clerk.com",
+          "https://*.clerk.accounts.dev",
+          "https://*.clerkstage.dev",
         ],
         styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
         fontSrc: ["'self'", "https://fonts.gstatic.com", "data:"],
