@@ -44,28 +44,58 @@ name: Healthz degraded probe (per-minute)
 #                                               so on-call sees these
 #                                               events in the same project.
 #   secrets.HEALTHZ_PROBE_SENTRY_DSN          — DSN used by sentry-cli to
-#                                               post the page event. May be
-#                                               the same DSN as the api-server
+#                                               post the page event AND to
+#                                               send Sentry Cron monitor
+#                                               check-ins (see "Heartbeat"
+#                                               note below). May be the
+#                                               same DSN as the api-server
 #                                               so the alert lands in the
 #                                               same project; kept as a
 #                                               separate secret so you can
 #                                               rotate it independently of
 #                                               the runtime DSN.
 #
+# Heartbeat / Sentry Cron monitor:
+#   The probe loop is wrapped with `sentry-cli monitors run
+#   check-healthz-degraded --environment production -- ...`. This sends
+#   an `in_progress` check-in at start and an `ok`/`error` check-in at
+#   finish to a Sentry Cron monitor with the slug
+#   `check-healthz-degraded`. The monitor itself (schedule,
+#   check-in margin, environment) is configured in the Sentry UI — see
+#   docs/runbooks/rate-limit-store.md Step 5 for the required values.
+#   Sentry pages on-call automatically when an expected check-in fails
+#   to arrive on time, which catches the failure modes that neither the
+#   in-loop `send-event` page nor GitHub's "Failed workflow run" mail
+#   can detect: GH Actions outages, the workflow being silently
+#   disabled (e.g. auto-disable after 60 days of inactivity if
+#   HEALTHZ_PROBE_ENABLED is flipped off temporarily), or schedule
+#   delays under load.
+#
 # When secrets/vars are missing the workflow degrades safely:
 #   - HEALTHZ_PROBE_ENABLED != "1"            -> job is skipped entirely.
+#                                                Note: the Sentry Cron
+#                                                monitor will then page
+#                                                on missed check-ins,
+#                                                which is what we want —
+#                                                the kill switch should
+#                                                be a deliberate decision,
+#                                                not a silent regression.
 #   - HEALTHZ_URL missing                     -> the probe itself exits 1
 #                                                with a clear stderr line,
 #                                                workflow fails (which
 #                                                pages via the GitHub
 #                                                "Failed workflow run"
 #                                                notification).
-#   - HEALTHZ_PROBE_SENTRY_DSN missing        -> Sentry forwarding is
-#                                                skipped but the workflow
-#                                                still fails on non-zero
-#                                                probe exit, so on-call
-#                                                still sees the failure
-#                                                in GitHub.
+#   - HEALTHZ_PROBE_SENTRY_DSN missing        -> both Sentry forwarding
+#                                                AND the cron-monitor
+#                                                heartbeat are skipped,
+#                                                but the workflow still
+#                                                fails on non-zero probe
+#                                                exit so on-call still
+#                                                sees the failure in
+#                                                GitHub. Configure the
+#                                                DSN to get heartbeat
+#                                                coverage.
 #
 # Manual ad-hoc runs are supported via workflow_dispatch — useful when
 # tuning the threshold or verifying alerting end-to-end.
@@ -128,16 +158,33 @@ jobs:
       - name: Install sentry-cli
         run: curl -sL https://sentry.io/get-cli/ | INSTALL_DIR=/usr/local/bin sh
 
-      - name: Probe loop (5 iterations, ~60s apart)
+      - name: Probe loop (5 iterations, ~60s apart) with cron-monitor heartbeat
         env:
           # Used by sentry-cli send-event to know which project to
-          # ingest into. SENTRY_ORG / SENTRY_PROJECT are not strictly
-          # required for DSN-based ingestion but are passed through so
-          # operators can grep for them in failed-workflow audits.
+          # ingest into, AND by `sentry-cli monitors run` (below) to
+          # post the cron-monitor check-ins. SENTRY_ORG / SENTRY_PROJECT
+          # are not strictly required for DSN-based ingestion but are
+          # passed through so operators can grep for them in
+          # failed-workflow audits.
           SENTRY_DSN: ${{ secrets.HEALTHZ_PROBE_SENTRY_DSN }}
           SENTRY_ORG: ${{ vars.SENTRY_ORG }}
           SENTRY_PROJECT: ${{ vars.SENTRY_PROJECT }}
         run: |
+          # Materialise the inner loop as a temp script so the (long)
+          # body stays inline-readable AND can be invoked either
+          # directly (no Sentry DSN -> no heartbeat coverage) or wrapped
+          # by `sentry-cli monitors run` (DSN configured -> Sentry Cron
+          # monitor records `in_progress` at start + `ok`/`error` at
+          # finish, and pages on missed check-ins independent of the
+          # in-loop send-event path or the GitHub workflow-failure
+          # notification).
+          #
+          # Using a heredoc with a quoted terminator (PROBE_LOOP) means
+          # nothing inside the script is expanded at heredoc time —
+          # `$SENTRY_DSN`, `$GITHUB_RUN_ID`, etc. all expand at runtime
+          # against the env inherited from this step.
+          cat > "$RUNNER_TEMP/probe-loop.sh" <<'PROBE_LOOP'
+          #!/usr/bin/env bash
           set +e
           fails=0
           last_output=""
@@ -203,4 +250,32 @@ jobs:
               echo "Exit code: $last_code"
             } >> "$GITHUB_STEP_SUMMARY"
             exit 1
+          fi
+          PROBE_LOOP
+          chmod +x "$RUNNER_TEMP/probe-loop.sh"
+
+          if [ -n "$SENTRY_DSN" ]; then
+            # Cron-monitor heartbeat. `sentry-cli monitors run` posts
+            # an `in_progress` check-in before exec'ing the wrapped
+            # command and an `ok`/`error` check-in afterwards based on
+            # the wrapped command's exit code. The Sentry Cron monitor
+            # with slug `check-healthz-degraded` (configured in the
+            # Sentry UI to expect `*/5 * * * *` check-ins; see
+            # docs/runbooks/rate-limit-store.md Step 5) will page
+            # on-call when an expected check-in fails to arrive within
+            # its check-in margin — which is the only signal that
+            # survives the scheduler itself going away (workflow
+            # disabled, GH Actions outage, schedule silently delayed).
+            #
+            # The wrapper preserves the wrapped command's exit code, so
+            # a non-zero loop still fails the workflow step and the
+            # GitHub "Failed workflow run" notification still fires as
+            # a backstop.
+            sentry-cli monitors run \
+              --environment production \
+              check-healthz-degraded \
+              -- "$RUNNER_TEMP/probe-loop.sh"
+          else
+            echo "::warning::HEALTHZ_PROBE_SENTRY_DSN not configured; cron-monitor heartbeat is disabled — a stopped/disabled workflow will go unnoticed until the next manual review"
+            "$RUNNER_TEMP/probe-loop.sh"
           fi

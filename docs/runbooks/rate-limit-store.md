@@ -178,6 +178,65 @@ external uptime monitor or in-process timer doing this job.
 | Page body | The probe's JSON stdout line is forwarded as `extra.probe_output` so on-call sees `state`, `firstFailureAt`, `durationMs`, `thresholdMs`, and the probe's reason without re-curling `/healthz`. The link to the failing GitHub Actions run is forwarded as `extra.workflow_run`. |
 | Backstop | Even with `HEALTHZ_PROBE_SENTRY_DSN` unset, the workflow itself exits non-zero on any failing iteration, which triggers the standard GitHub "Failed workflow run" notification to repo watchers. |
 
+### Heartbeat — paging when the scheduler itself stops running
+
+The streak-duration alert above only fires when a scheduled run *executes*
+and observes a stuck-degraded subsystem. It will **not** fire if the
+scheduler itself stops running — for example:
+
+- GitHub Actions has an outage or queueing backlog.
+- The workflow is silently auto-disabled (GitHub auto-disables scheduled
+  workflows after 60 days of inactivity, which can happen if
+  `HEALTHZ_PROBE_ENABLED` is flipped off temporarily and forgotten).
+- The schedule is silently delayed for hours under load.
+- Someone deletes/renames the workflow file or breaks the YAML.
+
+In any of those cases the rate-limit watcher could be stuck in `degraded`
+indefinitely with no automatic page. To close that gap the workflow's
+probe loop is wrapped with `sentry-cli monitors run`, which posts an
+`in_progress` check-in at start and an `ok`/`error` check-in at finish
+to a **Sentry Cron monitor** with the slug `check-healthz-degraded`.
+Sentry pages on-call automatically when an expected check-in fails to
+arrive within the monitor's check-in margin — i.e. when the scheduler
+*itself* fails to execute on time, regardless of whether the underlying
+api is healthy.
+
+**Distinguishing the two pages.** When the wrapped probe runs and
+detects a stuck-degraded subsystem, on-call gets the
+`rate_limit_store_stuck_degraded` Sentry issue (subsystem fingerprint;
+"the rate-limit store is stuck"). When the wrapped probe *doesn't run
+at all*, on-call gets a Sentry Cron monitor failure on
+`check-healthz-degraded` ("our stuck-detection job stopped running").
+The two pages have different titles/fingerprints by design, so on-call
+knows which runbook section to start from.
+
+**One-time Sentry setup.** Configure the monitor in the Sentry UI
+(**Crons → Add Monitor**) with these values; check-ins from the
+workflow lazily upsert the monitor on first run, but explicit
+configuration ensures the schedule + margins are correct from the
+first tick:
+
+| Setting | Value | Why |
+| --- | --- | --- |
+| Slug | `check-healthz-degraded` | Must match the slug in the workflow's `sentry-cli monitors run …` invocation. |
+| Schedule type | Crontab | Mirrors the GH Actions `schedule:` cadence. |
+| Schedule | `*/5 * * * *` | Same cron expression as the GH Actions schedule, so Sentry expects exactly one check-in per scheduled tick. |
+| Timezone | `UTC` | GH Actions schedules run in UTC. |
+| Check-in margin | `5` minutes | Generous enough to absorb runner queue time + the workflow's own ~30s install/boot. Tighten only if you're prepared to chase noise from cold-start runners. |
+| Max runtime | `10` minutes | The probe loop's `timeout-minutes: 8` gives this slack; anything longer means the runner hung mid-loop. |
+| Failure issue threshold | `1` | Page on the first missed check-in — there is no "noisy" failure mode for "the scheduler stopped running." |
+| Recovery threshold | `1` | Resolve the issue as soon as the next check-in arrives. |
+| Environment | `production` | The workflow always passes `--environment production`. |
+| Owner / on-call | api-server / rate-limit owners | So the page routes to the same on-call as the streak-duration alert. |
+
+**Verifying the heartbeat.** From the Sentry UI's monitor detail page,
+the timeline should show one green check-in per 5 minutes. To
+end-to-end verify the page path, briefly disable the workflow
+(**Actions → Healthz degraded probe → ⋯ → Disable workflow**) and wait
+for one cron tick + check-in margin (~10 minutes total). Sentry should
+fire a `check-healthz-degraded` cron failure issue. Re-enable the
+workflow once the page is confirmed.
+
 ### Required GitHub repo configuration
 
 Configured under **Settings → Secrets and variables → Actions** on the
