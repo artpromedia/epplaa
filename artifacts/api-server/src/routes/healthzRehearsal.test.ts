@@ -25,6 +25,10 @@ const { auditHealthWatcher, dbHealthWatcher } = await import(
   "../lib/subsystemHealth"
 );
 const {
+  auditDlqHealthWatcher,
+  __resetAuditDlqMonitorForTests,
+} = await import("../lib/auditDlqMonitor");
+const {
   default: rehearsalRouter,
   assertRehearsalKillSwitchSafe,
   assertProductionHostnamePatternConfigured,
@@ -46,6 +50,7 @@ beforeEach(() => {
   resetMock.mockReset();
   dbHealthWatcher.__reset();
   auditHealthWatcher.__reset();
+  __resetAuditDlqMonitorForTests();
   vi.useFakeTimers();
   vi.setSystemTime(NOW);
 });
@@ -236,6 +241,33 @@ describe("POST /_rehearsal/inject-stuck-degraded — happy paths", () => {
     expect(snap.failureCount).toBe(5);
   });
 
+  it("seeds the auditDlq watcher and reflects in the auditDlqHealthWatcher snapshot", async () => {
+    // The audit-DLQ watcher is normally driven by the periodic depth
+    // poller in lib/auditDlqMonitor.ts, but the rehearsal injector
+    // seeds the streak directly so the staging cron can verify the
+    // duration alert pages on the DLQ-backlog branch end-to-end
+    // without overflowing the audit_failures table on staging. This
+    // is the rehearsal hook the weekly workflow uses to assert the
+    // backlog-paging branch still wakes on-call.
+    const firstFailureAt = NOW - 8 * 60 * 1000; // 8 minutes
+    const res = await request(buildApp())
+      .post("/_rehearsal/inject-stuck-degraded")
+      .set("X-Rehearsal-Token", VALID_TOKEN)
+      .send({ subsystem: "auditDlq", firstFailureAt, failureCount: 4 });
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      status: "injected",
+      subsystem: "auditDlq",
+      firstFailureAt,
+      failureCount: 4,
+      durationMs: 8 * 60 * 1000,
+    });
+    const snap = auditDlqHealthWatcher.getSnapshot();
+    expect(snap.state).toBe("degraded");
+    expect(snap.firstFailureAt).toBe(firstFailureAt);
+    expect(snap.failureCount).toBe(4);
+  });
+
   it("seeds the db watcher and reflects in the dbHealthWatcher snapshot", async () => {
     // db is not mocked — we route through the real
     // SubsystemFailureWatcher and assert via getSnapshot so the
@@ -329,6 +361,35 @@ describe("POST /_rehearsal/clear-stuck-degraded", () => {
     expect(res.status).toBe(400);
     expect(res.body.error).toBe("invalid_subsystem");
     expect(resetMock).not.toHaveBeenCalled();
+  });
+
+  it("clears the auditDlq watcher (round-trip with inject seeds then clear restores healthy)", async () => {
+    // Same inject -> clear cycle the rehearsal workflow performs for
+    // the audit-DLQ branch. After clear the snapshot must return to
+    // its pre-rehearsal `healthy` state — a leftover synthetic streak
+    // would cause the per-minute probe workflow to start paging
+    // on-call for real once it crossed the threshold again. The DLQ
+    // snapshot's depth-specific fields (unreplayedCount, lastPollAt,
+    // lastPollError) intentionally stay at their no-poll-yet defaults
+    // because the rehearsal exercises the streak-duration page path,
+    // not the depth measurement.
+    await request(buildApp())
+      .post("/_rehearsal/inject-stuck-degraded")
+      .set("X-Rehearsal-Token", VALID_TOKEN)
+      .send({ subsystem: "auditDlq", firstFailureAt: NOW - 600_000 });
+    expect(auditDlqHealthWatcher.getSnapshot().state).toBe("degraded");
+
+    const res = await request(buildApp())
+      .post("/_rehearsal/clear-stuck-degraded")
+      .set("X-Rehearsal-Token", VALID_TOKEN)
+      .send({ subsystem: "auditDlq" });
+    expect(res.status).toBe(200);
+    expect(auditDlqHealthWatcher.getSnapshot()).toEqual({
+      state: "healthy",
+      failureCount: 0,
+      firstFailureAt: null,
+      lastRecoveredAt: null,
+    });
   });
 
   it("clears the auditChain watcher (round-trip with inject seeds then clear restores healthy)", async () => {

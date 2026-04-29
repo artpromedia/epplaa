@@ -6,6 +6,7 @@ import {
   detectProductionSignals,
 } from "../lib/productionSignals";
 import { auditHealthWatcher, dbHealthWatcher } from "../lib/subsystemHealth";
+import { auditDlqHealthWatcher } from "../lib/auditDlqMonitor";
 import { __getRedisFailureWatcherForRehearsal } from "../middlewares/apiRateLimit";
 
 /**
@@ -52,12 +53,13 @@ import { __getRedisFailureWatcherForRehearsal } from "../middlewares/apiRateLimi
  * channel. A 401 is returned when the token is missing or wrong.
  */
 
-type SubsystemName = "rateLimitStore" | "db" | "auditChain";
+type SubsystemName = "rateLimitStore" | "db" | "auditChain" | "auditDlq";
 
 const ALLOWED_SUBSYSTEMS: readonly SubsystemName[] = [
   "rateLimitStore",
   "db",
   "auditChain",
+  "auditDlq",
 ];
 
 interface RehearsalGuardConfig {
@@ -337,6 +339,19 @@ function watcherFor(subsystem: SubsystemName): {
   }
   if (subsystem === "auditChain") {
     return auditHealthWatcher;
+  }
+  if (subsystem === "auditDlq") {
+    // The DLQ watcher is normally driven by the periodic depth poller
+    // in lib/auditDlqMonitor.ts, but the rehearsal injector seeds the
+    // streak directly so the staging cron can verify the duration
+    // alert pages on the DLQ-backlog branch end-to-end without
+    // needing to actually overflow the audit_failures table on
+    // staging. __reset is a no-op of any extra DLQ snapshot fields
+    // (unreplayedCount etc.) — they reflect the most recent real
+    // poll, not the synthetic rehearsal state, which is the right
+    // semantics: the rehearsal is testing the streak-duration page,
+    // not the depth measurement itself.
+    return auditDlqHealthWatcher;
   }
   return dbHealthWatcher;
 }

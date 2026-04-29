@@ -109,9 +109,26 @@ async function ensureChainHeadLoaded(): Promise<void> {
         retry_count     integer NOT NULL DEFAULT 0
       );
     `);
+    // `replayed_at` is the canonical "row has been re-applied to the
+    // append-only chain" marker used by the audit-DLQ backlog monitor
+    // (lib/auditDlqMonitor.ts) and the runbook's Step 5 alert. Added
+    // as a separate ALTER so existing deploys upgrade idempotently
+    // without recreating the table or dropping data.
+    await db.execute(sql`
+      ALTER TABLE audit_failures
+      ADD COLUMN IF NOT EXISTS replayed_at timestamptz;
+    `);
     await db.execute(sql`
       CREATE INDEX IF NOT EXISTS audit_failures_unresolved_idx
       ON audit_failures (ts) WHERE retry_count = 0;
+    `);
+    // Partial index that backs the per-minute backlog probe in
+    // auditDlqMonitor.ts: `SELECT count(*) FROM audit_failures WHERE
+    // replayed_at IS NULL`. Without it the count scans the whole
+    // table on every poll once the DLQ accumulates rows.
+    await db.execute(sql`
+      CREATE INDEX IF NOT EXISTS audit_failures_unreplayed_idx
+      ON audit_failures (id) WHERE replayed_at IS NULL;
     `);
     const [last] = await db
       .select()

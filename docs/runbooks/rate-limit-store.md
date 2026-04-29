@@ -419,6 +419,31 @@ The `subsystems` map currently exposes:
   duration-alert envelope as the other two subsystems; no extra
   polling required because every audited request acts as a
   heartbeat.
+- `auditDlq` — fed by the periodic depth poller in
+  [`lib/auditDlqMonitor.ts`](../../artifacts/api-server/src/lib/auditDlqMonitor.ts).
+  Every `AUDIT_DLQ_POLL_INTERVAL_MS` (default 60s) it runs
+  `SELECT count(*) FROM audit_failures WHERE replayed_at IS NULL`
+  and trips the watcher when the count exceeds
+  `AUDIT_DLQ_BACKLOG_THRESHOLD` (default 100). Same duration-alert
+  envelope as the other subsystems: the existing
+  `checkHealthzDegraded` probe iterates `subsystems.auditDlq`
+  automatically and pages on-call once `now - firstFailureAt`
+  exceeds the duration threshold. **This is intentionally the
+  sibling signal to `auditChain`**, not a replacement: `auditChain`
+  catches a sustained per-call failure streak (every recordAudit is
+  failing right now), `auditDlq` catches the different silent
+  failure mode where partial outages leave dead-lettered rows in
+  `audit_failures` that nobody ever replays — `recordAudit` reports
+  green again so `auditChain` recovers, but the
+  compliance-required hash chain still has a growing gap. The DLQ
+  snapshot includes extra `unreplayedCount`, `thresholdCount`,
+  `lastPollAt`, and `lastPollError` fields for human triage during
+  an incident; the duration-alert evaluator only reads `state` and
+  `firstFailureAt` so the extras are non-breaking. A poll error
+  (DB unreachable) is recorded into `lastPollError` and does NOT
+  trip the watcher — the dbHealthWatcher already pages for that
+  outage via /readyz, and conflating "we can't measure the DLQ"
+  with "the DLQ is over threshold" would erode the alert's signal.
 - `paymentGateway<Name>` — one entry per real, configured payment
   gateway (e.g. `paymentGatewayPaystack`, `paymentGatewayFlutterwave`).
   Fed by the same gateway success/failure stream that powers the

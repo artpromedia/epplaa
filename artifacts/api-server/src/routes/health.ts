@@ -20,6 +20,10 @@ import {
 } from "../lib/subsystemHealth";
 import { getRetentionSubsystemSnapshot } from "../lib/retention";
 import {
+  getAuditDlqSnapshot,
+  type AuditDlqSnapshot,
+} from "../lib/auditDlqMonitor";
+import {
   getRateLimitStoreKind,
   getRateLimitStoreReadyzStatus,
   getRateLimitStoreStatus,
@@ -80,6 +84,15 @@ router.get("/healthz", (_req, res) => {
   // the silent "tables grow forever and NDPR erase SLAs are missed"
   // failure mode the heartbeat was added to catch.
   const retentionStatus: SubsystemSnapshot = getRetentionSubsystemSnapshot();
+  // `auditDlq` complements `auditChain`: the chain watcher pages on a
+  // sustained per-call failure streak (every recordAudit failing right
+  // now), while the DLQ watcher pages on backlog *depth* — the case
+  // where partial outages leave rows in `audit_failures` that nobody
+  // ever replays. Without it, /healthz would report green while the
+  // compliance hash chain silently grew gaps. See
+  // `lib/auditDlqMonitor.ts` and runbook Step 5 for the full
+  // rationale.
+  const auditDlqStatus: AuditDlqSnapshot = getAuditDlqSnapshot();
   const subsystems: Record<string, SubsystemSnapshot> = {
     // Strip `kind` from the rate-limit snapshot so every subsystem
     // entry has an identical shape — `kind` stays on the top-level
@@ -93,6 +106,12 @@ router.get("/healthz", (_req, res) => {
     db: dbStatus,
     auditChain: auditStatus,
     retention: retentionStatus,
+    // AuditDlqSnapshot extends SubsystemSnapshot so the duration probe
+    // sees the same `{ state, firstFailureAt, ... }` shape as the
+    // others; the extra DLQ-specific fields (unreplayedCount,
+    // thresholdCount, lastPollAt, lastPollError) are surfaced for
+    // human triage and ignored by the probe's evaluator.
+    auditDlq: auditDlqStatus,
     // One entry per real, configured payment gateway (e.g.
     // `paymentGatewayPaystack`, `paymentGatewayFlutterwave`). Driven
     // by the same gateway success/failure stream that powers the

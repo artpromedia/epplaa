@@ -77,6 +77,10 @@ const {
   __seedHeartbeatForTests,
   RETENTION_HEARTBEAT_STALE_MS,
 } = await import("../lib/retention");
+const {
+  auditDlqHealthWatcher,
+  __resetAuditDlqMonitorForTests,
+} = await import("../lib/auditDlqMonitor");
 const { default: healthRouter, getReadyzConfigBlock } = await import("./health");
 const { __resetProductionEnvCacheForTests } = await import(
   "../lib/productionSignals"
@@ -169,8 +173,19 @@ beforeEach(() => {
   // logic explicitly call `__resetRetentionStateForTests` themselves.
   __resetRetentionStateForTests();
   __seedHeartbeatForTests("sweep", new Date());
+  // The audit-DLQ monitor is module-level; reset its watcher and
+  // cached snapshot fields so a streak injected by a previous test
+  // doesn't leak across cases. The interval itself is never started
+  // in NODE_ENV=test.
+  __resetAuditDlqMonitorForTests();
   clearProductionConfigEnv();
   __resetProductionEnvCacheForTests();
+  // The audit-DLQ snapshot reads `AUDIT_DLQ_BACKLOG_THRESHOLD` from
+  // process.env on every call so individual tests can override it;
+  // unset here to keep the default 100 visible in cross-test
+  // assertions.
+  delete process.env.AUDIT_DLQ_BACKLOG_THRESHOLD;
+  delete process.env.AUDIT_DLQ_POLL_INTERVAL_MS;
 });
 
 describe("GET /healthz (liveness)", () => {
@@ -222,12 +237,68 @@ describe("GET /healthz (liveness)", () => {
         failureCount: 0,
         firstFailureAt: null,
       },
+      // The audit-DLQ subsystem extends the standard snapshot with
+      // depth-specific fields. On a fresh boot (no poll has run), the
+      // standard fields are healthy/zero/null and the DLQ-specific
+      // fields signal "no measurement yet" via null
+      // unreplayedCount/lastPollAt — distinct from "measured 0",
+      // which would show unreplayedCount: 0 and a non-null
+      // lastPollAt. The threshold echoes the env-var-driven default
+      // so the /healthz consumer doesn't need out-of-band knowledge.
+      auditDlq: {
+        state: "healthy",
+        failureCount: 0,
+        firstFailureAt: null,
+        lastRecoveredAt: null,
+        unreplayedCount: null,
+        thresholdCount: 100,
+        lastPollAt: null,
+        lastPollError: null,
+      },
     });
     expect(typeof res.body.subsystems.retention.lastRecoveredAt).toBe(
       "number",
     );
     expect(dbExecuteMock).not.toHaveBeenCalled();
     expect(pingRedisMock).not.toHaveBeenCalled();
+  });
+
+  it("surfaces a degraded audit-DLQ backlog streak in subsystems.auditDlq when the depth poller has tripped the threshold", async () => {
+    // The DLQ watcher is normally driven by the periodic depth
+    // poller in lib/auditDlqMonitor.ts, but for the route-level test
+    // we exercise the watcher directly (the poller has its own unit
+    // tests) and assert /healthz round-trips the snapshot under the
+    // canonical `auditDlq` key. This is the path the duration alert
+    // pages on when audit_failures rows accumulate without a replay.
+    const FIRST_FAILURE_AT = 1_700_000_000_000;
+    auditDlqHealthWatcher.__injectStreak(FIRST_FAILURE_AT, 4);
+
+    const res = await request(buildApp()).get("/healthz");
+    expect(res.status).toBe(200);
+    expect(res.body.subsystems.auditDlq.state).toBe("degraded");
+    expect(res.body.subsystems.auditDlq.failureCount).toBe(4);
+    expect(res.body.subsystems.auditDlq.firstFailureAt).toBe(FIRST_FAILURE_AT);
+    // The injected streak doesn't fabricate a depth measurement —
+    // unreplayedCount stays null because no real poll has run. This
+    // matches the rehearsal semantics: the staging cron tests the
+    // streak-duration page, not the depth measurement itself.
+    expect(res.body.subsystems.auditDlq.unreplayedCount).toBeNull();
+    // Sibling subsystems are unaffected — only the DLQ is degraded so
+    // the duration alert pages naming exactly it.
+    expect(res.body.subsystems.rateLimitStore.state).toBe("healthy");
+    expect(res.body.subsystems.db.state).toBe("healthy");
+    expect(res.body.subsystems.auditChain.state).toBe("healthy");
+  });
+
+  it("reflects the AUDIT_DLQ_BACKLOG_THRESHOLD env override in subsystems.auditDlq.thresholdCount", async () => {
+    // Operators tune the threshold per environment (staging is more
+    // tolerant of synthetic backlog than production). /healthz must
+    // surface the *currently effective* threshold so an operator
+    // reading the response during an incident knows what the alert
+    // is comparing against, without having to ssh in to read the env.
+    process.env.AUDIT_DLQ_BACKLOG_THRESHOLD = "500";
+    const res = await request(buildApp()).get("/healthz");
+    expect(res.body.subsystems.auditDlq.thresholdCount).toBe(500);
   });
 
   it("surfaces a degraded audit pipeline streak in subsystems.auditChain when recordAudit has been failing", async () => {
@@ -373,11 +444,12 @@ describe("GET /healthz (liveness)", () => {
     // the matching `payment_provider_missing_for_production` boot
     // warning during triage, so the registry stays empty and only
     // the canonical non-payment subsystem entries (rateLimitStore,
-    // db, auditChain, retention) are exposed.
+    // db, auditChain, auditDlq, retention) are exposed.
     const res = await request(buildApp()).get("/healthz");
     expect(res.status).toBe(200);
     expect(Object.keys(res.body.subsystems).sort()).toEqual([
       "auditChain",
+      "auditDlq",
       "db",
       "rateLimitStore",
       "retention",

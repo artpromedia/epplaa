@@ -20,6 +20,7 @@ import { processDuePayouts } from "./lib/payments";
 import { drainOutbox } from "./lib/notifications";
 import { autoReturnExpiredBoxReservations } from "./routes/box";
 import { auditMutations, auditPiiReads, initAuditChain } from "./lib/audit";
+import { startAuditDlqMonitor } from "./lib/auditDlqMonitor";
 import { initAdminSchema } from "./lib/roles";
 import { initManufacturerSchema } from "./lib/manufacturers";
 import { initSecuritySchema } from "./lib/security";
@@ -303,9 +304,19 @@ if (process.env.NODE_ENV !== "test") {
   // Eagerly install the append-only audit-table triggers so the DB-level
   // immutability protection is in place before the first request rather
   // than lazily on the first audit write.
-  void initAuditChain().catch((err) =>
-    logger.error({ err: (err as Error).message }, "audit_chain_init_failed"),
-  );
+  void initAuditChain()
+    .then(() => {
+      // Start the audit-DLQ backlog monitor only after the audit
+      // schema migration completes — otherwise the very first poll
+      // could race against the `ALTER TABLE … ADD COLUMN
+      // replayed_at` and fail with `column "replayed_at" does not
+      // exist`. The monitor is idempotent on repeat calls so a
+      // future caller can't accidentally double-schedule it.
+      startAuditDlqMonitor();
+    })
+    .catch((err) =>
+      logger.error({ err: (err as Error).message }, "audit_chain_init_failed"),
+    );
   // Trust & Safety operator console schema: roles, user_roles,
   // moderation_cases, moderation_scans, payout_actions, takedowns.
   // Additive-only (CREATE TABLE IF NOT EXISTS / ADD COLUMN IF NOT EXISTS)
