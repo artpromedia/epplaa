@@ -8,10 +8,10 @@ import { db, schema } from "./db";
 import { eq, sql } from "drizzle-orm";
 import {
   chatSendAtomic,
-  isHost,
   softDeleteMessage,
   toPublicChatMessage,
 } from "./chat";
+import { canModerateStream } from "./streamModerators";
 import { enqueueReaction, REACTION_BUCKET_MS, startReactionFlusher } from "./reactions";
 import { recordAudit } from "./audit";
 
@@ -263,7 +263,8 @@ export function bootstrapSocketServer(httpServer: HttpServer): SocketServer {
             ack?.({ ok: false, reason: "bad_request" });
             return;
           }
-          if (!(await isHost(streamId, userId))) {
+          // Hosts and per-stream mods may both delete messages.
+          if (!(await canModerateStream(streamId, userId))) {
             ack?.({ ok: false, reason: "forbidden" });
             return;
           }

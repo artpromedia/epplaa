@@ -357,6 +357,86 @@ paths:
         "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/StreamModConfig" } } } }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
+  /streams/{streamId}/moderators:
+    get:
+      operationId: listStreamModerators
+      tags: [streams]
+      parameters:
+        - { in: path, name: streamId, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [moderators]
+                properties:
+                  moderators:
+                    type: array
+                    items: { $ref: "#/components/schemas/StreamModerator" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    post:
+      operationId: addStreamModerator
+      tags: [streams]
+      parameters:
+        - { in: path, name: streamId, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                userId: { type: string }
+                fromMessageId: { type: string }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [moderator, moderators]
+                properties:
+                  moderator: { $ref: "#/components/schemas/StreamModerator" }
+                  moderators:
+                    type: array
+                    items: { $ref: "#/components/schemas/StreamModerator" }
+        "400": { description: Bad Request }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /streams/{streamId}/moderators/{userId}:
+    delete:
+      operationId: removeStreamModerator
+      tags: [streams]
+      parameters:
+        - { in: path, name: streamId, required: true, schema: { type: string } }
+        - { in: path, name: userId, required: true, schema: { type: string } }
+      responses:
+        "204": { description: No Content }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /streams/{streamId}/moderation-role:
+    get:
+      operationId: getStreamModerationRole
+      tags: [streams]
+      parameters:
+        - { in: path, name: streamId, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [role]
+                properties:
+                  role: { type: string, enum: [host, mod, viewer] }
+        "401": { $ref: "#/components/responses/Unauthorized" }
   /streams/{streamId}/reactions:
     post:
       operationId: addStreamReaction
@@ -2913,7 +2993,7 @@ components:
         keyRotatedAtIso: { type: string, nullable: true }
     StreamPlayback:
       type: object
-      required: [id, status, provider, currentViewers, peakViewers, title, hostName, isLive]
+      required: [id, status, provider, currentViewers, peakViewers, title, hostName, isLive, slowModeSeconds, bannedWords]
       properties:
         id: { type: string }
         status: { type: string, enum: [idle, live, ended] }
@@ -2929,6 +3009,10 @@ components:
         isLive: { type: boolean }
         startedAtIso: { type: string, nullable: true }
         endedAtIso: { type: string, nullable: true }
+        slowModeSeconds: { type: integer }
+        bannedWords:
+          type: array
+          items: { type: string }
     StreamChatMessage:
       type: object
       required: [id, streamId, username, text, role, createdAtIso]
@@ -2948,6 +3032,14 @@ components:
         bannedWords:
           type: array
           items: { type: string }
+    StreamModerator:
+      type: object
+      required: [userId, username, grantedBy, grantedAtIso]
+      properties:
+        userId: { type: string }
+        username: { type: string }
+        grantedBy: { type: string }
+        grantedAtIso: { type: string }
     StreamReactionBucket:
       type: object
       required: [bucketAtIso, kind, count]

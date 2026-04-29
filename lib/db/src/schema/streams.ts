@@ -1,4 +1,4 @@
-import { pgTable, text, integer, boolean, timestamp } from "drizzle-orm/pg-core";
+import { pgTable, text, integer, boolean, timestamp, primaryKey, index } from "drizzle-orm/pg-core";
 
 export const streamsTable = pgTable("streams", {
   id: text("id").primaryKey(),
@@ -44,3 +44,29 @@ export const streamsTable = pgTable("streams", {
 });
 
 export type Stream = typeof streamsTable.$inferSelect;
+
+/**
+ * Per-stream moderator grants. A row promotes `userId` to a "mod" role
+ * inside `streamId`, letting them delete chat messages and tune slow-
+ * mode/banned-words just like the host. Only the host (the stream's
+ * sellerUserId) may insert or remove rows here. Composite PK keeps
+ * grants idempotent.
+ *
+ * `grantedBy` is the userId that promoted them (always the host today;
+ * kept generic so an admin operator could add a row in the future).
+ */
+export const streamModeratorsTable = pgTable(
+  "stream_moderators",
+  {
+    streamId: text("stream_id").notNull(),
+    userId: text("user_id").notNull(),
+    grantedBy: text("granted_by").notNull(),
+    grantedAt: timestamp("granted_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.streamId, t.userId] }),
+    streamIdx: index("stream_moderators_stream_idx").on(t.streamId),
+  }),
+);
+
+export type StreamModerator = typeof streamModeratorsTable.$inferSelect;

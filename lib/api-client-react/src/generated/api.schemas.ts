@@ -828,6 +828,8 @@ export interface StreamPlayback {
   isLive: boolean;
   startedAtIso?: string | null;
   endedAtIso?: string | null;
+  slowModeSeconds: number;
+  bannedWords: string[];
 }
 
 export type StreamChatMessageRole =
@@ -852,6 +854,13 @@ export interface StreamModConfig {
   id: string;
   slowModeSeconds: number;
   bannedWords: string[];
+}
+
+export interface StreamModerator {
+  userId: string;
+  username: string;
+  grantedBy: string;
+  grantedAtIso: string;
 }
 
 export interface StreamReactionBucket {
@@ -1365,6 +1374,33 @@ export type UpdateStreamModConfigBody = {
    */
   slowModeSeconds?: number;
   addBannedWord?: string;
+};
+
+export type ListStreamModerators200 = {
+  moderators: StreamModerator[];
+};
+
+export type AddStreamModeratorBody = {
+  userId?: string;
+  fromMessageId?: string;
+};
+
+export type AddStreamModerator201 = {
+  moderator: StreamModerator;
+  moderators: StreamModerator[];
+};
+
+export type GetStreamModerationRole200Role =
+  (typeof GetStreamModerationRole200Role)[keyof typeof GetStreamModerationRole200Role];
+
+export const GetStreamModerationRole200Role = {
+  host: "host",
+  mod: "mod",
+  viewer: "viewer",
+} as const;
+
+export type GetStreamModerationRole200 = {
+  role: GetStreamModerationRole200Role;
 };
 
 export type AddStreamReactionBody = {

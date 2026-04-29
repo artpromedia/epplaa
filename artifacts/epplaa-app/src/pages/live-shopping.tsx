@@ -1,6 +1,16 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Hls from "hls.js";
-import { Heart, MessageCircle, Share2, Gift, X, Send, Gauge } from "lucide-react";
+import {
+  Heart,
+  MessageCircle,
+  Share2,
+  Gift,
+  X,
+  Send,
+  Gauge,
+  ShieldCheck,
+  Trash2,
+} from "lucide-react";
 import { TippingSheet } from "@/components/tipping-sheet";
 import { Link, useParams, useLocation } from "wouter";
 import { useTheme } from "@/lib/theme-context";
@@ -16,6 +26,8 @@ import { useGetProduct } from "@workspace/api-client-react";
 import {
   getStreamPlayback,
   listStreamMessages,
+  getStreamModerationRole,
+  updateStreamModConfig,
   type StreamPlayback,
   type StreamChatMessage,
 } from "@workspace/api-client-react";
@@ -33,6 +45,10 @@ interface ChatMessage {
   username: string;
   text: string;
   kind: "bot" | "seed" | "you";
+  // Server-supplied role for "you" messages from the live socket. Used
+  // by the viewer UI to render host/mod badges. Demo (seed/bot) chats
+  // never carry a role.
+  role?: "host" | "mod" | "viewer";
   bot?: BotViewer;
   seed?: (typeof SEED_COMMENTS)[number];
 }
@@ -78,6 +94,15 @@ export default function LiveShopping() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const hlsRef = useRef<Hls | null>(null);
   const [liteMode, setLiteMode] = useState(false);
+  // Per-stream moderation role for the signed-in viewer (Task #22).
+  // "viewer" hides moderation tools; host/mod unlocks delete buttons
+  // and the slow-mode tuner. Defaults to "viewer" so anonymous browsing
+  // never accidentally renders mod controls.
+  const [myRole, setMyRole] = useState<"host" | "mod" | "viewer">("viewer");
+  // Tracks the *applied* slow-mode value the moderation dropdown should
+  // reflect. Seeded from the playback response so the dropdown shows
+  // the host's existing setting (not a misleading "Off") on first paint.
+  const [slowModeDraft, setSlowModeDraft] = useState<number | null>(null);
 
   // Real playback row overrides seed metadata when present.
   const liveTitle = realPlayback?.title ?? seedStream.title;
@@ -176,7 +201,12 @@ export default function LiveShopping() {
     if (!streamId) return;
     getStreamPlayback(streamId)
       .then((p) => {
-        if (!cancelled) setRealPlayback(p);
+        if (cancelled) return;
+        setRealPlayback(p);
+        // Seed the moderation slow-mode dropdown with the stream's
+        // currently-applied value so a deputised mod doesn't see a
+        // misleading "Off" before changing it.
+        setSlowModeDraft((prev) => prev ?? p.slowModeSeconds);
       })
       .catch(() => {
         if (!cancelled) setRealPlayback(null);
@@ -232,6 +262,7 @@ export default function LiveShopping() {
         username: m.username,
         text: m.text,
         kind: "you",
+        role: m.role,
       });
       setCommentCount((c) => c + 1);
     };
@@ -256,10 +287,17 @@ export default function LiveShopping() {
             username: m.username,
             text: m.text,
             kind: "you" as const,
+            role: m.role,
           })),
         );
       })
       .catch(() => {});
+    // Find out whether the signed-in viewer is the host, a deputised
+    // mod, or just a regular viewer for *this* stream. Failures fall
+    // through to "viewer" so the moderation panel stays hidden.
+    getStreamModerationRole(streamId)
+      .then((res) => setMyRole(res.role))
+      .catch(() => setMyRole("viewer"));
     return () => {
       sock.emit("leave", { streamId });
       sock.off("presence:count", onPresence);
@@ -336,6 +374,42 @@ export default function LiveShopping() {
     });
     setCommentCount((c) => c + 1);
     setDraft("");
+  }
+
+  // Mod tools are only meaningful when the page is backed by a real
+  // stream row (realPlayback). Demo seed streams have no server-side
+  // chat to moderate.
+  const canModerate = !!realPlayback && (myRole === "host" || myRole === "mod");
+
+  function onModDelete(messageId: string) {
+    if (!realPlayback || !streamId) return;
+    const sock = connectStreamSocket();
+    sock.emit(
+      "chat:delete",
+      { streamId, messageId },
+      (ack: { ok: boolean; reason?: string }) => {
+        if (!ack?.ok) {
+          toast({ title: "Couldn't delete message" });
+        }
+      },
+    );
+  }
+
+  async function onApplySlowMode(seconds: number) {
+    if (!streamId) return;
+    try {
+      const cfg = await updateStreamModConfig(streamId, {
+        slowModeSeconds: seconds,
+      });
+      setSlowModeDraft(cfg.slowModeSeconds);
+      toast({
+        title: cfg.slowModeSeconds > 0
+          ? `Slow mode set to ${cfg.slowModeSeconds}s`
+          : "Slow mode off",
+      });
+    } catch {
+      toast({ title: "Couldn't update slow mode" });
+    }
   }
 
   const following = isFollowing(stream.hostName);
@@ -527,6 +601,35 @@ export default function LiveShopping() {
 
       {/* Main Content Area (Bottom aligned) */}
       <div className="absolute bottom-0 left-0 right-0 p-4 pb-8 flex flex-col justify-end z-10">
+        {/* Mod Tools (host & deputised mods only) */}
+        {canModerate && (
+          <div
+            className="w-[70%] mb-2 flex items-center gap-2 text-[10px] bg-black/55 backdrop-blur-sm border border-[#A78BFA]/40 rounded-lg px-2 py-1.5"
+            data-testid="mod-tools-bar"
+          >
+            <ShieldCheck className="w-3 h-3 text-[#A78BFA] shrink-0" />
+            <span className="font-bold uppercase tracking-wider text-[#C4B5FD] shrink-0">
+              {myRole === "host" ? "Host tools" : "Mod tools"}
+            </span>
+            <span className="text-white/50 shrink-0">Slow mode</span>
+            <select
+              value={slowModeDraft ?? 0}
+              onChange={(e) => onApplySlowMode(Number(e.target.value))}
+              className="bg-white/10 border border-white/20 rounded px-1.5 py-0.5 text-white text-[10px]"
+              data-testid="select-mod-slow-mode"
+            >
+              <option value={0}>Off</option>
+              <option value={3}>3s</option>
+              <option value={10}>10s</option>
+              <option value={30}>30s</option>
+              <option value={60}>60s</option>
+            </select>
+            <span className="ml-auto text-white/40 shrink-0 hidden sm:inline">
+              Hover any chat to delete
+            </span>
+          </div>
+        )}
+
         {/* Chat Area */}
         <div
           ref={chatScrollRef}
@@ -535,12 +638,24 @@ export default function LiveShopping() {
         >
           {messages.map((m) => {
             if (m.kind === "you") {
+              const isHostMsg = m.role === "host";
+              const isModMsg = m.role === "mod";
               return (
                 <div
                   key={m.id}
-                  className="flex items-start gap-2 justify-end pr-1"
+                  className="flex items-start gap-2 justify-end pr-1 group"
                   data-testid="chat-message-you"
                 >
+                  {canModerate && !isHostMsg && (
+                    <button
+                      onClick={() => onModDelete(m.id)}
+                      className="opacity-0 group-hover:opacity-100 self-center text-white/60 hover:text-[#FF8855]"
+                      aria-label="Delete message"
+                      data-testid={`mod-delete-message-${m.id}`}
+                    >
+                      <Trash2 className="w-3 h-3" />
+                    </button>
+                  )}
                   <div
                     className={`backdrop-blur-sm rounded-xl rounded-tr-none p-2 border ${
                       isDark
@@ -549,11 +664,27 @@ export default function LiveShopping() {
                     }`}
                   >
                     <p
-                      className={`text-[10px] font-bold mb-0.5 ${
+                      className={`text-[10px] font-bold mb-0.5 flex items-center gap-1 ${
                         isDark ? "text-[#FF8855]" : "text-[#E6502E]"
                       }`}
                     >
-                      You
+                      {m.username}
+                      {isHostMsg && (
+                        <span
+                          className="inline-flex items-center text-[8px] uppercase font-bold bg-[#FF8855]/30 text-white rounded px-1 py-0.5"
+                          data-testid={`badge-host-${m.id}`}
+                        >
+                          host
+                        </span>
+                      )}
+                      {isModMsg && (
+                        <span
+                          className="inline-flex items-center gap-0.5 text-[8px] uppercase font-bold bg-[#A78BFA]/25 text-[#C4B5FD] rounded px-1 py-0.5"
+                          data-testid={`badge-mod-${m.id}`}
+                        >
+                          <ShieldCheck className="w-2 h-2" /> mod
+                        </span>
+                      )}
                     </p>
                     <p className="text-xs">{m.text}</p>
                   </div>

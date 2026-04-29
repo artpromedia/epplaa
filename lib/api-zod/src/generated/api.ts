@@ -385,6 +385,8 @@ export const GetStreamPlaybackResponse = zod.object({
   isLive: zod.boolean(),
   startedAtIso: zod.string().nullish(),
   endedAtIso: zod.string().nullish(),
+  slowModeSeconds: zod.number(),
+  bannedWords: zod.array(zod.string()),
 });
 
 export const ListStreamMessagesParams = zod.object({
@@ -449,6 +451,43 @@ export const UpdateStreamModConfigResponse = zod.object({
   id: zod.string(),
   slowModeSeconds: zod.number(),
   bannedWords: zod.array(zod.string()),
+});
+
+export const ListStreamModeratorsParams = zod.object({
+  streamId: zod.coerce.string(),
+});
+
+export const ListStreamModeratorsResponse = zod.object({
+  moderators: zod.array(
+    zod.object({
+      userId: zod.string(),
+      username: zod.string(),
+      grantedBy: zod.string(),
+      grantedAtIso: zod.string(),
+    }),
+  ),
+});
+
+export const AddStreamModeratorParams = zod.object({
+  streamId: zod.coerce.string(),
+});
+
+export const AddStreamModeratorBody = zod.object({
+  userId: zod.string().optional(),
+  fromMessageId: zod.string().optional(),
+});
+
+export const RemoveStreamModeratorParams = zod.object({
+  streamId: zod.coerce.string(),
+  userId: zod.coerce.string(),
+});
+
+export const GetStreamModerationRoleParams = zod.object({
+  streamId: zod.coerce.string(),
+});
+
+export const GetStreamModerationRoleResponse = zod.object({
+  role: zod.enum(["host", "mod", "viewer"]),
 });
 
 export const AddStreamReactionParams = zod.object({

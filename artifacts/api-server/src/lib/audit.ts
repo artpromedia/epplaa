@@ -316,6 +316,9 @@ const NON_PII_GET_ALLOWLIST: readonly ((p: string) => boolean)[] = [
   (p) => p === "/reviews",
   (p) => /^\/pudo\/[^/]+\/manifest$/.test(p),
   (p) => p === "/admin/payment-gateway-health",
+  // The viewer's own moderation role for a stream — returns the
+  // requester's role only, never anyone else's PII.
+  (p) => /^\/streams\/[^/]+\/moderation-role$/.test(p),
   // Dev-only payment debug endpoint, never reachable in production.
   (p) => /^\/__devpay\/[^/]+$/.test(p),
 ];
@@ -348,6 +351,10 @@ const PII_READ_PATTERNS: readonly PiiReadPattern[] = [
   { match: (p) => p === "/ndpr/requests", action: "ndpr.requests.list.read", entity: "ndprRequest" },
   { match: (p) => /^\/ndpr\/requests\/[^/]+$/.test(p), action: "ndpr.request.read", entity: "ndprRequest", entityIdParam: "id" },
   // Admin reads — extra-sensitive because they expose other users' PII.
+  // Listing a stream's moderators returns userIds + display names of
+  // viewers the host has deputised — host-only on the route, but we
+  // still want a richly-shaped audit row for the read.
+  { match: (p) => /^\/streams\/[^/]+\/moderators$/.test(p), action: "stream.moderators.list.read", entity: "streamModerator", entityIdParam: "streamId" },
   { match: (p) => p === "/admin/payment-intents", action: "admin.paymentIntents.read", entity: "paymentIntent" },
   { match: (p) => p === "/admin/kyc/pending", action: "admin.kycPending.read", entity: "kycVerification" },
   { match: (p) => p === "/admin/reconciliation-runs", action: "admin.reconciliationRuns.read", entity: "reconciliationRun" },

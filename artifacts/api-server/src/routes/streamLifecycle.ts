@@ -11,7 +11,14 @@ import { persistReplayForEndedStream } from "../lib/replayPersist";
 import { enqueueNotification } from "../lib/notifications";
 import { recordAudit } from "../lib/audit";
 import { logger } from "../lib/logger";
-import { isHost, listRecentMessages, chatSendAtomic, softDeleteMessage, toPublicChatMessage } from "../lib/chat";
+import { isHost, listRecentMessages, chatSendAtomic, softDeleteMessage, toPublicChatMessage, resolveChatRole } from "../lib/chat";
+import {
+  addStreamModerator,
+  canModerateStream,
+  listStreamModerators,
+  lookupChatMessageAuthor,
+  removeStreamModerator,
+} from "../lib/streamModerators";
 import { recordReaction, recentReactions } from "../lib/reactions";
 import { getSocketServer } from "../lib/socket";
 import { moderateText, moderateImage } from "../lib/moderation";
@@ -268,13 +275,20 @@ router.get("/streams/:streamId/playback", async (req, res) => {
     isLive: row.isLive,
     startedAtIso: row.startedAt?.toISOString() ?? null,
     endedAtIso: row.endedAt?.toISOString() ?? null,
+    // Live mod-config snapshot, included so the viewer-side moderation
+    // tools (Task #22) can initialise their slow-mode dropdown to the
+    // currently-applied value instead of misleading 0/Off.
+    slowModeSeconds: row.slowModeSeconds,
+    bannedWords: row.bannedWords,
   });
 });
 
 router.post("/streams/:streamId/mod-config", async (req, res) => {
   const userId = requireUserId(req, res);
   if (!userId) return;
-  if (!(await isHost(req.params.streamId, userId))) {
+  // Hosts and promoted moderators may both tune slow-mode and banned
+  // words — that's the whole point of deputising mods.
+  if (!(await canModerateStream(req.params.streamId, userId))) {
     res.status(403).json({ error: "forbidden" });
     return;
   }
@@ -378,7 +392,9 @@ router.post("/streams/:streamId/messages", async (req, res) => {
 router.delete("/streams/:streamId/messages/:messageId", async (req, res) => {
   const userId = requireUserId(req, res);
   if (!userId) return;
-  if (!(await isHost(req.params.streamId, userId))) {
+  // Mods can delete chat messages just like the host (Task #22). The
+  // moderator-grant table is the source of truth — see canModerateStream.
+  if (!(await canModerateStream(req.params.streamId, userId))) {
     res.status(403).json({ error: "forbidden" });
     return;
   }
@@ -400,6 +416,137 @@ router.delete("/streams/:streamId/messages/:messageId", async (req, res) => {
     messageId: req.params.messageId,
   });
   res.status(204).end();
+});
+
+// --- Moderator management (Task #22) -------------------------------------
+//
+// Only the host (the seller_user_id on the stream row) may add or remove
+// moderators. Mods themselves cannot promote further mods — that's a
+// privilege-escalation footgun we'd rather not arm.
+//
+// `POST /streams/:streamId/moderators` accepts either:
+//   - `{ userId: "..." }` — direct promotion by user id
+//   - `{ fromMessageId: "msg_..." }` — promote the author of a chat
+//     message id (so the host UI can deputise straight from a chat row
+//     without ever exposing raw user ids in the public chat payload).
+//
+// Each grant/revoke writes a hash-chained audit row so trust & safety
+// has a permanent record of who got mod and when.
+
+router.get("/streams/:streamId/moderators", async (req, res) => {
+  const userId = requireUserId(req, res);
+  if (!userId) return;
+  if (!(await isHost(req.params.streamId, userId))) {
+    res.status(403).json({ error: "forbidden" });
+    return;
+  }
+  const moderators = await listStreamModerators(req.params.streamId);
+  res.json({ moderators });
+});
+
+router.post("/streams/:streamId/moderators", async (req, res) => {
+  const actorId = requireUserId(req, res);
+  if (!actorId) return;
+  if (!(await isHost(req.params.streamId, actorId))) {
+    res.status(403).json({ error: "forbidden" });
+    return;
+  }
+  const body = req.body as { userId?: string; fromMessageId?: string };
+  let promoteUserId = String(body.userId ?? "").trim();
+  let resolvedFromMessage = false;
+  if (!promoteUserId && body.fromMessageId) {
+    const author = await lookupChatMessageAuthor(
+      req.params.streamId,
+      String(body.fromMessageId).trim(),
+    );
+    if (!author) {
+      res.status(404).json({ error: "message_not_found" });
+      return;
+    }
+    promoteUserId = author.userId;
+    resolvedFromMessage = true;
+  }
+  if (!promoteUserId) {
+    res.status(400).json({ error: "missing_user" });
+    return;
+  }
+  // Promoting the host themselves is a no-op (they already outrank mods);
+  // we refuse rather than silently inserting a redundant grant row.
+  const [stream] = await db
+    .select({ seller: schema.streamsTable.sellerUserId })
+    .from(schema.streamsTable)
+    .where(eq(schema.streamsTable.id, req.params.streamId))
+    .limit(1);
+  if (!stream) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  if (stream.seller && stream.seller === promoteUserId) {
+    res.status(400).json({ error: "cannot_promote_host" });
+    return;
+  }
+  await addStreamModerator({
+    streamId: req.params.streamId,
+    userId: promoteUserId,
+    grantedBy: actorId,
+  });
+  await recordAudit({
+    actorId,
+    action: "stream.moderator.add",
+    entity: "streamModerator",
+    entityId: `${req.params.streamId}:${promoteUserId}`,
+    payload: {
+      streamId: req.params.streamId,
+      promotedUserId: promoteUserId,
+      via: resolvedFromMessage ? "message" : "userId",
+    },
+  });
+  const moderators = await listStreamModerators(req.params.streamId);
+  const promoted = moderators.find((m) => m.userId === promoteUserId);
+  res.status(201).json({
+    moderator: promoted ?? {
+      userId: promoteUserId,
+      username: "viewer",
+      grantedBy: actorId,
+      grantedAtIso: new Date().toISOString(),
+    },
+    moderators,
+  });
+});
+
+router.delete("/streams/:streamId/moderators/:userId", async (req, res) => {
+  const actorId = requireUserId(req, res);
+  if (!actorId) return;
+  if (!(await isHost(req.params.streamId, actorId))) {
+    res.status(403).json({ error: "forbidden" });
+    return;
+  }
+  const removed = await removeStreamModerator(req.params.streamId, req.params.userId);
+  if (!removed) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  await recordAudit({
+    actorId,
+    action: "stream.moderator.remove",
+    entity: "streamModerator",
+    entityId: `${req.params.streamId}:${req.params.userId}`,
+    payload: {
+      streamId: req.params.streamId,
+      revokedUserId: req.params.userId,
+    },
+  });
+  res.status(204).end();
+});
+
+// Lets a signed-in viewer find out whether they're the host or a mod for
+// this stream. The viewer client uses this to decide whether to render the
+// in-stream moderation tools (delete buttons, slow-mode dropdown).
+router.get("/streams/:streamId/moderation-role", async (req, res) => {
+  const userId = requireUserId(req, res);
+  if (!userId) return;
+  const role = await resolveChatRole(req.params.streamId, userId);
+  res.json({ role });
 });
 
 router.post("/streams/:streamId/reactions", async (req, res) => {

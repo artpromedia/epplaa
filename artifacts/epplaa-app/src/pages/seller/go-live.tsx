@@ -9,8 +9,12 @@ import {
   listStreamMessages,
   deleteStreamMessage,
   updateStreamModConfig,
+  listStreamModerators,
+  addStreamModerator,
+  removeStreamModerator,
   type StreamWithSecrets,
   type StreamChatMessage,
+  type StreamModerator,
 } from "@workspace/api-client-react";
 import {
   Radio,
@@ -23,6 +27,9 @@ import {
   RefreshCw,
   Trash2,
   ShieldAlert,
+  ShieldPlus,
+  ShieldCheck,
+  X,
 } from "lucide-react";
 import { useTheme } from "@/lib/theme-context";
 import { useCountry } from "@/lib/country-context";
@@ -351,6 +358,7 @@ function LiveBroadcastView({
   const [slowMode, setSlowMode] = useState<number>(stream.slowModeSeconds);
   const [bannedDraft, setBannedDraft] = useState("");
   const [bannedWords, setBannedWords] = useState<string[]>(stream.bannedWords);
+  const [moderators, setModerators] = useState<StreamModerator[]>([]);
   const headline = featured[0];
 
   // Connect to socket presence + chat firehose so the host can moderate.
@@ -374,6 +382,11 @@ function LiveBroadcastView({
     // Hydrate with the most recent persisted history.
     listStreamMessages(stream.id, { limit: 50 })
       .then((res) => setRecentChat(res.messages))
+      .catch(() => {});
+    // And the current moderator roster so the host can see who they've
+    // already deputised and revoke if needed.
+    listStreamModerators(stream.id)
+      .then((res) => setModerators(res.moderators))
       .catch(() => {});
     return () => {
       sock.emit("leave", { streamId: stream.id });
@@ -419,6 +432,26 @@ function LiveBroadcastView({
       await updateStreamModConfig(stream.id, { slowModeSeconds: value });
     } catch {
       toast({ title: "Couldn't update slow mode" });
+    }
+  }
+
+  async function onPromoteFromMessage(messageId: string, username: string) {
+    try {
+      const res = await addStreamModerator(stream.id, { fromMessageId: messageId });
+      setModerators(res.moderators);
+      toast({ title: `${username} promoted to mod` });
+    } catch {
+      toast({ title: "Couldn't promote viewer" });
+    }
+  }
+
+  async function onDemote(userId: string, username: string) {
+    try {
+      await removeStreamModerator(stream.id, userId);
+      setModerators((prev) => prev.filter((m) => m.userId !== userId));
+      toast({ title: `${username} is no longer a mod` });
+    } catch {
+      toast({ title: "Couldn't remove mod" });
     }
   }
 
@@ -574,6 +607,47 @@ function LiveBroadcastView({
                 </div>
               )}
             </div>
+            <div className="mt-3 pt-3 border-t border-white/10">
+              <label className="block text-[11px] font-bold text-white/70 mb-1.5 flex items-center gap-1">
+                <ShieldCheck className="w-3 h-3 text-[#A78BFA]" />
+                Moderators ({moderators.length})
+              </label>
+              <p className="text-[10px] text-white/40 mb-2">
+                Hover any viewer message in chat and tap the shield to deputise
+                them.
+              </p>
+              {moderators.length === 0 ? (
+                <p
+                  className="text-[10px] text-white/40 italic"
+                  data-testid="moderators-empty"
+                >
+                  No moderators yet.
+                </p>
+              ) : (
+                <div
+                  className="flex flex-wrap gap-1.5"
+                  data-testid="moderators-list"
+                >
+                  {moderators.map((m) => (
+                    <span
+                      key={m.userId}
+                      className="inline-flex items-center gap-1 text-[10px] bg-[#A78BFA]/15 border border-[#A78BFA]/30 rounded-full pl-2 pr-1 py-0.5"
+                      data-testid={`moderator-chip-${m.userId}`}
+                    >
+                      {m.username}
+                      <button
+                        onClick={() => onDemote(m.userId, m.username)}
+                        className="text-white/60 hover:text-[#FF8855] rounded-full"
+                        aria-label={`Remove ${m.username} as mod`}
+                        data-testid={`demote-mod-${m.userId}`}
+                      >
+                        <X className="w-3 h-3" />
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
           </section>
 
           <section className="bg-white/5 border border-white/10 rounded-xl p-3">
@@ -592,12 +666,35 @@ function LiveBroadcastView({
                 >
                   <span
                     className={`font-bold ${
-                      m.role === "host" ? "text-[#FF8855]" : "text-[#5BA3F5]"
+                      m.role === "host"
+                        ? "text-[#FF8855]"
+                        : m.role === "mod"
+                          ? "text-[#A78BFA]"
+                          : "text-[#5BA3F5]"
                     }`}
                   >
                     {m.username}
+                    {m.role === "mod" && (
+                      <span
+                        className="ml-1 inline-flex items-center gap-0.5 text-[9px] uppercase font-bold bg-[#A78BFA]/20 text-[#C4B5FD] rounded px-1 py-0.5 align-middle"
+                        data-testid={`badge-mod-${m.id}`}
+                      >
+                        <ShieldCheck className="w-2.5 h-2.5" /> mod
+                      </span>
+                    )}
                   </span>
                   <span className="flex-1">{m.text}</span>
+                  {m.role !== "host" && m.role !== "mod" && (
+                    <button
+                      onClick={() => onPromoteFromMessage(m.id, m.username)}
+                      className="opacity-0 group-hover:opacity-100 text-white/50 hover:text-[#A78BFA]"
+                      aria-label="Promote to mod"
+                      title="Promote to moderator"
+                      data-testid={`promote-mod-${m.id}`}
+                    >
+                      <ShieldPlus className="w-3 h-3" />
+                    </button>
+                  )}
                   {m.role !== "host" && (
                     <button
                       onClick={() => onDeleteMessage(m.id)}

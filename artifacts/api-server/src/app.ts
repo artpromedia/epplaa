@@ -37,6 +37,7 @@ import {
   pruneStalePendingMfaEnrollments,
 } from "./lib/mfa";
 import { initRetentionSchema, runRetentionSweep } from "./lib/retention";
+import { initStreamModeratorsSchema } from "./lib/streamModerators";
 import { securityHeaders } from "./middlewares/securityHeaders";
 import { csrfMiddleware } from "./middlewares/csrf";
 import { apiRateLimit } from "./middlewares/apiRateLimit";
@@ -390,6 +391,13 @@ if (process.env.NODE_ENV !== "test") {
   // defaults and the manifest endpoint keeps working unchanged.
   void initPudoDeliverySchema().catch((err) =>
     logger.error({ err: (err as Error).message }, "pudo_delivery_schema_init_failed"),
+  );
+  // Per-stream moderator grants (Task #22): hosts can deputise viewers
+  // to delete chat messages and tune slow-mode/banned-words during a
+  // live stream. Same additive `CREATE TABLE IF NOT EXISTS` pattern as
+  // the other init* helpers so a redeploy is always safe.
+  void initStreamModeratorsSchema().catch((err) =>
+    logger.error({ err: (err as Error).message }, "stream_moderators_schema_init_failed"),
   );
   // OpenTelemetry SDK init. No-op when OTEL_EXPORTER_OTLP_ENDPOINT is
   // unset, which is the normal case in dev. In prod it ships traces from

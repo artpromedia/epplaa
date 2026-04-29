@@ -18,6 +18,8 @@ import type {
 
 import type {
   AddRecentSearchBody,
+  AddStreamModerator201,
+  AddStreamModeratorBody,
   AddStreamReaction201,
   AddStreamReactionBody,
   AddressVerification,
@@ -72,6 +74,7 @@ import type {
   GetKycDocument200,
   GetPaymentsMode200,
   GetSellerEarningsParams,
+  GetStreamModerationRole200,
   GetTrendingStreams200,
   GetTrendingStreamsParams,
   GoLiveResponse,
@@ -84,6 +87,7 @@ import type {
   ListReviewsParams,
   ListStreamMessages200,
   ListStreamMessagesParams,
+  ListStreamModerators200,
   MfaBackupCodeBody,
   MfaBackupCodesResult,
   MfaSetupBody,
@@ -2368,6 +2372,359 @@ export const useUpdateStreamModConfig = <
 > => {
   return useMutation(getUpdateStreamModConfigMutationOptions(options));
 };
+
+export const getListStreamModeratorsUrl = (streamId: string) => {
+  return `/api/streams/${streamId}/moderators`;
+};
+
+export const listStreamModerators = async (
+  streamId: string,
+  options?: RequestInit,
+): Promise<ListStreamModerators200> => {
+  return customFetch<ListStreamModerators200>(
+    getListStreamModeratorsUrl(streamId),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getListStreamModeratorsQueryKey = (streamId: string) => {
+  return [`/api/streams/${streamId}/moderators`] as const;
+};
+
+export const getListStreamModeratorsQueryOptions = <
+  TData = Awaited<ReturnType<typeof listStreamModerators>>,
+  TError = ErrorType<UnauthorizedResponse | ForbiddenResponse>,
+>(
+  streamId: string,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof listStreamModerators>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getListStreamModeratorsQueryKey(streamId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof listStreamModerators>>
+  > = ({ signal }) =>
+    listStreamModerators(streamId, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: !!streamId,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof listStreamModerators>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type ListStreamModeratorsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listStreamModerators>>
+>;
+export type ListStreamModeratorsQueryError = ErrorType<
+  UnauthorizedResponse | ForbiddenResponse
+>;
+
+export function useListStreamModerators<
+  TData = Awaited<ReturnType<typeof listStreamModerators>>,
+  TError = ErrorType<UnauthorizedResponse | ForbiddenResponse>,
+>(
+  streamId: string,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof listStreamModerators>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getListStreamModeratorsQueryOptions(streamId, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+export const getAddStreamModeratorUrl = (streamId: string) => {
+  return `/api/streams/${streamId}/moderators`;
+};
+
+export const addStreamModerator = async (
+  streamId: string,
+  addStreamModeratorBody: AddStreamModeratorBody,
+  options?: RequestInit,
+): Promise<AddStreamModerator201> => {
+  return customFetch<AddStreamModerator201>(
+    getAddStreamModeratorUrl(streamId),
+    {
+      ...options,
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...options?.headers },
+      body: JSON.stringify(addStreamModeratorBody),
+    },
+  );
+};
+
+export const getAddStreamModeratorMutationOptions = <
+  TError = ErrorType<
+    void | UnauthorizedResponse | ForbiddenResponse | NotFoundResponse
+  >,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof addStreamModerator>>,
+    TError,
+    { streamId: string; data: BodyType<AddStreamModeratorBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof addStreamModerator>>,
+  TError,
+  { streamId: string; data: BodyType<AddStreamModeratorBody> },
+  TContext
+> => {
+  const mutationKey = ["addStreamModerator"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof addStreamModerator>>,
+    { streamId: string; data: BodyType<AddStreamModeratorBody> }
+  > = (props) => {
+    const { streamId, data } = props ?? {};
+
+    return addStreamModerator(streamId, data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type AddStreamModeratorMutationResult = NonNullable<
+  Awaited<ReturnType<typeof addStreamModerator>>
+>;
+export type AddStreamModeratorMutationBody = BodyType<AddStreamModeratorBody>;
+export type AddStreamModeratorMutationError = ErrorType<
+  void | UnauthorizedResponse | ForbiddenResponse | NotFoundResponse
+>;
+
+export const useAddStreamModerator = <
+  TError = ErrorType<
+    void | UnauthorizedResponse | ForbiddenResponse | NotFoundResponse
+  >,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof addStreamModerator>>,
+    TError,
+    { streamId: string; data: BodyType<AddStreamModeratorBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof addStreamModerator>>,
+  TError,
+  { streamId: string; data: BodyType<AddStreamModeratorBody> },
+  TContext
+> => {
+  return useMutation(getAddStreamModeratorMutationOptions(options));
+};
+
+export const getRemoveStreamModeratorUrl = (
+  streamId: string,
+  userId: string,
+) => {
+  return `/api/streams/${streamId}/moderators/${userId}`;
+};
+
+export const removeStreamModerator = async (
+  streamId: string,
+  userId: string,
+  options?: RequestInit,
+): Promise<void> => {
+  return customFetch<void>(getRemoveStreamModeratorUrl(streamId, userId), {
+    ...options,
+    method: "DELETE",
+  });
+};
+
+export const getRemoveStreamModeratorMutationOptions = <
+  TError = ErrorType<
+    UnauthorizedResponse | ForbiddenResponse | NotFoundResponse
+  >,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof removeStreamModerator>>,
+    TError,
+    { streamId: string; userId: string },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof removeStreamModerator>>,
+  TError,
+  { streamId: string; userId: string },
+  TContext
+> => {
+  const mutationKey = ["removeStreamModerator"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof removeStreamModerator>>,
+    { streamId: string; userId: string }
+  > = (props) => {
+    const { streamId, userId } = props ?? {};
+
+    return removeStreamModerator(streamId, userId, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type RemoveStreamModeratorMutationResult = NonNullable<
+  Awaited<ReturnType<typeof removeStreamModerator>>
+>;
+
+export type RemoveStreamModeratorMutationError = ErrorType<
+  UnauthorizedResponse | ForbiddenResponse | NotFoundResponse
+>;
+
+export const useRemoveStreamModerator = <
+  TError = ErrorType<
+    UnauthorizedResponse | ForbiddenResponse | NotFoundResponse
+  >,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof removeStreamModerator>>,
+    TError,
+    { streamId: string; userId: string },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof removeStreamModerator>>,
+  TError,
+  { streamId: string; userId: string },
+  TContext
+> => {
+  return useMutation(getRemoveStreamModeratorMutationOptions(options));
+};
+
+export const getGetStreamModerationRoleUrl = (streamId: string) => {
+  return `/api/streams/${streamId}/moderation-role`;
+};
+
+export const getStreamModerationRole = async (
+  streamId: string,
+  options?: RequestInit,
+): Promise<GetStreamModerationRole200> => {
+  return customFetch<GetStreamModerationRole200>(
+    getGetStreamModerationRoleUrl(streamId),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getGetStreamModerationRoleQueryKey = (streamId: string) => {
+  return [`/api/streams/${streamId}/moderation-role`] as const;
+};
+
+export const getGetStreamModerationRoleQueryOptions = <
+  TData = Awaited<ReturnType<typeof getStreamModerationRole>>,
+  TError = ErrorType<UnauthorizedResponse>,
+>(
+  streamId: string,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getStreamModerationRole>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getGetStreamModerationRoleQueryKey(streamId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getStreamModerationRole>>
+  > = ({ signal }) =>
+    getStreamModerationRole(streamId, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: !!streamId,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getStreamModerationRole>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetStreamModerationRoleQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getStreamModerationRole>>
+>;
+export type GetStreamModerationRoleQueryError = ErrorType<UnauthorizedResponse>;
+
+export function useGetStreamModerationRole<
+  TData = Awaited<ReturnType<typeof getStreamModerationRole>>,
+  TError = ErrorType<UnauthorizedResponse>,
+>(
+  streamId: string,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getStreamModerationRole>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetStreamModerationRoleQueryOptions(
+    streamId,
+    options,
+  );
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
 
 export const getAddStreamReactionUrl = (streamId: string) => {
   return `/api/streams/${streamId}/reactions`;

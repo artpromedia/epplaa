@@ -2,6 +2,7 @@ import { db, schema } from "./db";
 import { eq, and, isNull, gt, desc, sql } from "drizzle-orm";
 import { createHash } from "node:crypto";
 import { newSafeId } from "./ids";
+import { isStreamModerator } from "./streamModerators";
 
 // Default profanity list; extended per-stream via streams.banned_words.
 const DEFAULT_BANNED = [
@@ -39,6 +40,9 @@ export async function slowModeWaitSeconds(streamId: string, userId: string): Pro
     .limit(1);
   if (!stream) return 0;
   if (stream.seller && stream.seller === userId) return 0;
+  // Mods are exempt from slow-mode just like the host — they need to
+  // respond in real time when chat heats up.
+  if (await isStreamModerator(streamId, userId)) return 0;
   const seconds = stream.slowMode ?? 0;
   if (seconds <= 0) return 0;
   const since = new Date(Date.now() - seconds * 1000);
@@ -90,8 +94,13 @@ export async function chatSendAtomic(input: {
       return { ok: false, reason: "not_found" };
     }
     const isHost = !!(stream.seller && stream.seller === input.userId);
+    // Mods are also exempt from slow-mode (see slowModeWaitSeconds).
+    // Resolved inside the same transaction so a just-revoked mod
+    // can't slip past slow-mode using a stale role read.
+    const isMod = isHost ? false : await isStreamModeratorTx(tx, input.streamId, input.userId);
+    const isPrivileged = isHost || isMod;
     const seconds = stream.slowMode ?? 0;
-    if (!isHost && seconds > 0) {
+    if (!isPrivileged && seconds > 0) {
       const since = new Date(Date.now() - seconds * 1000);
       const [last] = await tx
         .select({ createdAt: schema.streamChatMessagesTable.createdAt })
@@ -115,7 +124,7 @@ export async function chatSendAtomic(input: {
       }
     }
     const filtered = applyBannedWordsFilter(input.text, stream.banned ?? []);
-    const role = isHost ? "host" : "viewer";
+    const role = isHost ? "host" : isMod ? "mod" : "viewer";
     const [row] = await tx
       .insert(schema.streamChatMessagesTable)
       .values({
@@ -147,18 +156,43 @@ function advisoryLockKey(key: string): bigint {
   return BigInt("0x" + hex) & 0x7fffffffffffffffn;
 }
 
-export async function resolveChatRole(streamId: string, userId: string): Promise<"host" | "viewer"> {
+export async function resolveChatRole(
+  streamId: string,
+  userId: string,
+): Promise<"host" | "mod" | "viewer"> {
   const [stream] = await db
     .select({ seller: schema.streamsTable.sellerUserId })
     .from(schema.streamsTable)
     .where(eq(schema.streamsTable.id, streamId))
     .limit(1);
   if (stream?.seller && stream.seller === userId) return "host";
+  if (await isStreamModerator(streamId, userId)) return "mod";
   return "viewer";
 }
 
 export async function isHost(streamId: string, userId: string): Promise<boolean> {
   return (await resolveChatRole(streamId, userId)) === "host";
+}
+
+// Tx-scoped variant of isStreamModerator used inside chatSendAtomic so
+// the mod check joins the same advisory-lock transaction as the role
+// snapshot/insert.
+async function isStreamModeratorTx(
+  tx: Parameters<Parameters<typeof db.transaction>[0]>[0],
+  streamId: string,
+  userId: string,
+): Promise<boolean> {
+  const [row] = await tx
+    .select({ userId: schema.streamModeratorsTable.userId })
+    .from(schema.streamModeratorsTable)
+    .where(
+      and(
+        eq(schema.streamModeratorsTable.streamId, streamId),
+        eq(schema.streamModeratorsTable.userId, userId),
+      ),
+    )
+    .limit(1);
+  return !!row;
 }
 
 export interface PersistedChatMessage {
