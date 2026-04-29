@@ -40,6 +40,7 @@ outage.
 | `MFA_BACKUP_PEPPER` | Falls back to `SESSION_SECRET`, then to the constant `"dev-mfa-pepper"` — production deploys without either env var would store backup-code hashes under a hard-coded pepper. | ❌ Indirectly covered by the `SESSION_SECRET` check (the chain is `MFA_BACKUP_PEPPER ?? SESSION_SECRET ?? "dev-mfa-pepper"`); a dedicated check is a future candidate (see follow-up #94). | n/a. |
 | `INTERNAL_API_KEY` | `/pudo`, `/promos`, `/referrals/payout` cross-service webhooks return `503 not_configured` — the endpoints are dead. Less severe than auth bypass (fail-closed), but a silent feature outage. | ✅ **Warns at boot** via `assertInternalApiKeyConfiguredForProduction` (this runbook). | `lib/internalApiKey.ts`, alert tag `internal_api_key_missing_for_production`. |
 | `TERMII_API_KEY` | OTP issuer flips to a dev echo path that returns the OTP code in the API response — phone verification is trivially bypassable and any caller can claim any phone number. | ✅ **Warns at boot** via `assertTermiiConfiguredForProduction` (this runbook). | `lib/notifications/termii.ts`, alert tag `termii_api_key_missing_for_production`. |
+| `POSTMARK_API_TOKEN`, `SENDGRID_API_KEY` (at least one of) | Email registry falls back to `ConsoleChannel` when neither real provider is configured — outbox marks every transactional email (MFA backup-code nudges, MFA security alerts, departed-user notifications, …) as delivered without anyone receiving it. Same silent-success shape that task #72 fixed for the no-op stub. | ✅ **Warns at boot** via `assertEmailProviderConfiguredForProduction` (this runbook, task #140). | `lib/notifications/emailProvider.ts`, alert tag `email_provider_missing_for_production`. |
 | `PAYSTACK_SECRET_KEY`, `FLUTTERWAVE_SECRET_KEY`, `FLUTTERWAVE_WEBHOOK_HASH` | If neither real gateway is configured, payments fall back to `DevMockGateway` which always returns `{ ok: true }` without touching a real card; if Flutterwave is the only gateway, missing `FLUTTERWAVE_WEBHOOK_HASH` means webhooks cannot be verified (silent settlement loss). | ✅ **Warns at boot** via `assertPaymentProviderConfiguredForProduction` (this runbook). | `lib/payments.ts`, alert tag `payment_provider_missing_for_production`. |
 | `SHIPBUBBLE_API_KEY`, `SHIPBUBBLE_SENDER_CODE`, `SHIPBUBBLE_WEBHOOK_SECRET` | Shipping returns three deterministic stub rates and orders ship under fake tracking numbers; missing webhook secret means inbound tracking events fail signature verification and are silently dropped. | ✅ **Warns at boot** via `assertShipbubbleConfiguredForProduction` (this runbook). | `lib/fulfillment/shipbubble.ts`, alert tag `shipbubble_credentials_missing_for_production`. |
 | `MODERATION_PROVIDER` (+ `HIVE_API_KEY` or `SIGHTENGINE_API_USER`+`SIGHTENGINE_API_SECRET`; optional `PHOTODNA_API_KEY`) | Every uploaded image, stream poster, and chat message silently falls through to a substring-matching stub — no real CSAM / NSFW / hate / weapons scanning happens. The dashboard `degraded` flag is also raised, and `runModerationProviderHealthCheck` records the boot probe to the audit log. | ✅ **Warns at boot** via `assertModerationProviderConfiguredForProduction` (this runbook). | `lib/moderation.ts`, alert tag `moderation_provider_missing_for_production`. |
@@ -451,6 +452,69 @@ In Sentry:
 In the log aggregator (backstop):
 
 - Filter: `source:api-server message:"termii_api_key_missing_for_production"`.
+- Trigger when count > 0 over a 5-minute window.
+- Route to the api-server on-call rotation; severity = sev-1.
+
+<a id="email_provider"></a>
+### Email providers (`POSTMARK_API_TOKEN` / `SENDGRID_API_KEY`)
+
+**What:** `lib/notifications/registry.ts buildChannel("email", …)`
+filters `[PostmarkEmailChannel, SendGridEmailChannel]` by
+`isConfigured()` and falls back to the `ConsoleChannel` when neither
+real provider's env var is set. The console channel `info`-logs and
+returns `{ ok: true }`, so the outbox worker marks the row delivered
+and moves on. On a production deploy that means **every
+transactional email is silently dropped while the outbox claims
+success**: MFA backup-code nudges, MFA security alerts ("MFA was
+enabled on your account", "new sign-in from <location>"),
+departed-user notifications, etc. — none of them land in the
+recipient's inbox, but the audit trail says they did.
+
+This is the same shape of regression task #72 fixed for the no-op
+stub: provider misconfiguration can re-introduce the silent-success
+path via a different door (no real provider configured rather than a
+stub adapter wired in). The runtime registry intentionally still
+falls through to console for local dev so the enqueue → drain →
+delivered pipeline completes without external services — which is
+why the boot-time check is needed to surface the production case.
+
+The check warns when:
+
+- production-shape is detected (any of `NODE_ENV=production`,
+  `REPLIT_DEPLOYMENT=1`, `DEPLOYMENT_ENVIRONMENT=production`),
+- AND neither `POSTMARK_API_TOKEN` nor `SENDGRID_API_KEY` is set /
+  non-empty.
+
+A single-provider production deploy (Postmark only OR SendGrid only)
+is a valid configuration and stays silent — the registry simply
+skips the unconfigured provider in the failover chain.
+
+**Blast radius:** every transactional email is silently dropped. By
+the time on-call notices, multiple users have missed MFA security
+alerts and backup-code nudges, and the outbox row store is
+permanently lying about delivery.
+
+**Boot-time signal:** `logger.warn` with message tag
+`email_provider_missing_for_production` and a structured payload of
+`{ node_env, replit_deployment, deployment_environment, postmark_api_token: null|"[set-but-empty]", sendgrid_api_key: null|"[set-but-empty]", production_signals }`.
+Neither key value is ever logged — the slot is either `null` (env
+var unset) or `"[set-but-empty]"` (env var present but
+whitespace-only).
+
+**Alert wiring (Sentry — primary):**
+
+In Sentry:
+
+- Issue alert: `level:warning message:"email_provider_missing_for_production"`.
+- Trigger immediately on first event seen.
+- Route to the api-server on-call rotation; severity = sev-1
+  (security emails are silently dropped while the outbox claims
+  delivery).
+- Annotate with a link back to this runbook.
+
+In the log aggregator (backstop):
+
+- Filter: `source:api-server message:"email_provider_missing_for_production"`.
 - Trigger when count > 0 over a 5-minute window.
 - Route to the api-server on-call rotation; severity = sev-1.
 

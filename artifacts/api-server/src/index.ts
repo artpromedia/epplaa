@@ -10,6 +10,7 @@ import { assertCloudflareStreamWebhookConfiguredForProduction } from "./lib/stre
 import { assertInternalApiKeyConfiguredForProduction } from "./lib/internalApiKey";
 import { assertMfaEncryptionKeyConfiguredForProduction } from "./lib/mfa";
 import { assertModerationProviderConfiguredForProduction } from "./lib/moderation";
+import { assertEmailProviderConfiguredForProduction } from "./lib/notifications/emailProvider";
 import { assertTermiiConfiguredForProduction } from "./lib/notifications/termii";
 import { assertPaymentProviderConfiguredForProduction } from "./lib/payments";
 import { assertSentryDsnConfiguredForProduction } from "./lib/sentry";
@@ -191,6 +192,16 @@ assertInternalApiKeyConfiguredForProduction(process.env, logger);
 // phone OTP becomes trivially bypassable. SECURITY-CRITICAL. See
 // docs/runbooks/production-secrets.md.
 assertTermiiConfiguredForProduction(process.env, logger);
+
+// Boot-time sanity check (task #140): on production-shaped deploys,
+// warn loudly if neither POSTMARK_API_TOKEN nor SENDGRID_API_KEY is
+// set. The email channel registry (lib/notifications/registry.ts)
+// falls back to ConsoleChannel when no real provider is configured,
+// which logs and returns ok=true so the outbox marks rows delivered
+// without anyone receiving the email — same shape of silent-success
+// regression that task #72 fixed for the no-op stub. See
+// docs/runbooks/production-secrets.md.
+assertEmailProviderConfiguredForProduction(process.env, logger);
 
 // Boot-time sanity check (task #91): on production-shaped deploys,
 // warn loudly if neither PAYSTACK_SECRET_KEY nor FLUTTERWAVE_SECRET_KEY
