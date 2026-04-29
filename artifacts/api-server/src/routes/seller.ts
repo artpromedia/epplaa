@@ -9,6 +9,7 @@ import { enqueueNotification } from "../lib/notifications";
 import { logger } from "../lib/logger";
 import { requiredTierForOrder } from "../lib/kyc";
 import { sellerSanctionsBlocked, screenSubject } from "../lib/sanctions";
+import { recordAudit } from "../lib/audit";
 import { requireMfa } from "./mfa";
 
 const router: IRouter = Router();
@@ -61,6 +62,61 @@ router.post("/seller/apply", async (req, res) => {
   const userId = requireUserId(req, res);
   if (!userId) return;
   const application = (req.body ?? {}) as Record<string, unknown>;
+  // Compliance: every newly-onboarded seller (or seller updating their
+  // legal identity) gets a sanctions screen. Stub provider blocks names
+  // containing "BLOCKED" and KP/IR/SY/CU country codes; persisted result
+  // is what `sellerSanctionsBlocked` reads at payout time. We don't fail
+  // the apply call on a hit — the seller can still onboard, but payouts
+  // will be parked until trust & safety clears them.
+  //
+  // Re-screen trigger: an existing seller editing legalName / businessName /
+  // country is a known evasion pattern — the cached screening reflects the
+  // old identity until the next quarterly sweep. We detect identity-field
+  // changes against the previously persisted application and run a fresh
+  // screen BEFORE the upsert is persisted, so the latest screening row
+  // (which `sellerSanctionsBlocked` reads) always reflects the identity
+  // about to be saved. Old screening rows are preserved (each call INSERTs
+  // a new row) for audit.
+  const prior = await getProfile(userId);
+  const priorApplication = (prior.application ?? {}) as Record<string, unknown>;
+  const newLegalName = typeof application.legalName === "string" ? application.legalName : null;
+  const newBusinessName = typeof application.businessName === "string" ? application.businessName : null;
+  const newCountry = typeof application.country === "string" ? application.country : null;
+  const oldLegalName = typeof priorApplication.legalName === "string" ? priorApplication.legalName : null;
+  const oldBusinessName = typeof priorApplication.businessName === "string" ? priorApplication.businessName : null;
+  const oldCountry = typeof priorApplication.country === "string" ? priorApplication.country : null;
+  const isInitialApply = prior.application == null;
+  const identityChanges: Record<string, { from: string | null; to: string | null }> = {};
+  if (newLegalName !== oldLegalName) identityChanges.legalName = { from: oldLegalName, to: newLegalName };
+  if (newBusinessName !== oldBusinessName) identityChanges.businessName = { from: oldBusinessName, to: newBusinessName };
+  if (newCountry !== oldCountry) identityChanges.country = { from: oldCountry, to: newCountry };
+  const shouldScreen = isInitialApply || Object.keys(identityChanges).length > 0;
+  if (shouldScreen) {
+    const subjectName =
+      (newLegalName && newLegalName.trim()) ||
+      (newBusinessName && newBusinessName.trim()) ||
+      userId;
+    const country = newCountry ?? "NG";
+    const screenResult = await screenSubject({ userId, name: subjectName, country });
+    // Audit the trigger (what changed and why we screened) alongside the
+    // resulting status. `screenSubject` already records its own
+    // `sanctions.screened` row; this entry lets reviewers see WHICH apply
+    // call kicked off that screen and what fields the seller edited.
+    await recordAudit({
+      actorId: userId,
+      action: "seller.application.rescreened",
+      entity: "user",
+      entityId: userId,
+      payload: {
+        trigger: isInitialApply ? "initial_apply" : "identity_changed",
+        changedFields: Object.keys(identityChanges),
+        changes: identityChanges,
+        screenStatus: screenResult.status,
+        screenProvider: screenResult.provider,
+        screenMatchScore: screenResult.matchScore,
+      },
+    });
+  }
   const profile = await upsertProfile(userId, {
     application,
     status: "approved",
@@ -74,18 +130,6 @@ router.post("/seller/apply", async (req, res) => {
       daysAsSeller: 0,
     },
   });
-  // Compliance: every newly-onboarded seller (or seller updating their
-  // legal identity) gets a sanctions screen. Stub provider blocks names
-  // containing "BLOCKED" and KP/IR/SY/CU country codes; persisted result
-  // is what `sellerSanctionsBlocked` reads at payout time. We don't fail
-  // the apply call on a hit — the seller can still onboard, but payouts
-  // will be parked until trust & safety clears them.
-  const subjectName =
-    (typeof application.legalName === "string" && application.legalName.trim()) ||
-    (typeof application.businessName === "string" && application.businessName.trim()) ||
-    userId;
-  const country = typeof application.country === "string" ? application.country : "NG";
-  await screenSubject({ userId, name: subjectName, country });
   res.json(profile);
 });
 
