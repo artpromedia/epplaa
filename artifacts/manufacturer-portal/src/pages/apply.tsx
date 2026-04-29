@@ -1,5 +1,10 @@
 import { useEffect, useState } from "react";
-import { manufacturerApi, type Manufacturer } from "@/lib/api";
+import {
+  ApiError,
+  applyManufacturer,
+  getManufacturerMe,
+  type Manufacturer,
+} from "@workspace/api-client-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -34,8 +39,7 @@ export default function ApplyPage() {
 
   useEffect(() => {
     let alive = true;
-    manufacturerApi
-      .me()
+    getManufacturerMe()
       .then((res) => {
         if (!alive) return;
         setStatus(res.status);
@@ -52,7 +56,7 @@ export default function ApplyPage() {
           setAnnualCapacity(String((app?.annualCapacity as string) ?? ""));
         }
       })
-      .catch((e) => setError((e as Error).message))
+      .catch((e) => setError(e instanceof ApiError ? e.message : (e as Error).message))
       .finally(() => alive && setLoading(false));
     return () => {
       alive = false;
@@ -67,7 +71,7 @@ export default function ApplyPage() {
     setError(null);
     setSuccess(null);
     try {
-      const res = await manufacturerApi.apply({
+      const res = await applyManufacturer({
         originCountry,
         legalName,
         contactEmail,
@@ -87,7 +91,7 @@ export default function ApplyPage() {
           : "Application submitted. We'll review it shortly.",
       );
     } catch (e) {
-      setError((e as Error).message);
+      setError(e instanceof ApiError ? e.message : (e as Error).message);
     } finally {
       setSubmitting(false);
     }

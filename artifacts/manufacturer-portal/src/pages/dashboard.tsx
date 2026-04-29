@@ -1,13 +1,17 @@
 import { useEffect, useState } from "react";
 import { Link } from "wouter";
 import {
-  manufacturerApi,
-  type ManufacturerMeResponse,
+  ApiError,
+  getManufacturerMe,
+  listManufacturerKyc,
+  listManufacturerListings,
+  listManufacturerOrders,
   type ManufacturerKyc,
   type ManufacturerListing,
+  type ManufacturerMeResponse,
   type WholesaleOrder,
-  formatMinor,
-} from "@/lib/api";
+} from "@workspace/api-client-react";
+import { formatMinor } from "@/lib/format";
 import { StatusBadge } from "@/components/status-badge";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -24,14 +28,14 @@ export default function DashboardPage() {
     let alive = true;
     (async () => {
       try {
-        const meRes = await manufacturerApi.me();
+        const meRes = await getManufacturerMe();
         if (!alive) return;
         setMe(meRes);
         if (meRes.manufacturer) {
           const [kycRes, listingsRes, ordersRes] = await Promise.allSettled([
-            manufacturerApi.listKyc(),
-            meRes.status === "approved" ? manufacturerApi.listListings() : Promise.resolve([]),
-            meRes.status === "approved" ? manufacturerApi.listOrders() : Promise.resolve([]),
+            listManufacturerKyc(),
+            meRes.status === "approved" ? listManufacturerListings() : Promise.resolve([]),
+            meRes.status === "approved" ? listManufacturerOrders() : Promise.resolve([]),
           ]);
           if (!alive) return;
           if (kycRes.status === "fulfilled") setKyc(kycRes.value);
@@ -39,7 +43,7 @@ export default function DashboardPage() {
           if (ordersRes.status === "fulfilled") setOrders(ordersRes.value as WholesaleOrder[]);
         }
       } catch (e) {
-        setError((e as Error).message);
+        setError(e instanceof ApiError ? e.message : (e as Error).message);
       }
     })();
     return () => {

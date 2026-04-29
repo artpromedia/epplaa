@@ -2799,3 +2799,577 @@ export const AdminScanTextResponse = zod.object({
   scanId: zod.string(),
   csamMatch: zod.boolean().optional(),
 });
+
+/**
+ * @summary Resolve the signed-in user's manufacturer profile
+ */
+export const GetManufacturerMeResponse = zod.object({
+  status: zod
+    .enum(["none", "pending", "review", "approved", "rejected", "suspended"])
+    .describe(
+      "`none` when the signed-in user has not started a manufacturer\napplication yet; otherwise mirrors `Manufacturer.status`.\n",
+    ),
+  manufacturer: zod.union([
+    zod.null(),
+    zod.object({
+      id: zod.string(),
+      userId: zod.string(),
+      originCountry: zod.string(),
+      legalName: zod.string(),
+      contactEmail: zod.string(),
+      contactPhone: zod.string().nullable(),
+      exportLicenceNumber: zod.string().nullable(),
+      status: zod.enum([
+        "pending",
+        "review",
+        "approved",
+        "rejected",
+        "suspended",
+      ]),
+      application: zod.union([
+        zod.null(),
+        zod.record(zod.string(), zod.unknown()),
+      ]),
+      createdAtIso: zod.string(),
+      updatedAtIso: zod.string(),
+    }),
+  ]),
+});
+
+/**
+ * @summary Submit (or update) a manufacturer onboarding application
+ */
+export const ApplyManufacturerBody = zod.object({
+  originCountry: zod.string(),
+  legalName: zod.string(),
+  contactEmail: zod.string().optional(),
+  contactPhone: zod.string().optional(),
+  exportLicenceNumber: zod.string().optional(),
+  application: zod.record(zod.string(), zod.unknown()).optional(),
+});
+
+export const ApplyManufacturerResponse = zod.object({
+  status: zod
+    .enum(["none", "pending", "review", "approved", "rejected", "suspended"])
+    .describe(
+      "`none` when the signed-in user has not started a manufacturer\napplication yet; otherwise mirrors `Manufacturer.status`.\n",
+    ),
+  manufacturer: zod.union([
+    zod.null(),
+    zod.object({
+      id: zod.string(),
+      userId: zod.string(),
+      originCountry: zod.string(),
+      legalName: zod.string(),
+      contactEmail: zod.string(),
+      contactPhone: zod.string().nullable(),
+      exportLicenceNumber: zod.string().nullable(),
+      status: zod.enum([
+        "pending",
+        "review",
+        "approved",
+        "rejected",
+        "suspended",
+      ]),
+      application: zod.union([
+        zod.null(),
+        zod.record(zod.string(), zod.unknown()),
+      ]),
+      createdAtIso: zod.string(),
+      updatedAtIso: zod.string(),
+    }),
+  ]),
+});
+
+export const ListManufacturerKycResponseItem = zod.object({
+  id: zod.string(),
+  manufacturerId: zod.string(),
+  kind: zod.string(),
+  documentUrl: zod.string(),
+  status: zod.enum(["pending", "approved", "rejected"]),
+  reviewedBy: zod.string().nullable(),
+  reviewedAtIso: zod.string().nullable(),
+  rejectReason: zod.string().nullable(),
+  createdAtIso: zod.string(),
+  updatedAtIso: zod.string(),
+});
+export const ListManufacturerKycResponse = zod.array(
+  ListManufacturerKycResponseItem,
+);
+
+export const UploadManufacturerKycBody = zod.object({
+  kind: zod.enum([
+    "export_licence",
+    "business_registration",
+    "tax_id",
+    "ubo",
+    "factory_audit",
+  ]),
+  documentUrl: zod.string(),
+});
+
+export const ListManufacturerListingsResponseItem = zod.object({
+  id: zod.string(),
+  manufacturerId: zod.string(),
+  sku: zod.string(),
+  title: zod.string(),
+  description: zod.string(),
+  hsCode: zod.string(),
+  originCountry: zod.string(),
+  originCurrencyCode: zod.string(),
+  wholesalePriceMinor: zod.number(),
+  moq: zod.number(),
+  leadDays: zod.number(),
+  weightGrams: zod.number(),
+  dimensions: zod.union([zod.null(), zod.record(zod.string(), zod.unknown())]),
+  images: zod.array(zod.string()),
+  category: zod.string(),
+  status: zod.enum(["draft", "active", "paused"]),
+  createdAtIso: zod.string(),
+  updatedAtIso: zod.string(),
+});
+export const ListManufacturerListingsResponse = zod.array(
+  ListManufacturerListingsResponseItem,
+);
+
+export const createManufacturerListingBodyLeadDaysMin = 0;
+
+export const createManufacturerListingBodyWeightGramsMin = 0;
+
+export const CreateManufacturerListingBody = zod.object({
+  sku: zod.string().optional(),
+  title: zod.string(),
+  description: zod.string().optional(),
+  hsCode: zod.string(),
+  originCurrencyCode: zod.string(),
+  wholesalePriceMinor: zod.number().min(1),
+  moq: zod.number().min(1).optional(),
+  leadDays: zod
+    .number()
+    .min(createManufacturerListingBodyLeadDaysMin)
+    .optional(),
+  weightGrams: zod
+    .number()
+    .min(createManufacturerListingBodyWeightGramsMin)
+    .optional(),
+  dimensions: zod.record(zod.string(), zod.unknown()).optional(),
+  images: zod.array(zod.string()).optional(),
+  category: zod.string().optional(),
+});
+
+export const UpdateManufacturerListingParams = zod.object({
+  listingId: zod.coerce.string(),
+});
+
+export const updateManufacturerListingBodyLeadDaysMin = 0;
+
+export const updateManufacturerListingBodyWeightGramsMin = 0;
+
+export const UpdateManufacturerListingBody = zod.object({
+  title: zod.string().optional(),
+  description: zod.string().optional(),
+  hsCode: zod.string().optional(),
+  wholesalePriceMinor: zod.number().min(1).optional(),
+  moq: zod.number().min(1).optional(),
+  leadDays: zod
+    .number()
+    .min(updateManufacturerListingBodyLeadDaysMin)
+    .optional(),
+  weightGrams: zod
+    .number()
+    .min(updateManufacturerListingBodyWeightGramsMin)
+    .optional(),
+  dimensions: zod.record(zod.string(), zod.unknown()).optional(),
+  images: zod.array(zod.string()).optional(),
+  category: zod.string().optional(),
+  status: zod.enum(["draft", "active", "paused"]).optional(),
+});
+
+export const UpdateManufacturerListingResponse = zod.object({
+  id: zod.string(),
+  manufacturerId: zod.string(),
+  sku: zod.string(),
+  title: zod.string(),
+  description: zod.string(),
+  hsCode: zod.string(),
+  originCountry: zod.string(),
+  originCurrencyCode: zod.string(),
+  wholesalePriceMinor: zod.number(),
+  moq: zod.number(),
+  leadDays: zod.number(),
+  weightGrams: zod.number(),
+  dimensions: zod.union([zod.null(), zod.record(zod.string(), zod.unknown())]),
+  images: zod.array(zod.string()),
+  category: zod.string(),
+  status: zod.enum(["draft", "active", "paused"]),
+  createdAtIso: zod.string(),
+  updatedAtIso: zod.string(),
+});
+
+export const DeleteManufacturerListingParams = zod.object({
+  listingId: zod.coerce.string(),
+});
+
+export const ListManufacturerOrdersResponseItem = zod.object({
+  id: zod.string(),
+  listingId: zod.string(),
+  manufacturerId: zod.string(),
+  sellerUserId: zod.string(),
+  qty: zod.number(),
+  fobMinor: zod.number(),
+  originCurrencyCode: zod.string(),
+  freightMinor: zod.number(),
+  insuranceMinor: zod.number(),
+  dutyMinor: zod.number(),
+  vatMinor: zod.number(),
+  clearanceMinor: zod.number(),
+  landedTotalMinor: zod.number(),
+  destinationCurrencyCode: zod.string(),
+  destinationCountryCode: zod.string(),
+  fxRate: zod.number(),
+  status: zod.string(),
+  freightBookingId: zod.string().nullable(),
+  etaIso: zod.string().nullable(),
+  shipMode: zod.string().nullable(),
+  notes: zod.string().nullable(),
+  createdAtIso: zod.string(),
+  updatedAtIso: zod.string(),
+});
+export const ListManufacturerOrdersResponse = zod.array(
+  ListManufacturerOrdersResponseItem,
+);
+
+export const GetManufacturerOrderParams = zod.object({
+  orderId: zod.coerce.string(),
+});
+
+export const GetManufacturerOrderResponse = zod.object({
+  order: zod.object({
+    id: zod.string(),
+    listingId: zod.string(),
+    manufacturerId: zod.string(),
+    sellerUserId: zod.string(),
+    qty: zod.number(),
+    fobMinor: zod.number(),
+    originCurrencyCode: zod.string(),
+    freightMinor: zod.number(),
+    insuranceMinor: zod.number(),
+    dutyMinor: zod.number(),
+    vatMinor: zod.number(),
+    clearanceMinor: zod.number(),
+    landedTotalMinor: zod.number(),
+    destinationCurrencyCode: zod.string(),
+    destinationCountryCode: zod.string(),
+    fxRate: zod.number(),
+    status: zod.string(),
+    freightBookingId: zod.string().nullable(),
+    etaIso: zod.string().nullable(),
+    shipMode: zod.string().nullable(),
+    notes: zod.string().nullable(),
+    createdAtIso: zod.string(),
+    updatedAtIso: zod.string(),
+  }),
+  events: zod.array(
+    zod.object({
+      id: zod.string(),
+      kind: zod.string(),
+      note: zod.string().nullable(),
+      payload: zod.union([zod.null(), zod.record(zod.string(), zod.unknown())]),
+      createdAtIso: zod.string(),
+    }),
+  ),
+  booking: zod.union([
+    zod.null(),
+    zod.object({
+      id: zod.string(),
+      mode: zod.string(),
+      forwarder: zod.string(),
+      ref: zod.string().nullable(),
+      originPort: zod.string().nullable(),
+      destinationPort: zod.string().nullable(),
+      status: zod.string(),
+      etaIso: zod.string().nullable(),
+      actualEtaIso: zod.string().nullable(),
+      costMinor: zod.number().nullable(),
+      currencyCode: zod.string().nullable(),
+    }),
+  ]),
+});
+
+/**
+ * @summary Mark an order as shipped (idempotent for post-ship states)
+ */
+export const ShipManufacturerOrderParams = zod.object({
+  orderId: zod.coerce.string(),
+});
+
+export const ShipManufacturerOrderResponse = zod.object({
+  id: zod.string(),
+  listingId: zod.string(),
+  manufacturerId: zod.string(),
+  sellerUserId: zod.string(),
+  qty: zod.number(),
+  fobMinor: zod.number(),
+  originCurrencyCode: zod.string(),
+  freightMinor: zod.number(),
+  insuranceMinor: zod.number(),
+  dutyMinor: zod.number(),
+  vatMinor: zod.number(),
+  clearanceMinor: zod.number(),
+  landedTotalMinor: zod.number(),
+  destinationCurrencyCode: zod.string(),
+  destinationCountryCode: zod.string(),
+  fxRate: zod.number(),
+  status: zod.string(),
+  freightBookingId: zod.string().nullable(),
+  etaIso: zod.string().nullable(),
+  shipMode: zod.string().nullable(),
+  notes: zod.string().nullable(),
+  createdAtIso: zod.string(),
+  updatedAtIso: zod.string(),
+});
+
+export const ListManufacturerPayoutsResponseItem = zod.object({
+  id: zod.string(),
+  amountMinor: zod.number(),
+  currencyCode: zod.string(),
+  status: zod.string(),
+  reference: zod.string().nullable(),
+  requestedAtIso: zod.string(),
+  paidAtIso: zod.string().nullable(),
+});
+export const ListManufacturerPayoutsResponse = zod.array(
+  ListManufacturerPayoutsResponseItem,
+);
+
+export const ListWholesaleListingsQueryParams = zod.object({
+  search: zod.coerce.string().optional(),
+  originCountry: zod.coerce.string().optional(),
+  category: zod.coerce.string().optional(),
+  hsCode: zod.coerce.string().optional(),
+});
+
+export const ListWholesaleListingsResponseItem = zod
+  .object({
+    id: zod.string(),
+    manufacturerId: zod.string(),
+    sku: zod.string(),
+    title: zod.string(),
+    description: zod.string(),
+    hsCode: zod.string(),
+    originCountry: zod.string(),
+    originCurrencyCode: zod.string(),
+    wholesalePriceMinor: zod.number(),
+    moq: zod.number(),
+    leadDays: zod.number(),
+    weightGrams: zod.number(),
+    images: zod.array(zod.string()),
+    category: zod.string(),
+  })
+  .describe(
+    "Subset of ManufacturerListing exposed on the public wholesale catalog\n— drops the lifecycle status and timestamps that only the manufacturer\nand the admin console need to see.\n",
+  );
+export const ListWholesaleListingsResponse = zod.array(
+  ListWholesaleListingsResponseItem,
+);
+
+export const GetWholesaleListingParams = zod.object({
+  listingId: zod.coerce.string(),
+});
+
+export const GetWholesaleListingResponse = zod
+  .object({
+    id: zod.string(),
+    manufacturerId: zod.string(),
+    sku: zod.string(),
+    title: zod.string(),
+    description: zod.string(),
+    hsCode: zod.string(),
+    originCountry: zod.string(),
+    originCurrencyCode: zod.string(),
+    wholesalePriceMinor: zod.number(),
+    moq: zod.number(),
+    leadDays: zod.number(),
+    weightGrams: zod.number(),
+    images: zod.array(zod.string()),
+    category: zod.string(),
+  })
+  .describe(
+    "Subset of ManufacturerListing exposed on the public wholesale catalog\n— drops the lifecycle status and timestamps that only the manufacturer\nand the admin console need to see.\n",
+  );
+
+/**
+ * @summary Preview the landed cost for a prospective wholesale order
+ */
+
+export const QuoteWholesaleOrderBody = zod.object({
+  listingId: zod.string(),
+  qty: zod.number().min(1).optional(),
+  destinationCountryCode: zod.string().optional(),
+  shipMode: zod.enum(["air", "sea"]).optional(),
+});
+
+export const QuoteWholesaleOrderResponse = zod.object({
+  listingId: zod.string(),
+  qty: zod.number(),
+  destinationCountryCode: zod.string(),
+  destinationCurrencyCode: zod.string(),
+  shipMode: zod.enum(["air", "sea"]),
+  leadDays: zod.number(),
+  productionLeadDays: zod.number(),
+  transitDays: zod.number(),
+  breakdown: zod.object({
+    fobMinor: zod.number(),
+    fobInDestMinor: zod.number(),
+    freightMinor: zod.number(),
+    insuranceMinor: zod.number(),
+    dutyMinor: zod.number(),
+    vatMinor: zod.number(),
+    clearanceMinor: zod.number(),
+    landedTotalMinor: zod.number(),
+    fxRate: zod.number(),
+    shipMode: zod.enum(["air", "sea"]),
+    etaDays: zod.number(),
+    dutyRate: zod.number(),
+    vatRate: zod.number(),
+  }),
+});
+
+export const ListWholesaleOrdersResponseItem = zod.object({
+  id: zod.string(),
+  listingId: zod.string(),
+  manufacturerId: zod.string(),
+  sellerUserId: zod.string(),
+  qty: zod.number(),
+  fobMinor: zod.number(),
+  originCurrencyCode: zod.string(),
+  freightMinor: zod.number(),
+  insuranceMinor: zod.number(),
+  dutyMinor: zod.number(),
+  vatMinor: zod.number(),
+  clearanceMinor: zod.number(),
+  landedTotalMinor: zod.number(),
+  destinationCurrencyCode: zod.string(),
+  destinationCountryCode: zod.string(),
+  fxRate: zod.number(),
+  status: zod.string(),
+  freightBookingId: zod.string().nullable(),
+  etaIso: zod.string().nullable(),
+  shipMode: zod.string().nullable(),
+  notes: zod.string().nullable(),
+  createdAtIso: zod.string(),
+  updatedAtIso: zod.string(),
+});
+export const ListWholesaleOrdersResponse = zod.array(
+  ListWholesaleOrdersResponseItem,
+);
+
+/**
+ * @summary Place a wholesale order (freezes landed cost; books with the forwarder)
+ */
+
+export const CreateWholesaleOrderBody = zod.object({
+  listingId: zod.string(),
+  qty: zod.number().min(1).optional(),
+  destinationCountryCode: zod.string().optional(),
+  shipMode: zod.enum(["air", "sea"]).optional(),
+  notes: zod.string().optional(),
+});
+
+export const GetWholesaleOrderParams = zod.object({
+  orderId: zod.coerce.string(),
+});
+
+export const GetWholesaleOrderResponse = zod.object({
+  order: zod.object({
+    id: zod.string(),
+    listingId: zod.string(),
+    manufacturerId: zod.string(),
+    sellerUserId: zod.string(),
+    qty: zod.number(),
+    fobMinor: zod.number(),
+    originCurrencyCode: zod.string(),
+    freightMinor: zod.number(),
+    insuranceMinor: zod.number(),
+    dutyMinor: zod.number(),
+    vatMinor: zod.number(),
+    clearanceMinor: zod.number(),
+    landedTotalMinor: zod.number(),
+    destinationCurrencyCode: zod.string(),
+    destinationCountryCode: zod.string(),
+    fxRate: zod.number(),
+    status: zod.string(),
+    freightBookingId: zod.string().nullable(),
+    etaIso: zod.string().nullable(),
+    shipMode: zod.string().nullable(),
+    notes: zod.string().nullable(),
+    createdAtIso: zod.string(),
+    updatedAtIso: zod.string(),
+  }),
+  events: zod.array(
+    zod.object({
+      id: zod.string(),
+      kind: zod.string(),
+      note: zod.string().nullable(),
+      payload: zod.union([zod.null(), zod.record(zod.string(), zod.unknown())]),
+      createdAtIso: zod.string(),
+    }),
+  ),
+  booking: zod.union([
+    zod.null(),
+    zod.object({
+      id: zod.string(),
+      mode: zod.string(),
+      forwarder: zod.string(),
+      ref: zod.string().nullable(),
+      originPort: zod.string().nullable(),
+      destinationPort: zod.string().nullable(),
+      status: zod.string(),
+      etaIso: zod.string().nullable(),
+      actualEtaIso: zod.string().nullable(),
+      costMinor: zod.number().nullable(),
+      currencyCode: zod.string().nullable(),
+    }),
+  ]),
+  bondedInventory: zod.union([
+    zod.null(),
+    zod.object({
+      warehouseCode: zod.string(),
+      qtyOnHand: zod.number(),
+      qtyReleased: zod.number(),
+      arrivedAtIso: zod.string().nullable(),
+      clearedAtIso: zod.string().nullable(),
+      releasedAtIso: zod.string().nullable(),
+    }),
+  ]),
+});
+
+export const CancelWholesaleOrderParams = zod.object({
+  orderId: zod.coerce.string(),
+});
+
+export const CancelWholesaleOrderResponse = zod.object({
+  id: zod.string(),
+  listingId: zod.string(),
+  manufacturerId: zod.string(),
+  sellerUserId: zod.string(),
+  qty: zod.number(),
+  fobMinor: zod.number(),
+  originCurrencyCode: zod.string(),
+  freightMinor: zod.number(),
+  insuranceMinor: zod.number(),
+  dutyMinor: zod.number(),
+  vatMinor: zod.number(),
+  clearanceMinor: zod.number(),
+  landedTotalMinor: zod.number(),
+  destinationCurrencyCode: zod.string(),
+  destinationCountryCode: zod.string(),
+  fxRate: zod.number(),
+  status: zod.string(),
+  freightBookingId: zod.string().nullable(),
+  etaIso: zod.string().nullable(),
+  shipMode: zod.string().nullable(),
+  notes: zod.string().nullable(),
+  createdAtIso: zod.string(),
+  updatedAtIso: zod.string(),
+});

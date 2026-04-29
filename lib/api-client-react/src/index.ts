@@ -7,8 +7,13 @@ export {
   setCsrfToken,
   getCsrfToken,
   setCsrfTokenRefresher,
+  ApiError,
 } from "./custom-fetch";
-export type { AuthTokenGetter, CsrfTokenRefresher } from "./custom-fetch";
+export type {
+  AuthTokenGetter,
+  CsrfTokenRefresher,
+  ErrorType,
+} from "./custom-fetch";
 export { useRateLimitStoreBanner } from "./hooks/use-rate-limit-store-banner";
 export type {
   UseRateLimitStoreBannerOptions,

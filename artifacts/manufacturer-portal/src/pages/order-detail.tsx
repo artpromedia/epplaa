@@ -1,10 +1,12 @@
 import { useEffect, useState } from "react";
 import { Link, useRoute } from "wouter";
 import {
-  manufacturerApi,
+  ApiError,
+  getManufacturerOrder,
+  shipManufacturerOrder,
   type ManufacturerOrderDetail,
-  formatMinor,
-} from "@/lib/api";
+} from "@workspace/api-client-react";
+import { formatMinor } from "@/lib/format";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { StatusBadge } from "@/components/status-badge";
@@ -22,13 +24,12 @@ export default function OrderDetailPage() {
   async function refresh() {
     if (!orderId) return;
     try {
-      const res = await manufacturerApi.getOrder(orderId);
+      const res = await getManufacturerOrder(orderId);
       setDetail(res);
       setForbidden(false);
     } catch (e) {
-      const err = e as { status?: number; message: string };
-      if (err.status === 403) setForbidden(true);
-      else setError(err.message);
+      if (e instanceof ApiError && e.status === 403) setForbidden(true);
+      else setError(e instanceof ApiError ? e.message : (e as Error).message);
     }
   }
 
@@ -44,10 +45,10 @@ export default function OrderDetailPage() {
     if (!orderId) return;
     setShipping(true);
     try {
-      await manufacturerApi.shipOrder(orderId);
+      await shipManufacturerOrder(orderId);
       await refresh();
     } catch (e) {
-      setError((e as Error).message);
+      setError(e instanceof ApiError ? e.message : (e as Error).message);
     } finally {
       setShipping(false);
     }

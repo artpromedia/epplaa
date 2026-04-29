@@ -1,5 +1,13 @@
 import { useEffect, useState } from "react";
-import { manufacturerApi, type ManufacturerListing, formatMinor } from "@/lib/api";
+import {
+  ApiError,
+  createManufacturerListing,
+  deleteManufacturerListing,
+  listManufacturerListings,
+  updateManufacturerListing,
+  type ManufacturerListing,
+} from "@workspace/api-client-react";
+import { formatMinor } from "@/lib/format";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -61,13 +69,12 @@ export default function ListingsPage() {
 
   async function refresh() {
     try {
-      const rows = await manufacturerApi.listListings();
+      const rows = await listManufacturerListings();
       setItems(rows);
       setForbidden(false);
     } catch (e) {
-      const err = e as { status?: number; message: string };
-      if (err.status === 403) setForbidden(true);
-      else setError(err.message);
+      if (e instanceof ApiError && e.status === 403) setForbidden(true);
+      else setError(e instanceof ApiError ? e.message : (e as Error).message);
     }
   }
 
@@ -106,10 +113,10 @@ export default function ListingsPage() {
   async function onDelete(id: string) {
     if (!confirm("Delete this listing? This cannot be undone.")) return;
     try {
-      await manufacturerApi.deleteListing(id);
+      await deleteManufacturerListing(id);
       await refresh();
     } catch (e) {
-      setError((e as Error).message);
+      setError(e instanceof ApiError ? e.message : (e as Error).message);
     }
   }
 
@@ -137,14 +144,14 @@ export default function ListingsPage() {
     };
     try {
       if (editing.id) {
-        await manufacturerApi.updateListing(editing.id, payload);
+        await updateManufacturerListing(editing.id, payload);
       } else {
-        await manufacturerApi.createListing(payload);
+        await createManufacturerListing(payload);
       }
       setEditing(null);
       await refresh();
     } catch (e) {
-      setError((e as Error).message);
+      setError(e instanceof ApiError ? e.message : (e as Error).message);
     } finally {
       setSubmitting(false);
     }

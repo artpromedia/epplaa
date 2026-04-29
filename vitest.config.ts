@@ -10,6 +10,10 @@ export default defineConfig({
   test: {
     projects: [
       "artifacts/*/vitest.config.ts",
+      // Shared OpenAPI client wrapper (auth/CSRF wiring used by every
+      // artifact). Exercised here so a regression in the shared fetch
+      // surface is caught by the root `pnpm test` invocation.
+      "lib/api-client-react/vitest.config.ts",
       // Pulls in @workspace/scripts so repo-level CLI checks
       // (e.g. checkRateLimitOptOutSunsets, checkSentryMonitorsInSync)
       // are exercised by the root `pnpm test` invocation alongside

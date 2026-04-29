@@ -1,5 +1,10 @@
 import { useEffect, useState } from "react";
-import { manufacturerApi, type ManufacturerPayout, formatMinor } from "@/lib/api";
+import {
+  ApiError,
+  listManufacturerPayouts,
+  type ManufacturerPayout,
+} from "@workspace/api-client-react";
+import { formatMinor } from "@/lib/format";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { StatusBadge } from "@/components/status-badge";
 
@@ -11,13 +16,11 @@ export default function PayoutsPage() {
 
   useEffect(() => {
     let alive = true;
-    manufacturerApi
-      .listPayouts()
+    listManufacturerPayouts()
       .then((rows) => alive && setItems(rows))
       .catch((e) => {
-        const err = e as { status?: number; message: string };
-        if (err.status === 403) setForbidden(true);
-        else setError(err.message);
+        if (e instanceof ApiError && e.status === 403) setForbidden(true);
+        else setError(e instanceof ApiError ? e.message : (e as Error).message);
       })
       .finally(() => alive && setLoading(false));
     return () => {

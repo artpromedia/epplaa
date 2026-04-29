@@ -98,6 +98,16 @@ import type {
   ListStreamMessages200,
   ListStreamMessagesParams,
   ListStreamModerators200,
+  ListWholesaleListingsParams,
+  ManufacturerApplyBody,
+  ManufacturerKyc,
+  ManufacturerKycUploadBody,
+  ManufacturerListing,
+  ManufacturerListingCreateBody,
+  ManufacturerListingUpdateBody,
+  ManufacturerMeResponse,
+  ManufacturerOrderDetail,
+  ManufacturerPayout,
   MfaBackupCodeBody,
   MfaBackupCodesResult,
   MfaSetupBody,
@@ -196,6 +206,12 @@ import type {
   WalletTopupResponse,
   WalletWithdrawBody,
   WalletWithdrawResponse,
+  WholesaleCatalogListing,
+  WholesaleOrder,
+  WholesaleOrderCreateBody,
+  WholesaleOrderDetail,
+  WholesaleQuoteBody,
+  WholesaleQuoteResponse,
 } from "./api.schemas";
 
 import { customFetch } from "../custom-fetch";
@@ -13610,4 +13626,1582 @@ export const useAdminScanText = <
   TContext
 > => {
   return useMutation(getAdminScanTextMutationOptions(options));
+};
+
+/**
+ * @summary Resolve the signed-in user's manufacturer profile
+ */
+export const getGetManufacturerMeUrl = () => {
+  return `/api/manufacturer/me`;
+};
+
+export const getManufacturerMe = async (
+  options?: RequestInit,
+): Promise<ManufacturerMeResponse> => {
+  return customFetch<ManufacturerMeResponse>(getGetManufacturerMeUrl(), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetManufacturerMeQueryKey = () => {
+  return [`/api/manufacturer/me`] as const;
+};
+
+export const getGetManufacturerMeQueryOptions = <
+  TData = Awaited<ReturnType<typeof getManufacturerMe>>,
+  TError = ErrorType<UnauthorizedResponse>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getManufacturerMe>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetManufacturerMeQueryKey();
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getManufacturerMe>>
+  > = ({ signal }) => getManufacturerMe({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getManufacturerMe>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetManufacturerMeQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getManufacturerMe>>
+>;
+export type GetManufacturerMeQueryError = ErrorType<UnauthorizedResponse>;
+
+/**
+ * @summary Resolve the signed-in user's manufacturer profile
+ */
+
+export function useGetManufacturerMe<
+  TData = Awaited<ReturnType<typeof getManufacturerMe>>,
+  TError = ErrorType<UnauthorizedResponse>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getManufacturerMe>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetManufacturerMeQueryOptions(options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Submit (or update) a manufacturer onboarding application
+ */
+export const getApplyManufacturerUrl = () => {
+  return `/api/manufacturer/apply`;
+};
+
+export const applyManufacturer = async (
+  manufacturerApplyBody: ManufacturerApplyBody,
+  options?: RequestInit,
+): Promise<ManufacturerMeResponse> => {
+  return customFetch<ManufacturerMeResponse>(getApplyManufacturerUrl(), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(manufacturerApplyBody),
+  });
+};
+
+export const getApplyManufacturerMutationOptions = <
+  TError = ErrorType<BadRequestResponse | UnauthorizedResponse | ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof applyManufacturer>>,
+    TError,
+    { data: BodyType<ManufacturerApplyBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof applyManufacturer>>,
+  TError,
+  { data: BodyType<ManufacturerApplyBody> },
+  TContext
+> => {
+  const mutationKey = ["applyManufacturer"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof applyManufacturer>>,
+    { data: BodyType<ManufacturerApplyBody> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return applyManufacturer(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type ApplyManufacturerMutationResult = NonNullable<
+  Awaited<ReturnType<typeof applyManufacturer>>
+>;
+export type ApplyManufacturerMutationBody = BodyType<ManufacturerApplyBody>;
+export type ApplyManufacturerMutationError = ErrorType<
+  BadRequestResponse | UnauthorizedResponse | ApiError
+>;
+
+/**
+ * @summary Submit (or update) a manufacturer onboarding application
+ */
+export const useApplyManufacturer = <
+  TError = ErrorType<BadRequestResponse | UnauthorizedResponse | ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof applyManufacturer>>,
+    TError,
+    { data: BodyType<ManufacturerApplyBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof applyManufacturer>>,
+  TError,
+  { data: BodyType<ManufacturerApplyBody> },
+  TContext
+> => {
+  return useMutation(getApplyManufacturerMutationOptions(options));
+};
+
+export const getListManufacturerKycUrl = () => {
+  return `/api/manufacturer/kyc`;
+};
+
+export const listManufacturerKyc = async (
+  options?: RequestInit,
+): Promise<ManufacturerKyc[]> => {
+  return customFetch<ManufacturerKyc[]>(getListManufacturerKycUrl(), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getListManufacturerKycQueryKey = () => {
+  return [`/api/manufacturer/kyc`] as const;
+};
+
+export const getListManufacturerKycQueryOptions = <
+  TData = Awaited<ReturnType<typeof listManufacturerKyc>>,
+  TError = ErrorType<UnauthorizedResponse | ForbiddenResponse>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof listManufacturerKyc>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getListManufacturerKycQueryKey();
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof listManufacturerKyc>>
+  > = ({ signal }) => listManufacturerKyc({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof listManufacturerKyc>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type ListManufacturerKycQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listManufacturerKyc>>
+>;
+export type ListManufacturerKycQueryError = ErrorType<
+  UnauthorizedResponse | ForbiddenResponse
+>;
+
+export function useListManufacturerKyc<
+  TData = Awaited<ReturnType<typeof listManufacturerKyc>>,
+  TError = ErrorType<UnauthorizedResponse | ForbiddenResponse>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof listManufacturerKyc>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getListManufacturerKycQueryOptions(options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+export const getUploadManufacturerKycUrl = () => {
+  return `/api/manufacturer/kyc`;
+};
+
+export const uploadManufacturerKyc = async (
+  manufacturerKycUploadBody: ManufacturerKycUploadBody,
+  options?: RequestInit,
+): Promise<ManufacturerKyc> => {
+  return customFetch<ManufacturerKyc>(getUploadManufacturerKycUrl(), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(manufacturerKycUploadBody),
+  });
+};
+
+export const getUploadManufacturerKycMutationOptions = <
+  TError = ErrorType<
+    BadRequestResponse | UnauthorizedResponse | ForbiddenResponse
+  >,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof uploadManufacturerKyc>>,
+    TError,
+    { data: BodyType<ManufacturerKycUploadBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof uploadManufacturerKyc>>,
+  TError,
+  { data: BodyType<ManufacturerKycUploadBody> },
+  TContext
+> => {
+  const mutationKey = ["uploadManufacturerKyc"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof uploadManufacturerKyc>>,
+    { data: BodyType<ManufacturerKycUploadBody> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return uploadManufacturerKyc(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type UploadManufacturerKycMutationResult = NonNullable<
+  Awaited<ReturnType<typeof uploadManufacturerKyc>>
+>;
+export type UploadManufacturerKycMutationBody =
+  BodyType<ManufacturerKycUploadBody>;
+export type UploadManufacturerKycMutationError = ErrorType<
+  BadRequestResponse | UnauthorizedResponse | ForbiddenResponse
+>;
+
+export const useUploadManufacturerKyc = <
+  TError = ErrorType<
+    BadRequestResponse | UnauthorizedResponse | ForbiddenResponse
+  >,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof uploadManufacturerKyc>>,
+    TError,
+    { data: BodyType<ManufacturerKycUploadBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof uploadManufacturerKyc>>,
+  TError,
+  { data: BodyType<ManufacturerKycUploadBody> },
+  TContext
+> => {
+  return useMutation(getUploadManufacturerKycMutationOptions(options));
+};
+
+export const getListManufacturerListingsUrl = () => {
+  return `/api/manufacturer/listings`;
+};
+
+export const listManufacturerListings = async (
+  options?: RequestInit,
+): Promise<ManufacturerListing[]> => {
+  return customFetch<ManufacturerListing[]>(getListManufacturerListingsUrl(), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getListManufacturerListingsQueryKey = () => {
+  return [`/api/manufacturer/listings`] as const;
+};
+
+export const getListManufacturerListingsQueryOptions = <
+  TData = Awaited<ReturnType<typeof listManufacturerListings>>,
+  TError = ErrorType<UnauthorizedResponse | ForbiddenResponse>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof listManufacturerListings>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getListManufacturerListingsQueryKey();
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof listManufacturerListings>>
+  > = ({ signal }) => listManufacturerListings({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof listManufacturerListings>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type ListManufacturerListingsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listManufacturerListings>>
+>;
+export type ListManufacturerListingsQueryError = ErrorType<
+  UnauthorizedResponse | ForbiddenResponse
+>;
+
+export function useListManufacturerListings<
+  TData = Awaited<ReturnType<typeof listManufacturerListings>>,
+  TError = ErrorType<UnauthorizedResponse | ForbiddenResponse>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof listManufacturerListings>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getListManufacturerListingsQueryOptions(options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+export const getCreateManufacturerListingUrl = () => {
+  return `/api/manufacturer/listings`;
+};
+
+export const createManufacturerListing = async (
+  manufacturerListingCreateBody: ManufacturerListingCreateBody,
+  options?: RequestInit,
+): Promise<ManufacturerListing> => {
+  return customFetch<ManufacturerListing>(getCreateManufacturerListingUrl(), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(manufacturerListingCreateBody),
+  });
+};
+
+export const getCreateManufacturerListingMutationOptions = <
+  TError = ErrorType<
+    BadRequestResponse | UnauthorizedResponse | ForbiddenResponse
+  >,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof createManufacturerListing>>,
+    TError,
+    { data: BodyType<ManufacturerListingCreateBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof createManufacturerListing>>,
+  TError,
+  { data: BodyType<ManufacturerListingCreateBody> },
+  TContext
+> => {
+  const mutationKey = ["createManufacturerListing"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof createManufacturerListing>>,
+    { data: BodyType<ManufacturerListingCreateBody> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return createManufacturerListing(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type CreateManufacturerListingMutationResult = NonNullable<
+  Awaited<ReturnType<typeof createManufacturerListing>>
+>;
+export type CreateManufacturerListingMutationBody =
+  BodyType<ManufacturerListingCreateBody>;
+export type CreateManufacturerListingMutationError = ErrorType<
+  BadRequestResponse | UnauthorizedResponse | ForbiddenResponse
+>;
+
+export const useCreateManufacturerListing = <
+  TError = ErrorType<
+    BadRequestResponse | UnauthorizedResponse | ForbiddenResponse
+  >,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof createManufacturerListing>>,
+    TError,
+    { data: BodyType<ManufacturerListingCreateBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof createManufacturerListing>>,
+  TError,
+  { data: BodyType<ManufacturerListingCreateBody> },
+  TContext
+> => {
+  return useMutation(getCreateManufacturerListingMutationOptions(options));
+};
+
+export const getUpdateManufacturerListingUrl = (listingId: string) => {
+  return `/api/manufacturer/listings/${listingId}`;
+};
+
+export const updateManufacturerListing = async (
+  listingId: string,
+  manufacturerListingUpdateBody: ManufacturerListingUpdateBody,
+  options?: RequestInit,
+): Promise<ManufacturerListing> => {
+  return customFetch<ManufacturerListing>(
+    getUpdateManufacturerListingUrl(listingId),
+    {
+      ...options,
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", ...options?.headers },
+      body: JSON.stringify(manufacturerListingUpdateBody),
+    },
+  );
+};
+
+export const getUpdateManufacturerListingMutationOptions = <
+  TError = ErrorType<
+    | BadRequestResponse
+    | UnauthorizedResponse
+    | ForbiddenResponse
+    | NotFoundResponse
+  >,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof updateManufacturerListing>>,
+    TError,
+    { listingId: string; data: BodyType<ManufacturerListingUpdateBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof updateManufacturerListing>>,
+  TError,
+  { listingId: string; data: BodyType<ManufacturerListingUpdateBody> },
+  TContext
+> => {
+  const mutationKey = ["updateManufacturerListing"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof updateManufacturerListing>>,
+    { listingId: string; data: BodyType<ManufacturerListingUpdateBody> }
+  > = (props) => {
+    const { listingId, data } = props ?? {};
+
+    return updateManufacturerListing(listingId, data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type UpdateManufacturerListingMutationResult = NonNullable<
+  Awaited<ReturnType<typeof updateManufacturerListing>>
+>;
+export type UpdateManufacturerListingMutationBody =
+  BodyType<ManufacturerListingUpdateBody>;
+export type UpdateManufacturerListingMutationError = ErrorType<
+  | BadRequestResponse
+  | UnauthorizedResponse
+  | ForbiddenResponse
+  | NotFoundResponse
+>;
+
+export const useUpdateManufacturerListing = <
+  TError = ErrorType<
+    | BadRequestResponse
+    | UnauthorizedResponse
+    | ForbiddenResponse
+    | NotFoundResponse
+  >,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof updateManufacturerListing>>,
+    TError,
+    { listingId: string; data: BodyType<ManufacturerListingUpdateBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof updateManufacturerListing>>,
+  TError,
+  { listingId: string; data: BodyType<ManufacturerListingUpdateBody> },
+  TContext
+> => {
+  return useMutation(getUpdateManufacturerListingMutationOptions(options));
+};
+
+export const getDeleteManufacturerListingUrl = (listingId: string) => {
+  return `/api/manufacturer/listings/${listingId}`;
+};
+
+export const deleteManufacturerListing = async (
+  listingId: string,
+  options?: RequestInit,
+): Promise<void> => {
+  return customFetch<void>(getDeleteManufacturerListingUrl(listingId), {
+    ...options,
+    method: "DELETE",
+  });
+};
+
+export const getDeleteManufacturerListingMutationOptions = <
+  TError = ErrorType<
+    UnauthorizedResponse | ForbiddenResponse | NotFoundResponse
+  >,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof deleteManufacturerListing>>,
+    TError,
+    { listingId: string },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof deleteManufacturerListing>>,
+  TError,
+  { listingId: string },
+  TContext
+> => {
+  const mutationKey = ["deleteManufacturerListing"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof deleteManufacturerListing>>,
+    { listingId: string }
+  > = (props) => {
+    const { listingId } = props ?? {};
+
+    return deleteManufacturerListing(listingId, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type DeleteManufacturerListingMutationResult = NonNullable<
+  Awaited<ReturnType<typeof deleteManufacturerListing>>
+>;
+
+export type DeleteManufacturerListingMutationError = ErrorType<
+  UnauthorizedResponse | ForbiddenResponse | NotFoundResponse
+>;
+
+export const useDeleteManufacturerListing = <
+  TError = ErrorType<
+    UnauthorizedResponse | ForbiddenResponse | NotFoundResponse
+  >,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof deleteManufacturerListing>>,
+    TError,
+    { listingId: string },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof deleteManufacturerListing>>,
+  TError,
+  { listingId: string },
+  TContext
+> => {
+  return useMutation(getDeleteManufacturerListingMutationOptions(options));
+};
+
+export const getListManufacturerOrdersUrl = () => {
+  return `/api/manufacturer/orders`;
+};
+
+export const listManufacturerOrders = async (
+  options?: RequestInit,
+): Promise<WholesaleOrder[]> => {
+  return customFetch<WholesaleOrder[]>(getListManufacturerOrdersUrl(), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getListManufacturerOrdersQueryKey = () => {
+  return [`/api/manufacturer/orders`] as const;
+};
+
+export const getListManufacturerOrdersQueryOptions = <
+  TData = Awaited<ReturnType<typeof listManufacturerOrders>>,
+  TError = ErrorType<UnauthorizedResponse | ForbiddenResponse>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof listManufacturerOrders>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getListManufacturerOrdersQueryKey();
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof listManufacturerOrders>>
+  > = ({ signal }) => listManufacturerOrders({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof listManufacturerOrders>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type ListManufacturerOrdersQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listManufacturerOrders>>
+>;
+export type ListManufacturerOrdersQueryError = ErrorType<
+  UnauthorizedResponse | ForbiddenResponse
+>;
+
+export function useListManufacturerOrders<
+  TData = Awaited<ReturnType<typeof listManufacturerOrders>>,
+  TError = ErrorType<UnauthorizedResponse | ForbiddenResponse>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof listManufacturerOrders>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getListManufacturerOrdersQueryOptions(options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+export const getGetManufacturerOrderUrl = (orderId: string) => {
+  return `/api/manufacturer/orders/${orderId}`;
+};
+
+export const getManufacturerOrder = async (
+  orderId: string,
+  options?: RequestInit,
+): Promise<ManufacturerOrderDetail> => {
+  return customFetch<ManufacturerOrderDetail>(
+    getGetManufacturerOrderUrl(orderId),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getGetManufacturerOrderQueryKey = (orderId: string) => {
+  return [`/api/manufacturer/orders/${orderId}`] as const;
+};
+
+export const getGetManufacturerOrderQueryOptions = <
+  TData = Awaited<ReturnType<typeof getManufacturerOrder>>,
+  TError = ErrorType<
+    UnauthorizedResponse | ForbiddenResponse | NotFoundResponse
+  >,
+>(
+  orderId: string,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getManufacturerOrder>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getGetManufacturerOrderQueryKey(orderId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getManufacturerOrder>>
+  > = ({ signal }) =>
+    getManufacturerOrder(orderId, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: !!orderId,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getManufacturerOrder>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetManufacturerOrderQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getManufacturerOrder>>
+>;
+export type GetManufacturerOrderQueryError = ErrorType<
+  UnauthorizedResponse | ForbiddenResponse | NotFoundResponse
+>;
+
+export function useGetManufacturerOrder<
+  TData = Awaited<ReturnType<typeof getManufacturerOrder>>,
+  TError = ErrorType<
+    UnauthorizedResponse | ForbiddenResponse | NotFoundResponse
+  >,
+>(
+  orderId: string,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getManufacturerOrder>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetManufacturerOrderQueryOptions(orderId, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Mark an order as shipped (idempotent for post-ship states)
+ */
+export const getShipManufacturerOrderUrl = (orderId: string) => {
+  return `/api/manufacturer/orders/${orderId}/ship`;
+};
+
+export const shipManufacturerOrder = async (
+  orderId: string,
+  options?: RequestInit,
+): Promise<WholesaleOrder> => {
+  return customFetch<WholesaleOrder>(getShipManufacturerOrderUrl(orderId), {
+    ...options,
+    method: "POST",
+  });
+};
+
+export const getShipManufacturerOrderMutationOptions = <
+  TError = ErrorType<
+    UnauthorizedResponse | ForbiddenResponse | NotFoundResponse | ApiError
+  >,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof shipManufacturerOrder>>,
+    TError,
+    { orderId: string },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof shipManufacturerOrder>>,
+  TError,
+  { orderId: string },
+  TContext
+> => {
+  const mutationKey = ["shipManufacturerOrder"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof shipManufacturerOrder>>,
+    { orderId: string }
+  > = (props) => {
+    const { orderId } = props ?? {};
+
+    return shipManufacturerOrder(orderId, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type ShipManufacturerOrderMutationResult = NonNullable<
+  Awaited<ReturnType<typeof shipManufacturerOrder>>
+>;
+
+export type ShipManufacturerOrderMutationError = ErrorType<
+  UnauthorizedResponse | ForbiddenResponse | NotFoundResponse | ApiError
+>;
+
+/**
+ * @summary Mark an order as shipped (idempotent for post-ship states)
+ */
+export const useShipManufacturerOrder = <
+  TError = ErrorType<
+    UnauthorizedResponse | ForbiddenResponse | NotFoundResponse | ApiError
+  >,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof shipManufacturerOrder>>,
+    TError,
+    { orderId: string },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof shipManufacturerOrder>>,
+  TError,
+  { orderId: string },
+  TContext
+> => {
+  return useMutation(getShipManufacturerOrderMutationOptions(options));
+};
+
+export const getListManufacturerPayoutsUrl = () => {
+  return `/api/manufacturer/payouts`;
+};
+
+export const listManufacturerPayouts = async (
+  options?: RequestInit,
+): Promise<ManufacturerPayout[]> => {
+  return customFetch<ManufacturerPayout[]>(getListManufacturerPayoutsUrl(), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getListManufacturerPayoutsQueryKey = () => {
+  return [`/api/manufacturer/payouts`] as const;
+};
+
+export const getListManufacturerPayoutsQueryOptions = <
+  TData = Awaited<ReturnType<typeof listManufacturerPayouts>>,
+  TError = ErrorType<UnauthorizedResponse | ForbiddenResponse>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof listManufacturerPayouts>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getListManufacturerPayoutsQueryKey();
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof listManufacturerPayouts>>
+  > = ({ signal }) => listManufacturerPayouts({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof listManufacturerPayouts>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type ListManufacturerPayoutsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listManufacturerPayouts>>
+>;
+export type ListManufacturerPayoutsQueryError = ErrorType<
+  UnauthorizedResponse | ForbiddenResponse
+>;
+
+export function useListManufacturerPayouts<
+  TData = Awaited<ReturnType<typeof listManufacturerPayouts>>,
+  TError = ErrorType<UnauthorizedResponse | ForbiddenResponse>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof listManufacturerPayouts>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getListManufacturerPayoutsQueryOptions(options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+export const getListWholesaleListingsUrl = (
+  params?: ListWholesaleListingsParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : value.toString());
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/api/wholesale/listings?${stringifiedParams}`
+    : `/api/wholesale/listings`;
+};
+
+export const listWholesaleListings = async (
+  params?: ListWholesaleListingsParams,
+  options?: RequestInit,
+): Promise<WholesaleCatalogListing[]> => {
+  return customFetch<WholesaleCatalogListing[]>(
+    getListWholesaleListingsUrl(params),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getListWholesaleListingsQueryKey = (
+  params?: ListWholesaleListingsParams,
+) => {
+  return [`/api/wholesale/listings`, ...(params ? [params] : [])] as const;
+};
+
+export const getListWholesaleListingsQueryOptions = <
+  TData = Awaited<ReturnType<typeof listWholesaleListings>>,
+  TError = ErrorType<unknown>,
+>(
+  params?: ListWholesaleListingsParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof listWholesaleListings>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getListWholesaleListingsQueryKey(params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof listWholesaleListings>>
+  > = ({ signal }) =>
+    listWholesaleListings(params, { signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof listWholesaleListings>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type ListWholesaleListingsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listWholesaleListings>>
+>;
+export type ListWholesaleListingsQueryError = ErrorType<unknown>;
+
+export function useListWholesaleListings<
+  TData = Awaited<ReturnType<typeof listWholesaleListings>>,
+  TError = ErrorType<unknown>,
+>(
+  params?: ListWholesaleListingsParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof listWholesaleListings>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getListWholesaleListingsQueryOptions(params, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+export const getGetWholesaleListingUrl = (listingId: string) => {
+  return `/api/wholesale/listings/${listingId}`;
+};
+
+export const getWholesaleListing = async (
+  listingId: string,
+  options?: RequestInit,
+): Promise<WholesaleCatalogListing> => {
+  return customFetch<WholesaleCatalogListing>(
+    getGetWholesaleListingUrl(listingId),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getGetWholesaleListingQueryKey = (listingId: string) => {
+  return [`/api/wholesale/listings/${listingId}`] as const;
+};
+
+export const getGetWholesaleListingQueryOptions = <
+  TData = Awaited<ReturnType<typeof getWholesaleListing>>,
+  TError = ErrorType<NotFoundResponse>,
+>(
+  listingId: string,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getWholesaleListing>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getGetWholesaleListingQueryKey(listingId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getWholesaleListing>>
+  > = ({ signal }) =>
+    getWholesaleListing(listingId, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: !!listingId,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getWholesaleListing>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetWholesaleListingQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getWholesaleListing>>
+>;
+export type GetWholesaleListingQueryError = ErrorType<NotFoundResponse>;
+
+export function useGetWholesaleListing<
+  TData = Awaited<ReturnType<typeof getWholesaleListing>>,
+  TError = ErrorType<NotFoundResponse>,
+>(
+  listingId: string,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getWholesaleListing>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetWholesaleListingQueryOptions(listingId, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Preview the landed cost for a prospective wholesale order
+ */
+export const getQuoteWholesaleOrderUrl = () => {
+  return `/api/wholesale/quote`;
+};
+
+export const quoteWholesaleOrder = async (
+  wholesaleQuoteBody: WholesaleQuoteBody,
+  options?: RequestInit,
+): Promise<WholesaleQuoteResponse> => {
+  return customFetch<WholesaleQuoteResponse>(getQuoteWholesaleOrderUrl(), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(wholesaleQuoteBody),
+  });
+};
+
+export const getQuoteWholesaleOrderMutationOptions = <
+  TError = ErrorType<BadRequestResponse | NotFoundResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof quoteWholesaleOrder>>,
+    TError,
+    { data: BodyType<WholesaleQuoteBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof quoteWholesaleOrder>>,
+  TError,
+  { data: BodyType<WholesaleQuoteBody> },
+  TContext
+> => {
+  const mutationKey = ["quoteWholesaleOrder"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof quoteWholesaleOrder>>,
+    { data: BodyType<WholesaleQuoteBody> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return quoteWholesaleOrder(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type QuoteWholesaleOrderMutationResult = NonNullable<
+  Awaited<ReturnType<typeof quoteWholesaleOrder>>
+>;
+export type QuoteWholesaleOrderMutationBody = BodyType<WholesaleQuoteBody>;
+export type QuoteWholesaleOrderMutationError = ErrorType<
+  BadRequestResponse | NotFoundResponse
+>;
+
+/**
+ * @summary Preview the landed cost for a prospective wholesale order
+ */
+export const useQuoteWholesaleOrder = <
+  TError = ErrorType<BadRequestResponse | NotFoundResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof quoteWholesaleOrder>>,
+    TError,
+    { data: BodyType<WholesaleQuoteBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof quoteWholesaleOrder>>,
+  TError,
+  { data: BodyType<WholesaleQuoteBody> },
+  TContext
+> => {
+  return useMutation(getQuoteWholesaleOrderMutationOptions(options));
+};
+
+export const getListWholesaleOrdersUrl = () => {
+  return `/api/wholesale/orders`;
+};
+
+export const listWholesaleOrders = async (
+  options?: RequestInit,
+): Promise<WholesaleOrder[]> => {
+  return customFetch<WholesaleOrder[]>(getListWholesaleOrdersUrl(), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getListWholesaleOrdersQueryKey = () => {
+  return [`/api/wholesale/orders`] as const;
+};
+
+export const getListWholesaleOrdersQueryOptions = <
+  TData = Awaited<ReturnType<typeof listWholesaleOrders>>,
+  TError = ErrorType<UnauthorizedResponse>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof listWholesaleOrders>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getListWholesaleOrdersQueryKey();
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof listWholesaleOrders>>
+  > = ({ signal }) => listWholesaleOrders({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof listWholesaleOrders>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type ListWholesaleOrdersQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listWholesaleOrders>>
+>;
+export type ListWholesaleOrdersQueryError = ErrorType<UnauthorizedResponse>;
+
+export function useListWholesaleOrders<
+  TData = Awaited<ReturnType<typeof listWholesaleOrders>>,
+  TError = ErrorType<UnauthorizedResponse>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof listWholesaleOrders>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getListWholesaleOrdersQueryOptions(options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Place a wholesale order (freezes landed cost; books with the forwarder)
+ */
+export const getCreateWholesaleOrderUrl = () => {
+  return `/api/wholesale/orders`;
+};
+
+export const createWholesaleOrder = async (
+  wholesaleOrderCreateBody: WholesaleOrderCreateBody,
+  options?: RequestInit,
+): Promise<WholesaleOrder> => {
+  return customFetch<WholesaleOrder>(getCreateWholesaleOrderUrl(), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(wholesaleOrderCreateBody),
+  });
+};
+
+export const getCreateWholesaleOrderMutationOptions = <
+  TError = ErrorType<
+    BadRequestResponse | UnauthorizedResponse | NotFoundResponse
+  >,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof createWholesaleOrder>>,
+    TError,
+    { data: BodyType<WholesaleOrderCreateBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof createWholesaleOrder>>,
+  TError,
+  { data: BodyType<WholesaleOrderCreateBody> },
+  TContext
+> => {
+  const mutationKey = ["createWholesaleOrder"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof createWholesaleOrder>>,
+    { data: BodyType<WholesaleOrderCreateBody> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return createWholesaleOrder(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type CreateWholesaleOrderMutationResult = NonNullable<
+  Awaited<ReturnType<typeof createWholesaleOrder>>
+>;
+export type CreateWholesaleOrderMutationBody =
+  BodyType<WholesaleOrderCreateBody>;
+export type CreateWholesaleOrderMutationError = ErrorType<
+  BadRequestResponse | UnauthorizedResponse | NotFoundResponse
+>;
+
+/**
+ * @summary Place a wholesale order (freezes landed cost; books with the forwarder)
+ */
+export const useCreateWholesaleOrder = <
+  TError = ErrorType<
+    BadRequestResponse | UnauthorizedResponse | NotFoundResponse
+  >,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof createWholesaleOrder>>,
+    TError,
+    { data: BodyType<WholesaleOrderCreateBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof createWholesaleOrder>>,
+  TError,
+  { data: BodyType<WholesaleOrderCreateBody> },
+  TContext
+> => {
+  return useMutation(getCreateWholesaleOrderMutationOptions(options));
+};
+
+export const getGetWholesaleOrderUrl = (orderId: string) => {
+  return `/api/wholesale/orders/${orderId}`;
+};
+
+export const getWholesaleOrder = async (
+  orderId: string,
+  options?: RequestInit,
+): Promise<WholesaleOrderDetail> => {
+  return customFetch<WholesaleOrderDetail>(getGetWholesaleOrderUrl(orderId), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetWholesaleOrderQueryKey = (orderId: string) => {
+  return [`/api/wholesale/orders/${orderId}`] as const;
+};
+
+export const getGetWholesaleOrderQueryOptions = <
+  TData = Awaited<ReturnType<typeof getWholesaleOrder>>,
+  TError = ErrorType<UnauthorizedResponse | NotFoundResponse>,
+>(
+  orderId: string,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getWholesaleOrder>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getGetWholesaleOrderQueryKey(orderId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getWholesaleOrder>>
+  > = ({ signal }) => getWholesaleOrder(orderId, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: !!orderId,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getWholesaleOrder>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetWholesaleOrderQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getWholesaleOrder>>
+>;
+export type GetWholesaleOrderQueryError = ErrorType<
+  UnauthorizedResponse | NotFoundResponse
+>;
+
+export function useGetWholesaleOrder<
+  TData = Awaited<ReturnType<typeof getWholesaleOrder>>,
+  TError = ErrorType<UnauthorizedResponse | NotFoundResponse>,
+>(
+  orderId: string,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getWholesaleOrder>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetWholesaleOrderQueryOptions(orderId, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+export const getCancelWholesaleOrderUrl = (orderId: string) => {
+  return `/api/wholesale/orders/${orderId}/cancel`;
+};
+
+export const cancelWholesaleOrder = async (
+  orderId: string,
+  options?: RequestInit,
+): Promise<WholesaleOrder> => {
+  return customFetch<WholesaleOrder>(getCancelWholesaleOrderUrl(orderId), {
+    ...options,
+    method: "POST",
+  });
+};
+
+export const getCancelWholesaleOrderMutationOptions = <
+  TError = ErrorType<UnauthorizedResponse | NotFoundResponse | ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof cancelWholesaleOrder>>,
+    TError,
+    { orderId: string },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof cancelWholesaleOrder>>,
+  TError,
+  { orderId: string },
+  TContext
+> => {
+  const mutationKey = ["cancelWholesaleOrder"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof cancelWholesaleOrder>>,
+    { orderId: string }
+  > = (props) => {
+    const { orderId } = props ?? {};
+
+    return cancelWholesaleOrder(orderId, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type CancelWholesaleOrderMutationResult = NonNullable<
+  Awaited<ReturnType<typeof cancelWholesaleOrder>>
+>;
+
+export type CancelWholesaleOrderMutationError = ErrorType<
+  UnauthorizedResponse | NotFoundResponse | ApiError
+>;
+
+export const useCancelWholesaleOrder = <
+  TError = ErrorType<UnauthorizedResponse | NotFoundResponse | ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof cancelWholesaleOrder>>,
+    TError,
+    { orderId: string },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof cancelWholesaleOrder>>,
+  TError,
+  { orderId: string },
+  TContext
+> => {
+  return useMutation(getCancelWholesaleOrderMutationOptions(options));
 };

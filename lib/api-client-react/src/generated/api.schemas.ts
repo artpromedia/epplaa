@@ -1431,6 +1431,360 @@ export interface ModerationScanResult {
   csamMatch?: boolean;
 }
 
+export type ManufacturerStatus =
+  (typeof ManufacturerStatus)[keyof typeof ManufacturerStatus];
+
+export const ManufacturerStatus = {
+  pending: "pending",
+  review: "review",
+  approved: "approved",
+  rejected: "rejected",
+  suspended: "suspended",
+} as const;
+
+export type ManufacturerApplication = null | { [key: string]: unknown };
+
+export interface Manufacturer {
+  id: string;
+  userId: string;
+  originCountry: string;
+  legalName: string;
+  contactEmail: string;
+  /** @nullable */
+  contactPhone: string | null;
+  /** @nullable */
+  exportLicenceNumber: string | null;
+  status: ManufacturerStatus;
+  application: ManufacturerApplication;
+  createdAtIso: string;
+  updatedAtIso: string;
+}
+
+/**
+ * `none` when the signed-in user has not started a manufacturer
+application yet; otherwise mirrors `Manufacturer.status`.
+
+ */
+export type ManufacturerMeStatus =
+  (typeof ManufacturerMeStatus)[keyof typeof ManufacturerMeStatus];
+
+export const ManufacturerMeStatus = {
+  none: "none",
+  pending: "pending",
+  review: "review",
+  approved: "approved",
+  rejected: "rejected",
+  suspended: "suspended",
+} as const;
+
+export interface ManufacturerMeResponse {
+  status: ManufacturerMeStatus;
+  manufacturer: null | Manufacturer;
+}
+
+export type ManufacturerApplyBodyApplication = { [key: string]: unknown };
+
+export interface ManufacturerApplyBody {
+  originCountry: string;
+  legalName: string;
+  contactEmail?: string;
+  contactPhone?: string;
+  exportLicenceNumber?: string;
+  application?: ManufacturerApplyBodyApplication;
+}
+
+export type ManufacturerKycStatus =
+  (typeof ManufacturerKycStatus)[keyof typeof ManufacturerKycStatus];
+
+export const ManufacturerKycStatus = {
+  pending: "pending",
+  approved: "approved",
+  rejected: "rejected",
+} as const;
+
+export interface ManufacturerKyc {
+  id: string;
+  manufacturerId: string;
+  kind: string;
+  documentUrl: string;
+  status: ManufacturerKycStatus;
+  /** @nullable */
+  reviewedBy: string | null;
+  /** @nullable */
+  reviewedAtIso: string | null;
+  /** @nullable */
+  rejectReason: string | null;
+  createdAtIso: string;
+  updatedAtIso: string;
+}
+
+export type ManufacturerKycUploadBodyKind =
+  (typeof ManufacturerKycUploadBodyKind)[keyof typeof ManufacturerKycUploadBodyKind];
+
+export const ManufacturerKycUploadBodyKind = {
+  export_licence: "export_licence",
+  business_registration: "business_registration",
+  tax_id: "tax_id",
+  ubo: "ubo",
+  factory_audit: "factory_audit",
+} as const;
+
+export interface ManufacturerKycUploadBody {
+  kind: ManufacturerKycUploadBodyKind;
+  documentUrl: string;
+}
+
+export type ManufacturerListingStatus =
+  (typeof ManufacturerListingStatus)[keyof typeof ManufacturerListingStatus];
+
+export const ManufacturerListingStatus = {
+  draft: "draft",
+  active: "active",
+  paused: "paused",
+} as const;
+
+export type ManufacturerListingDimensions = null | { [key: string]: unknown };
+
+export interface ManufacturerListing {
+  id: string;
+  manufacturerId: string;
+  sku: string;
+  title: string;
+  description: string;
+  hsCode: string;
+  originCountry: string;
+  originCurrencyCode: string;
+  wholesalePriceMinor: number;
+  moq: number;
+  leadDays: number;
+  weightGrams: number;
+  dimensions: ManufacturerListingDimensions;
+  images: string[];
+  category: string;
+  status: ManufacturerListingStatus;
+  createdAtIso: string;
+  updatedAtIso: string;
+}
+
+export type ManufacturerListingCreateBodyDimensions = {
+  [key: string]: unknown;
+};
+
+export interface ManufacturerListingCreateBody {
+  sku?: string;
+  title: string;
+  description?: string;
+  hsCode: string;
+  originCurrencyCode: string;
+  /** @minimum 1 */
+  wholesalePriceMinor: number;
+  /** @minimum 1 */
+  moq?: number;
+  /** @minimum 0 */
+  leadDays?: number;
+  /** @minimum 0 */
+  weightGrams?: number;
+  dimensions?: ManufacturerListingCreateBodyDimensions;
+  images?: string[];
+  category?: string;
+}
+
+export type ManufacturerListingUpdateBodyDimensions = {
+  [key: string]: unknown;
+};
+
+export interface ManufacturerListingUpdateBody {
+  title?: string;
+  description?: string;
+  hsCode?: string;
+  /** @minimum 1 */
+  wholesalePriceMinor?: number;
+  /** @minimum 1 */
+  moq?: number;
+  /** @minimum 0 */
+  leadDays?: number;
+  /** @minimum 0 */
+  weightGrams?: number;
+  dimensions?: ManufacturerListingUpdateBodyDimensions;
+  images?: string[];
+  category?: string;
+  status?: ManufacturerListingStatus;
+}
+
+/**
+ * Subset of ManufacturerListing exposed on the public wholesale catalog
+— drops the lifecycle status and timestamps that only the manufacturer
+and the admin console need to see.
+
+ */
+export interface WholesaleCatalogListing {
+  id: string;
+  manufacturerId: string;
+  sku: string;
+  title: string;
+  description: string;
+  hsCode: string;
+  originCountry: string;
+  originCurrencyCode: string;
+  wholesalePriceMinor: number;
+  moq: number;
+  leadDays: number;
+  weightGrams: number;
+  images: string[];
+  category: string;
+}
+
+export type ShipMode = (typeof ShipMode)[keyof typeof ShipMode];
+
+export const ShipMode = {
+  air: "air",
+  sea: "sea",
+} as const;
+
+export interface WholesaleOrder {
+  id: string;
+  listingId: string;
+  manufacturerId: string;
+  sellerUserId: string;
+  qty: number;
+  fobMinor: number;
+  originCurrencyCode: string;
+  freightMinor: number;
+  insuranceMinor: number;
+  dutyMinor: number;
+  vatMinor: number;
+  clearanceMinor: number;
+  landedTotalMinor: number;
+  destinationCurrencyCode: string;
+  destinationCountryCode: string;
+  fxRate: number;
+  status: string;
+  /** @nullable */
+  freightBookingId: string | null;
+  /** @nullable */
+  etaIso: string | null;
+  /** @nullable */
+  shipMode: string | null;
+  /** @nullable */
+  notes: string | null;
+  createdAtIso: string;
+  updatedAtIso: string;
+}
+
+export type CustomsEventPayload = null | { [key: string]: unknown };
+
+export interface CustomsEvent {
+  id: string;
+  kind: string;
+  /** @nullable */
+  note: string | null;
+  payload: CustomsEventPayload;
+  createdAtIso: string;
+}
+
+export interface FreightBookingView {
+  id: string;
+  mode: string;
+  forwarder: string;
+  /** @nullable */
+  ref: string | null;
+  /** @nullable */
+  originPort: string | null;
+  /** @nullable */
+  destinationPort: string | null;
+  status: string;
+  /** @nullable */
+  etaIso: string | null;
+  /** @nullable */
+  actualEtaIso: string | null;
+  /** @nullable */
+  costMinor: number | null;
+  /** @nullable */
+  currencyCode: string | null;
+}
+
+export interface BondedInventoryView {
+  warehouseCode: string;
+  qtyOnHand: number;
+  qtyReleased: number;
+  /** @nullable */
+  arrivedAtIso: string | null;
+  /** @nullable */
+  clearedAtIso: string | null;
+  /** @nullable */
+  releasedAtIso: string | null;
+}
+
+export interface ManufacturerOrderDetail {
+  order: WholesaleOrder;
+  events: CustomsEvent[];
+  booking: null | FreightBookingView;
+}
+
+export interface WholesaleOrderDetail {
+  order: WholesaleOrder;
+  events: CustomsEvent[];
+  booking: null | FreightBookingView;
+  bondedInventory: null | BondedInventoryView;
+}
+
+export interface ManufacturerPayout {
+  id: string;
+  amountMinor: number;
+  currencyCode: string;
+  status: string;
+  /** @nullable */
+  reference: string | null;
+  requestedAtIso: string;
+  /** @nullable */
+  paidAtIso: string | null;
+}
+
+export interface LandedCostBreakdown {
+  fobMinor: number;
+  fobInDestMinor: number;
+  freightMinor: number;
+  insuranceMinor: number;
+  dutyMinor: number;
+  vatMinor: number;
+  clearanceMinor: number;
+  landedTotalMinor: number;
+  fxRate: number;
+  shipMode: ShipMode;
+  etaDays: number;
+  dutyRate: number;
+  vatRate: number;
+}
+
+export interface WholesaleQuoteBody {
+  listingId: string;
+  /** @minimum 1 */
+  qty?: number;
+  destinationCountryCode?: string;
+  shipMode?: ShipMode;
+}
+
+export interface WholesaleQuoteResponse {
+  listingId: string;
+  qty: number;
+  destinationCountryCode: string;
+  destinationCurrencyCode: string;
+  shipMode: ShipMode;
+  leadDays: number;
+  productionLeadDays: number;
+  transitDays: number;
+  breakdown: LandedCostBreakdown;
+}
+
+export interface WholesaleOrderCreateBody {
+  listingId: string;
+  /** @minimum 1 */
+  qty?: number;
+  destinationCountryCode?: string;
+  shipMode?: ShipMode;
+  notes?: string;
+}
+
 /**
  * Sign-in required
  */
@@ -2005,4 +2359,11 @@ export type AdminGrantUserRoleBody = {
 
 export type AdminScanTextBody = {
   text: string;
+};
+
+export type ListWholesaleListingsParams = {
+  search?: string;
+  originCountry?: string;
+  category?: string;
+  hsCode?: string;
 };

@@ -33,6 +33,8 @@ tags:
   - { name: admin }
   - { name: csrf }
   - { name: mfa }
+  - { name: manufacturer }
+  - { name: wholesale }
 paths:
   /healthz:
     get:
@@ -2321,6 +2323,223 @@ paths:
         "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/ModerationScanResult" } } } }
         "400": { $ref: "#/components/responses/BadRequest" }
 
+  # ---- Manufacturer (cross-border seller-portal) ------------------------
+  # See artifacts/api-server/src/routes/manufacturer.ts. The manufacturer
+  # portal SPA is the only consumer; admin moderation of manufacturers
+  # lives under /admin/manufacturers and is generated separately.
+  /manufacturer/me:
+    get:
+      operationId: getManufacturerMe
+      tags: [manufacturer]
+      summary: Resolve the signed-in user's manufacturer profile
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/ManufacturerMeResponse" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /manufacturer/apply:
+    post:
+      operationId: applyManufacturer
+      tags: [manufacturer]
+      summary: Submit (or update) a manufacturer onboarding application
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ManufacturerApplyBody" }
+      responses:
+        "200": { description: Updated, content: { application/json: { schema: { $ref: "#/components/schemas/ManufacturerMeResponse" } } } }
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/ManufacturerMeResponse" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "409": { description: Application already finalised, content: { application/json: { schema: { $ref: "#/components/schemas/ApiError" } } } }
+  /manufacturer/kyc:
+    get:
+      operationId: listManufacturerKyc
+      tags: [manufacturer]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/ManufacturerKyc" } } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    post:
+      operationId: uploadManufacturerKyc
+      tags: [manufacturer]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ManufacturerKycUploadBody" }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/ManufacturerKyc" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /manufacturer/listings:
+    get:
+      operationId: listManufacturerListings
+      tags: [manufacturer]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/ManufacturerListing" } } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    post:
+      operationId: createManufacturerListing
+      tags: [manufacturer]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ManufacturerListingCreateBody" }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/ManufacturerListing" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /manufacturer/listings/{listingId}:
+    parameters:
+      - { in: path, name: listingId, required: true, schema: { type: string } }
+    patch:
+      operationId: updateManufacturerListing
+      tags: [manufacturer]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ManufacturerListingUpdateBody" }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/ManufacturerListing" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      operationId: deleteManufacturerListing
+      tags: [manufacturer]
+      responses:
+        "204": { description: Deleted }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /manufacturer/orders:
+    get:
+      operationId: listManufacturerOrders
+      tags: [manufacturer]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/WholesaleOrder" } } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /manufacturer/orders/{orderId}:
+    parameters:
+      - { in: path, name: orderId, required: true, schema: { type: string } }
+    get:
+      operationId: getManufacturerOrder
+      tags: [manufacturer]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/ManufacturerOrderDetail" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /manufacturer/orders/{orderId}/ship:
+    parameters:
+      - { in: path, name: orderId, required: true, schema: { type: string } }
+    post:
+      operationId: shipManufacturerOrder
+      tags: [manufacturer]
+      summary: Mark an order as shipped (idempotent for post-ship states)
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/WholesaleOrder" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { description: Wrong state for ship transition, content: { application/json: { schema: { $ref: "#/components/schemas/ApiError" } } } }
+  /manufacturer/payouts:
+    get:
+      operationId: listManufacturerPayouts
+      tags: [manufacturer]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/ManufacturerPayout" } } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  # ---- Wholesale (seller/buyer-facing cross-border catalog + orders) ----
+  # See artifacts/api-server/src/routes/wholesale.ts. Catalog browsing and
+  # the landed-cost quote are intentionally public so prospective Epplaa
+  # sellers can preview pricing before signing up.
+  /wholesale/listings:
+    get:
+      operationId: listWholesaleListings
+      tags: [wholesale]
+      parameters:
+        - { in: query, name: search, schema: { type: string } }
+        - { in: query, name: originCountry, schema: { type: string } }
+        - { in: query, name: category, schema: { type: string } }
+        - { in: query, name: hsCode, schema: { type: string } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/WholesaleCatalogListing" } } } } }
+  /wholesale/listings/{listingId}:
+    parameters:
+      - { in: path, name: listingId, required: true, schema: { type: string } }
+    get:
+      operationId: getWholesaleListing
+      tags: [wholesale]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/WholesaleCatalogListing" } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /wholesale/quote:
+    post:
+      operationId: quoteWholesaleOrder
+      tags: [wholesale]
+      summary: Preview the landed cost for a prospective wholesale order
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/WholesaleQuoteBody" }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/WholesaleQuoteResponse" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /wholesale/orders:
+    get:
+      operationId: listWholesaleOrders
+      tags: [wholesale]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/WholesaleOrder" } } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    post:
+      operationId: createWholesaleOrder
+      tags: [wholesale]
+      summary: Place a wholesale order (freezes landed cost; books with the forwarder)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/WholesaleOrderCreateBody" }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/WholesaleOrder" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /wholesale/orders/{orderId}:
+    parameters:
+      - { in: path, name: orderId, required: true, schema: { type: string } }
+    get:
+      operationId: getWholesaleOrder
+      tags: [wholesale]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/WholesaleOrderDetail" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /wholesale/orders/{orderId}/cancel:
+    parameters:
+      - { in: path, name: orderId, required: true, schema: { type: string } }
+    post:
+      operationId: cancelWholesaleOrder
+      tags: [wholesale]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/WholesaleOrder" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { description: Wrong state for cancel transition, content: { application/json: { schema: { $ref: "#/components/schemas/ApiError" } } } }
+
 components:
   responses:
     Unauthorized:
@@ -3813,3 +4032,309 @@ components:
         decision: { type: string }
         scanId: { type: string }
         csamMatch: { type: boolean }
+
+    # ---- Manufacturer & wholesale schemas ---------------------------------
+    ManufacturerStatus:
+      type: string
+      enum: [pending, review, approved, rejected, suspended]
+    Manufacturer:
+      type: object
+      required: [id, userId, originCountry, legalName, contactEmail, contactPhone, exportLicenceNumber, status, application, createdAtIso, updatedAtIso]
+      properties:
+        id: { type: string }
+        userId: { type: string }
+        originCountry: { type: string }
+        legalName: { type: string }
+        contactEmail: { type: string }
+        contactPhone: { type: ["string", "null"] }
+        exportLicenceNumber: { type: ["string", "null"] }
+        status: { $ref: "#/components/schemas/ManufacturerStatus" }
+        application:
+          oneOf:
+            - { type: "null" }
+            - { type: object, additionalProperties: true }
+        createdAtIso: { type: string }
+        updatedAtIso: { type: string }
+    ManufacturerMeStatus:
+      type: string
+      description: |
+        `none` when the signed-in user has not started a manufacturer
+        application yet; otherwise mirrors `Manufacturer.status`.
+      enum: [none, pending, review, approved, rejected, suspended]
+    ManufacturerMeResponse:
+      type: object
+      required: [status, manufacturer]
+      properties:
+        status: { $ref: "#/components/schemas/ManufacturerMeStatus" }
+        manufacturer:
+          oneOf:
+            - { type: "null" }
+            - { $ref: "#/components/schemas/Manufacturer" }
+    ManufacturerApplyBody:
+      type: object
+      required: [originCountry, legalName]
+      properties:
+        originCountry: { type: string }
+        legalName: { type: string }
+        contactEmail: { type: string }
+        contactPhone: { type: string }
+        exportLicenceNumber: { type: string }
+        application: { type: object, additionalProperties: true }
+    ManufacturerKycStatus:
+      type: string
+      enum: [pending, approved, rejected]
+    ManufacturerKyc:
+      type: object
+      required: [id, manufacturerId, kind, documentUrl, status, reviewedBy, reviewedAtIso, rejectReason, createdAtIso, updatedAtIso]
+      properties:
+        id: { type: string }
+        manufacturerId: { type: string }
+        kind: { type: string }
+        documentUrl: { type: string }
+        status: { $ref: "#/components/schemas/ManufacturerKycStatus" }
+        reviewedBy: { type: ["string", "null"] }
+        reviewedAtIso: { type: ["string", "null"] }
+        rejectReason: { type: ["string", "null"] }
+        createdAtIso: { type: string }
+        updatedAtIso: { type: string }
+    ManufacturerKycUploadBody:
+      type: object
+      required: [kind, documentUrl]
+      properties:
+        kind:
+          type: string
+          enum: [export_licence, business_registration, tax_id, ubo, factory_audit]
+        documentUrl: { type: string }
+    ManufacturerListingStatus:
+      type: string
+      enum: [draft, active, paused]
+    ManufacturerListing:
+      type: object
+      required: [id, manufacturerId, sku, title, description, hsCode, originCountry, originCurrencyCode, wholesalePriceMinor, moq, leadDays, weightGrams, dimensions, images, category, status, createdAtIso, updatedAtIso]
+      properties:
+        id: { type: string }
+        manufacturerId: { type: string }
+        sku: { type: string }
+        title: { type: string }
+        description: { type: string }
+        hsCode: { type: string }
+        originCountry: { type: string }
+        originCurrencyCode: { type: string }
+        wholesalePriceMinor: { type: integer }
+        moq: { type: integer }
+        leadDays: { type: integer }
+        weightGrams: { type: integer }
+        dimensions:
+          oneOf:
+            - { type: "null" }
+            - { type: object, additionalProperties: true }
+        images: { type: array, items: { type: string } }
+        category: { type: string }
+        status: { $ref: "#/components/schemas/ManufacturerListingStatus" }
+        createdAtIso: { type: string }
+        updatedAtIso: { type: string }
+    ManufacturerListingCreateBody:
+      type: object
+      required: [title, hsCode, originCurrencyCode, wholesalePriceMinor]
+      properties:
+        sku: { type: string }
+        title: { type: string }
+        description: { type: string }
+        hsCode: { type: string }
+        originCurrencyCode: { type: string }
+        wholesalePriceMinor: { type: integer, minimum: 1 }
+        moq: { type: integer, minimum: 1 }
+        leadDays: { type: integer, minimum: 0 }
+        weightGrams: { type: integer, minimum: 0 }
+        dimensions: { type: object, additionalProperties: true }
+        images: { type: array, items: { type: string } }
+        category: { type: string }
+    ManufacturerListingUpdateBody:
+      type: object
+      properties:
+        title: { type: string }
+        description: { type: string }
+        hsCode: { type: string }
+        wholesalePriceMinor: { type: integer, minimum: 1 }
+        moq: { type: integer, minimum: 1 }
+        leadDays: { type: integer, minimum: 0 }
+        weightGrams: { type: integer, minimum: 0 }
+        dimensions: { type: object, additionalProperties: true }
+        images: { type: array, items: { type: string } }
+        category: { type: string }
+        status: { $ref: "#/components/schemas/ManufacturerListingStatus" }
+    WholesaleCatalogListing:
+      type: object
+      description: |
+        Subset of ManufacturerListing exposed on the public wholesale catalog
+        — drops the lifecycle status and timestamps that only the manufacturer
+        and the admin console need to see.
+      required: [id, manufacturerId, sku, title, description, hsCode, originCountry, originCurrencyCode, wholesalePriceMinor, moq, leadDays, weightGrams, images, category]
+      properties:
+        id: { type: string }
+        manufacturerId: { type: string }
+        sku: { type: string }
+        title: { type: string }
+        description: { type: string }
+        hsCode: { type: string }
+        originCountry: { type: string }
+        originCurrencyCode: { type: string }
+        wholesalePriceMinor: { type: integer }
+        moq: { type: integer }
+        leadDays: { type: integer }
+        weightGrams: { type: integer }
+        images: { type: array, items: { type: string } }
+        category: { type: string }
+    ShipMode:
+      type: string
+      enum: [air, sea]
+    WholesaleOrder:
+      type: object
+      required: [id, listingId, manufacturerId, sellerUserId, qty, fobMinor, originCurrencyCode, freightMinor, insuranceMinor, dutyMinor, vatMinor, clearanceMinor, landedTotalMinor, destinationCurrencyCode, destinationCountryCode, fxRate, status, freightBookingId, etaIso, shipMode, notes, createdAtIso, updatedAtIso]
+      properties:
+        id: { type: string }
+        listingId: { type: string }
+        manufacturerId: { type: string }
+        sellerUserId: { type: string }
+        qty: { type: integer }
+        fobMinor: { type: integer }
+        originCurrencyCode: { type: string }
+        freightMinor: { type: integer }
+        insuranceMinor: { type: integer }
+        dutyMinor: { type: integer }
+        vatMinor: { type: integer }
+        clearanceMinor: { type: integer }
+        landedTotalMinor: { type: integer }
+        destinationCurrencyCode: { type: string }
+        destinationCountryCode: { type: string }
+        fxRate: { type: number }
+        status: { type: string }
+        freightBookingId: { type: ["string", "null"] }
+        etaIso: { type: ["string", "null"] }
+        shipMode: { type: ["string", "null"] }
+        notes: { type: ["string", "null"] }
+        createdAtIso: { type: string }
+        updatedAtIso: { type: string }
+    CustomsEvent:
+      type: object
+      required: [id, kind, note, payload, createdAtIso]
+      properties:
+        id: { type: string }
+        kind: { type: string }
+        note: { type: ["string", "null"] }
+        payload:
+          oneOf:
+            - { type: "null" }
+            - { type: object, additionalProperties: true }
+        createdAtIso: { type: string }
+    FreightBookingView:
+      type: object
+      required: [id, mode, forwarder, ref, originPort, destinationPort, status, etaIso, actualEtaIso, costMinor, currencyCode]
+      properties:
+        id: { type: string }
+        mode: { type: string }
+        forwarder: { type: string }
+        ref: { type: ["string", "null"] }
+        originPort: { type: ["string", "null"] }
+        destinationPort: { type: ["string", "null"] }
+        status: { type: string }
+        etaIso: { type: ["string", "null"] }
+        actualEtaIso: { type: ["string", "null"] }
+        costMinor: { type: ["integer", "null"] }
+        currencyCode: { type: ["string", "null"] }
+    BondedInventoryView:
+      type: object
+      required: [warehouseCode, qtyOnHand, qtyReleased, arrivedAtIso, clearedAtIso, releasedAtIso]
+      properties:
+        warehouseCode: { type: string }
+        qtyOnHand: { type: integer }
+        qtyReleased: { type: integer }
+        arrivedAtIso: { type: ["string", "null"] }
+        clearedAtIso: { type: ["string", "null"] }
+        releasedAtIso: { type: ["string", "null"] }
+    ManufacturerOrderDetail:
+      type: object
+      required: [order, events, booking]
+      properties:
+        order: { $ref: "#/components/schemas/WholesaleOrder" }
+        events:
+          type: array
+          items: { $ref: "#/components/schemas/CustomsEvent" }
+        booking:
+          oneOf:
+            - { type: "null" }
+            - { $ref: "#/components/schemas/FreightBookingView" }
+    WholesaleOrderDetail:
+      type: object
+      required: [order, events, booking, bondedInventory]
+      properties:
+        order: { $ref: "#/components/schemas/WholesaleOrder" }
+        events:
+          type: array
+          items: { $ref: "#/components/schemas/CustomsEvent" }
+        booking:
+          oneOf:
+            - { type: "null" }
+            - { $ref: "#/components/schemas/FreightBookingView" }
+        bondedInventory:
+          oneOf:
+            - { type: "null" }
+            - { $ref: "#/components/schemas/BondedInventoryView" }
+    ManufacturerPayout:
+      type: object
+      required: [id, amountMinor, currencyCode, status, reference, requestedAtIso, paidAtIso]
+      properties:
+        id: { type: string }
+        amountMinor: { type: integer }
+        currencyCode: { type: string }
+        status: { type: string }
+        reference: { type: ["string", "null"] }
+        requestedAtIso: { type: string }
+        paidAtIso: { type: ["string", "null"] }
+    LandedCostBreakdown:
+      type: object
+      required: [fobMinor, fobInDestMinor, freightMinor, insuranceMinor, dutyMinor, vatMinor, clearanceMinor, landedTotalMinor, fxRate, shipMode, etaDays, dutyRate, vatRate]
+      properties:
+        fobMinor: { type: integer }
+        fobInDestMinor: { type: integer }
+        freightMinor: { type: integer }
+        insuranceMinor: { type: integer }
+        dutyMinor: { type: integer }
+        vatMinor: { type: integer }
+        clearanceMinor: { type: integer }
+        landedTotalMinor: { type: integer }
+        fxRate: { type: number }
+        shipMode: { $ref: "#/components/schemas/ShipMode" }
+        etaDays: { type: integer }
+        dutyRate: { type: number }
+        vatRate: { type: number }
+    WholesaleQuoteBody:
+      type: object
+      required: [listingId]
+      properties:
+        listingId: { type: string }
+        qty: { type: integer, minimum: 1 }
+        destinationCountryCode: { type: string }
+        shipMode: { $ref: "#/components/schemas/ShipMode" }
+    WholesaleQuoteResponse:
+      type: object
+      required: [listingId, qty, destinationCountryCode, destinationCurrencyCode, shipMode, leadDays, productionLeadDays, transitDays, breakdown]
+      properties:
+        listingId: { type: string }
+        qty: { type: integer }
+        destinationCountryCode: { type: string }
+        destinationCurrencyCode: { type: string }
+        shipMode: { $ref: "#/components/schemas/ShipMode" }
+        leadDays: { type: integer }
+        productionLeadDays: { type: integer }
+        transitDays: { type: integer }
+        breakdown: { $ref: "#/components/schemas/LandedCostBreakdown" }
+    WholesaleOrderCreateBody:
+      type: object
+      required: [listingId]
+      properties:
+        listingId: { type: string }
+        qty: { type: integer, minimum: 1 }
+        destinationCountryCode: { type: string }
+        shipMode: { $ref: "#/components/schemas/ShipMode" }
+        notes: { type: string }

@@ -1,5 +1,11 @@
 import { useEffect, useState } from "react";
-import { manufacturerApi, type ManufacturerKyc } from "@/lib/api";
+import {
+  ApiError,
+  listManufacturerKyc,
+  uploadManufacturerKyc,
+  type ManufacturerKyc,
+  type ManufacturerKycUploadBodyKind,
+} from "@workspace/api-client-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -7,7 +13,11 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { StatusBadge } from "@/components/status-badge";
 
-const REQUIRED_DOCS: { kind: string; label: string; description: string }[] = [
+const REQUIRED_DOCS: {
+  kind: ManufacturerKycUploadBodyKind;
+  label: string;
+  description: string;
+}[] = [
   { kind: "export_licence", label: "Export licence", description: "Customs-issued export permit" },
   { kind: "business_registration", label: "Business registration", description: "Articles of incorporation" },
   { kind: "tax_id", label: "Tax ID", description: "Origin-country tax registration" },
@@ -20,15 +30,15 @@ export default function KycPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
-  const [kind, setKind] = useState(REQUIRED_DOCS[0].kind);
+  const [kind, setKind] = useState<ManufacturerKycUploadBodyKind>(REQUIRED_DOCS[0].kind);
   const [documentUrl, setDocumentUrl] = useState("");
 
   async function refresh() {
     try {
-      const rows = await manufacturerApi.listKyc();
+      const rows = await listManufacturerKyc();
       setDocs(rows);
     } catch (e) {
-      setError((e as Error).message);
+      setError(e instanceof ApiError ? e.message : (e as Error).message);
     }
   }
 
@@ -46,11 +56,11 @@ export default function KycPage() {
     setSubmitting(true);
     setError(null);
     try {
-      await manufacturerApi.uploadKyc({ kind, documentUrl });
+      await uploadManufacturerKyc({ kind, documentUrl });
       setDocumentUrl("");
       await refresh();
     } catch (e) {
-      setError((e as Error).message);
+      setError(e instanceof ApiError ? e.message : (e as Error).message);
     } finally {
       setSubmitting(false);
     }
@@ -86,7 +96,10 @@ export default function KycPage() {
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               <div className="space-y-1.5 sm:col-span-1">
                 <Label htmlFor="kind">Document type</Label>
-                <Select value={kind} onValueChange={setKind}>
+                <Select
+                  value={kind}
+                  onValueChange={(v) => setKind(v as ManufacturerKycUploadBodyKind)}
+                >
                   <SelectTrigger id="kind">
                     <SelectValue />
                   </SelectTrigger>
