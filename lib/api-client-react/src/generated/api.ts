@@ -71,6 +71,7 @@ import type {
   CreateSellerListingBody,
   CreateStreamBody,
   CsrfToken,
+  DbHealthSnapshot,
   DeletePushTokenParams,
   DisputePage,
   EarningsSummary,
@@ -142,6 +143,7 @@ import type {
   PromoApplyResult,
   PushTokenBody,
   PushTokenRegistered,
+  QueueHealthSnapshot,
   RateShipmentBody,
   RateShipmentResponse,
   ReconciliationRun,
@@ -4785,6 +4787,170 @@ export function useAdminGetGatewayHealth<
   request?: SecondParameter<typeof customFetch>;
 }): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
   const queryOptions = getAdminGetGatewayHealthQueryOptions(options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * Runs a small burst of `SELECT 1` probes on the api-server's
+Postgres pool and returns the p50/p95 round-trip time plus the
+timestamp of the last successful probe. Used by the admin
+status page to show whether the api-server's primary backing
+store is responding within expected limits.
+
+ * @summary Per-replica Postgres latency snapshot
+ */
+export const getAdminGetDbHealthUrl = () => {
+  return `/api/admin/db-health`;
+};
+
+export const adminGetDbHealth = async (
+  options?: RequestInit,
+): Promise<DbHealthSnapshot> => {
+  return customFetch<DbHealthSnapshot>(getAdminGetDbHealthUrl(), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getAdminGetDbHealthQueryKey = () => {
+  return [`/api/admin/db-health`] as const;
+};
+
+export const getAdminGetDbHealthQueryOptions = <
+  TData = Awaited<ReturnType<typeof adminGetDbHealth>>,
+  TError = ErrorType<UnauthorizedResponse | void>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof adminGetDbHealth>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getAdminGetDbHealthQueryKey();
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof adminGetDbHealth>>
+  > = ({ signal }) => adminGetDbHealth({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof adminGetDbHealth>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type AdminGetDbHealthQueryResult = NonNullable<
+  Awaited<ReturnType<typeof adminGetDbHealth>>
+>;
+export type AdminGetDbHealthQueryError = ErrorType<UnauthorizedResponse | void>;
+
+/**
+ * @summary Per-replica Postgres latency snapshot
+ */
+
+export function useAdminGetDbHealth<
+  TData = Awaited<ReturnType<typeof adminGetDbHealth>>,
+  TError = ErrorType<UnauthorizedResponse | void>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof adminGetDbHealth>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getAdminGetDbHealthQueryOptions(options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * Aggregate counts of pending vs in-flight (processing) vs failed
+rows in the `notifications_outbox` table, plus the timestamp of
+the oldest unprocessed row. This is the same queue the
+scheduler drains every 30s for retryable notifications and
+recurring jobs (reconciliation, payouts) that fan out through
+it.
+
+ * @summary Background notification-outbox queue depth
+ */
+export const getAdminGetQueueHealthUrl = () => {
+  return `/api/admin/queue-health`;
+};
+
+export const adminGetQueueHealth = async (
+  options?: RequestInit,
+): Promise<QueueHealthSnapshot> => {
+  return customFetch<QueueHealthSnapshot>(getAdminGetQueueHealthUrl(), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getAdminGetQueueHealthQueryKey = () => {
+  return [`/api/admin/queue-health`] as const;
+};
+
+export const getAdminGetQueueHealthQueryOptions = <
+  TData = Awaited<ReturnType<typeof adminGetQueueHealth>>,
+  TError = ErrorType<UnauthorizedResponse | void>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof adminGetQueueHealth>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getAdminGetQueueHealthQueryKey();
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof adminGetQueueHealth>>
+  > = ({ signal }) => adminGetQueueHealth({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof adminGetQueueHealth>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type AdminGetQueueHealthQueryResult = NonNullable<
+  Awaited<ReturnType<typeof adminGetQueueHealth>>
+>;
+export type AdminGetQueueHealthQueryError =
+  ErrorType<UnauthorizedResponse | void>;
+
+/**
+ * @summary Background notification-outbox queue depth
+ */
+
+export function useAdminGetQueueHealth<
+  TData = Awaited<ReturnType<typeof adminGetQueueHealth>>,
+  TError = ErrorType<UnauthorizedResponse | void>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof adminGetQueueHealth>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getAdminGetQueueHealthQueryOptions(options);
 
   const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
     queryKey: QueryKey;

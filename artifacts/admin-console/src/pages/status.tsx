@@ -6,13 +6,19 @@ import {
   CheckCircle2,
   CreditCard,
   Database,
+  HardDrive,
+  Layers,
   RefreshCw,
   XCircle,
 } from "lucide-react";
 import {
   getHealthCheckQueryOptions,
+  useAdminGetDbHealth,
   useAdminGetGatewayHealth,
+  useAdminGetQueueHealth,
+  type DbHealthSnapshot,
   type GatewayHealthSnapshot,
+  type QueueHealthSnapshot,
 } from "@workspace/api-client-react";
 import { PageHeader } from "@/components/admin-shell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -241,6 +247,8 @@ export default function StatusPage() {
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
           <RateLimitStorePanel />
           <PaymentGatewayHealthPanel />
+          <DatabaseHealthPanel />
+          <BackgroundQueuePanel />
         </div>
       </section>
 
@@ -710,6 +718,263 @@ function ReplicaCard({ replica, now }: { replica: ReplicaSample; now: number }) 
           <p className="text-xs text-destructive" data-testid={`parse-error-${replica.replicaId}`}>
             Could not parse response body: {replica.parseError}
           </p>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function isDbHealthDegraded(snapshot: DbHealthSnapshot | undefined): boolean {
+  return snapshot?.state === "degraded";
+}
+
+function formatLatency(ms: number | null): string {
+  if (ms === null) return "—";
+  if (ms < 10) return `${ms.toFixed(1)} ms`;
+  return `${Math.round(ms)} ms`;
+}
+
+function DatabaseHealthPanel() {
+  const { data, isLoading, error } = useAdminGetDbHealth({
+    query: {
+      refetchInterval: 15_000,
+      refetchIntervalInBackground: true,
+      staleTime: 0,
+    } as never,
+  });
+
+  const snapshot = data;
+  const degraded = isDbHealthDegraded(snapshot);
+  const now = Date.now();
+
+  return (
+    <Card
+      className={cn(degraded && "border-destructive/60 bg-destructive/5")}
+      data-testid="db-health-panel"
+    >
+      <CardHeader className="flex flex-row items-center justify-between pb-2">
+        <CardTitle className="text-sm">Database</CardTitle>
+        <HardDrive
+          className={cn(
+            "w-4 h-4",
+            degraded ? "text-destructive" : "text-muted-foreground",
+          )}
+        />
+      </CardHeader>
+      <CardContent className="space-y-2">
+        {error ? (
+          <p
+            className="text-xs text-destructive"
+            data-testid="db-health-error"
+          >
+            Could not load /api/admin/db-health. You may not have permission,
+            or the api-server may be down.
+          </p>
+        ) : isLoading || !snapshot ? (
+          <p className="text-xs text-muted-foreground">Loading…</p>
+        ) : (
+          <>
+            <div className="flex items-center gap-2 flex-wrap">
+              <Badge variant="outline" data-testid="db-health-replica">
+                {snapshot.replicaId}
+              </Badge>
+              {degraded ? (
+                <Badge variant="destructive" data-testid="db-health-state">
+                  degraded
+                </Badge>
+              ) : (
+                <Badge variant="secondary" data-testid="db-health-state">
+                  healthy
+                </Badge>
+              )}
+            </div>
+            <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
+              <dt className="text-muted-foreground">p50 latency</dt>
+              <dd
+                className="tabular-nums"
+                data-testid="db-health-p50"
+              >
+                {formatLatency(snapshot.p50LatencyMs)}
+              </dd>
+              <dt className="text-muted-foreground">p95 latency</dt>
+              <dd
+                className={cn(
+                  "tabular-nums",
+                  degraded && "font-medium text-destructive",
+                )}
+                data-testid="db-health-p95"
+              >
+                {formatLatency(snapshot.p95LatencyMs)}
+              </dd>
+              <dt className="text-muted-foreground">Samples</dt>
+              <dd
+                className="tabular-nums"
+                data-testid="db-health-sample-count"
+              >
+                {snapshot.sampleCount}
+              </dd>
+              <dt className="text-muted-foreground">Last success</dt>
+              <dd
+                className="tabular-nums"
+                data-testid="db-health-last-success"
+                title={
+                  snapshot.lastSuccessAtIso
+                    ? formatTimestamp(snapshot.lastSuccessAtIso)
+                    : undefined
+                }
+              >
+                {snapshot.lastSuccessAtIso
+                  ? `${formatRelativeFlexible(snapshot.lastSuccessAtIso, now)} (${formatTimestamp(snapshot.lastSuccessAtIso)})`
+                  : "—"}
+              </dd>
+              <dt className="text-muted-foreground">Last probed</dt>
+              <dd
+                className="tabular-nums"
+                data-testid="db-health-last-probed"
+                title={formatTimestamp(snapshot.lastProbedAtIso)}
+              >
+                {`${formatRelativeFlexible(snapshot.lastProbedAtIso, now)} (${formatTimestamp(snapshot.lastProbedAtIso)})`}
+              </dd>
+            </dl>
+            {snapshot.lastError && (
+              <p
+                className="text-[11px] text-destructive"
+                data-testid="db-health-last-error"
+              >
+                {snapshot.lastError}
+              </p>
+            )}
+          </>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function isQueueHealthDegraded(snapshot: QueueHealthSnapshot | undefined): boolean {
+  return snapshot?.state === "degraded";
+}
+
+function BackgroundQueuePanel() {
+  const { data, isLoading, error } = useAdminGetQueueHealth({
+    query: {
+      refetchInterval: 15_000,
+      refetchIntervalInBackground: true,
+      staleTime: 0,
+    } as never,
+  });
+
+  const snapshot = data;
+  const degraded = isQueueHealthDegraded(snapshot);
+  const now = Date.now();
+
+  return (
+    <Card
+      className={cn(degraded && "border-destructive/60 bg-destructive/5")}
+      data-testid="queue-health-panel"
+    >
+      <CardHeader className="flex flex-row items-center justify-between pb-2">
+        <CardTitle className="text-sm">Background queue</CardTitle>
+        <Layers
+          className={cn(
+            "w-4 h-4",
+            degraded ? "text-destructive" : "text-muted-foreground",
+          )}
+        />
+      </CardHeader>
+      <CardContent className="space-y-2">
+        {error ? (
+          <p
+            className="text-xs text-destructive"
+            data-testid="queue-health-error"
+          >
+            Could not load /api/admin/queue-health. You may not have
+            permission, or the api-server may be down.
+          </p>
+        ) : isLoading || !snapshot ? (
+          <p className="text-xs text-muted-foreground">Loading…</p>
+        ) : (
+          <>
+            <div className="flex items-center gap-2 flex-wrap">
+              <Badge variant="outline" data-testid="queue-health-kind">
+                notifications_outbox
+              </Badge>
+              {degraded ? (
+                <Badge variant="destructive" data-testid="queue-health-state">
+                  degraded
+                </Badge>
+              ) : (
+                <Badge variant="secondary" data-testid="queue-health-state">
+                  healthy
+                </Badge>
+              )}
+            </div>
+            <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
+              <dt className="text-muted-foreground">Pending</dt>
+              <dd
+                className="tabular-nums"
+                data-testid="queue-health-pending"
+              >
+                {snapshot.pendingCount}
+              </dd>
+              <dt className="text-muted-foreground">In flight</dt>
+              <dd
+                className="tabular-nums"
+                data-testid="queue-health-processing"
+              >
+                {snapshot.processingCount}
+              </dd>
+              <dt className="text-muted-foreground">Failed</dt>
+              <dd
+                className={cn(
+                  "tabular-nums",
+                  snapshot.failedCount > 0 && "font-medium text-destructive",
+                )}
+                data-testid="queue-health-failed"
+              >
+                {snapshot.failedCount}
+              </dd>
+              <dt className="text-muted-foreground">Oldest pending</dt>
+              <dd
+                className={cn(
+                  "tabular-nums",
+                  degraded && snapshot.oldestPendingAtIso && "font-medium text-destructive",
+                )}
+                data-testid="queue-health-oldest-pending"
+                title={
+                  snapshot.oldestPendingAtIso
+                    ? formatTimestamp(snapshot.oldestPendingAtIso)
+                    : undefined
+                }
+              >
+                {snapshot.oldestPendingAtIso
+                  ? `${formatRelativeFlexible(snapshot.oldestPendingAtIso, now)} (${formatTimestamp(snapshot.oldestPendingAtIso)})`
+                  : "—"}
+              </dd>
+              <dt className="text-muted-foreground">Oldest in flight</dt>
+              <dd
+                className="tabular-nums"
+                data-testid="queue-health-oldest-processing"
+                title={
+                  snapshot.oldestProcessingAtIso
+                    ? formatTimestamp(snapshot.oldestProcessingAtIso)
+                    : undefined
+                }
+              >
+                {snapshot.oldestProcessingAtIso
+                  ? `${formatRelativeFlexible(snapshot.oldestProcessingAtIso, now)} (${formatTimestamp(snapshot.oldestProcessingAtIso)})`
+                  : "—"}
+              </dd>
+              <dt className="text-muted-foreground">Sampled</dt>
+              <dd
+                className="tabular-nums"
+                data-testid="queue-health-sampled"
+                title={formatTimestamp(snapshot.sampledAtIso)}
+              >
+                {`${formatRelativeFlexible(snapshot.sampledAtIso, now)} (${formatTimestamp(snapshot.sampledAtIso)})`}
+              </dd>
+            </dl>
+          </>
         )}
       </CardContent>
     </Card>

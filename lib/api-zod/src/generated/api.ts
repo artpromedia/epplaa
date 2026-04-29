@@ -945,6 +945,118 @@ export const AdminGetGatewayHealthResponse = zod.array(
   AdminGetGatewayHealthResponseItem,
 );
 
+/**
+ * Runs a small burst of `SELECT 1` probes on the api-server's
+Postgres pool and returns the p50/p95 round-trip time plus the
+timestamp of the last successful probe. Used by the admin
+status page to show whether the api-server's primary backing
+store is responding within expected limits.
+
+ * @summary Per-replica Postgres latency snapshot
+ */
+export const adminGetDbHealthResponseSampleCountMin = 0;
+
+export const AdminGetDbHealthResponse = zod
+  .object({
+    replicaId: zod
+      .string()
+      .describe(
+        "Hostname or `pid:<n>` identifier of the replica that answered.",
+      ),
+    state: zod.enum(["healthy", "degraded"]),
+    sampleCount: zod
+      .number()
+      .min(adminGetDbHealthResponseSampleCountMin)
+      .describe(
+        "Number of `SELECT 1` round-trips that completed in this burst.",
+      ),
+    p50LatencyMs: zod
+      .number()
+      .nullable()
+      .describe(
+        "50th-percentile round-trip in milliseconds, null when sampleCount is 0.",
+      ),
+    p95LatencyMs: zod
+      .number()
+      .nullable()
+      .describe(
+        "95th-percentile round-trip in milliseconds, null when sampleCount is 0.",
+      ),
+    lastProbedAtIso: zod
+      .string()
+      .describe("ISO timestamp when this burst started."),
+    lastSuccessAtIso: zod
+      .string()
+      .nullable()
+      .describe(
+        "ISO timestamp of the most recent `SELECT 1` that completed\nin this burst, or null if every probe failed.\n",
+      ),
+    lastError: zod
+      .string()
+      .nullable()
+      .describe(
+        "Error message from the failing probe(s), or null when the\nfull burst succeeded.\n",
+      ),
+  })
+  .describe(
+    "Live, on-demand Postgres latency probe answered by the\napi-server replica that handled the request. The replica runs a\nsmall burst of `SELECT 1` queries and reports the resulting\np50\/p95 round-trip time in milliseconds. `state` is `degraded`\nif the burst threw, exceeded the slow-probe threshold, or no\nsample completed.\n",
+  );
+
+/**
+ * Aggregate counts of pending vs in-flight (processing) vs failed
+rows in the `notifications_outbox` table, plus the timestamp of
+the oldest unprocessed row. This is the same queue the
+scheduler drains every 30s for retryable notifications and
+recurring jobs (reconciliation, payouts) that fan out through
+it.
+
+ * @summary Background notification-outbox queue depth
+ */
+export const adminGetQueueHealthResponsePendingCountMin = 0;
+
+export const adminGetQueueHealthResponseProcessingCountMin = 0;
+
+export const adminGetQueueHealthResponseFailedCountMin = 0;
+
+export const AdminGetQueueHealthResponse = zod
+  .object({
+    state: zod
+      .enum(["healthy", "degraded"])
+      .describe(
+        "`degraded` when there is at least one failed row OR the oldest\nunprocessed row has been waiting longer than the configured\nstaleness threshold (default 10 minutes).\n",
+      ),
+    pendingCount: zod
+      .number()
+      .min(adminGetQueueHealthResponsePendingCountMin)
+      .describe("Rows in `pending` status (waiting for the next drain)."),
+    processingCount: zod
+      .number()
+      .min(adminGetQueueHealthResponseProcessingCountMin)
+      .describe("Rows currently leased to a worker (`processing`)."),
+    failedCount: zod
+      .number()
+      .min(adminGetQueueHealthResponseFailedCountMin)
+      .describe("Rows that have exhausted retries (`failed`)."),
+    oldestPendingAtIso: zod
+      .string()
+      .nullable()
+      .describe(
+        "`nextAttemptAt` of the oldest pending row whose attempt time\nhas already elapsed, or null when no pending row is overdue.\n",
+      ),
+    oldestProcessingAtIso: zod
+      .string()
+      .nullable()
+      .describe(
+        "`nextAttemptAt` of the oldest in-flight row, or null when no\nrow is currently leased.\n",
+      ),
+    sampledAtIso: zod
+      .string()
+      .describe("ISO timestamp when the snapshot was taken."),
+  })
+  .describe(
+    "Aggregate row counts of the `notifications_outbox` table, the\nsingle shared queue the api-server drains every 30s for\nretryable notifications and the periodic background jobs that\nfan out through it (reconciliation, payouts).\n",
+  );
+
 export const AdminListReconciliationRunsResponseItem = zod.object({
   id: zod.string(),
   gateway: zod.string(),

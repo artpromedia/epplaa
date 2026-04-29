@@ -520,6 +520,120 @@ export interface GatewayHealthSnapshot {
   lastEventAtIso?: string | null;
 }
 
+export type DbHealthSnapshotState =
+  (typeof DbHealthSnapshotState)[keyof typeof DbHealthSnapshotState];
+
+export const DbHealthSnapshotState = {
+  healthy: "healthy",
+  degraded: "degraded",
+} as const;
+
+/**
+ * Live, on-demand Postgres latency probe answered by the
+api-server replica that handled the request. The replica runs a
+small burst of `SELECT 1` queries and reports the resulting
+p50/p95 round-trip time in milliseconds. `state` is `degraded`
+if the burst threw, exceeded the slow-probe threshold, or no
+sample completed.
+
+ */
+export interface DbHealthSnapshot {
+  /** Hostname or `pid:<n>` identifier of the replica that answered. */
+  replicaId: string;
+  state: DbHealthSnapshotState;
+  /**
+   * Number of `SELECT 1` round-trips that completed in this burst.
+   * @minimum 0
+   */
+  sampleCount: number;
+  /**
+   * 50th-percentile round-trip in milliseconds, null when sampleCount is 0.
+   * @nullable
+   */
+  p50LatencyMs: number | null;
+  /**
+   * 95th-percentile round-trip in milliseconds, null when sampleCount is 0.
+   * @nullable
+   */
+  p95LatencyMs: number | null;
+  /** ISO timestamp when this burst started. */
+  lastProbedAtIso: string;
+  /**
+   * ISO timestamp of the most recent `SELECT 1` that completed
+in this burst, or null if every probe failed.
+
+   * @nullable
+   */
+  lastSuccessAtIso: string | null;
+  /**
+   * Error message from the failing probe(s), or null when the
+full burst succeeded.
+
+   * @nullable
+   */
+  lastError: string | null;
+}
+
+/**
+ * `degraded` when there is at least one failed row OR the oldest
+unprocessed row has been waiting longer than the configured
+staleness threshold (default 10 minutes).
+
+ */
+export type QueueHealthSnapshotState =
+  (typeof QueueHealthSnapshotState)[keyof typeof QueueHealthSnapshotState];
+
+export const QueueHealthSnapshotState = {
+  healthy: "healthy",
+  degraded: "degraded",
+} as const;
+
+/**
+ * Aggregate row counts of the `notifications_outbox` table, the
+single shared queue the api-server drains every 30s for
+retryable notifications and the periodic background jobs that
+fan out through it (reconciliation, payouts).
+
+ */
+export interface QueueHealthSnapshot {
+  /** `degraded` when there is at least one failed row OR the oldest
+unprocessed row has been waiting longer than the configured
+staleness threshold (default 10 minutes).
+ */
+  state: QueueHealthSnapshotState;
+  /**
+   * Rows in `pending` status (waiting for the next drain).
+   * @minimum 0
+   */
+  pendingCount: number;
+  /**
+   * Rows currently leased to a worker (`processing`).
+   * @minimum 0
+   */
+  processingCount: number;
+  /**
+   * Rows that have exhausted retries (`failed`).
+   * @minimum 0
+   */
+  failedCount: number;
+  /**
+   * `nextAttemptAt` of the oldest pending row whose attempt time
+has already elapsed, or null when no pending row is overdue.
+
+   * @nullable
+   */
+  oldestPendingAtIso: string | null;
+  /**
+   * `nextAttemptAt` of the oldest in-flight row, or null when no
+row is currently leased.
+
+   * @nullable
+   */
+  oldestProcessingAtIso: string | null;
+  /** ISO timestamp when the snapshot was taken. */
+  sampledAtIso: string;
+}
+
 export type ReconciliationRunMismatchesItem = { [key: string]: unknown };
 
 export interface ReconciliationRun {

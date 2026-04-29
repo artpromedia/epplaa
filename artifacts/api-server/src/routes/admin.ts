@@ -10,6 +10,9 @@ import {
   getAuditChainVerifierSnapshot,
   runAuditChainVerification,
 } from "../lib/auditChainVerifier";
+import { probeDbLatency } from "../lib/dbLatencyProbe";
+import { getQueueHealthSnapshot } from "../lib/queueDepth";
+import { getReplicaId } from "./health";
 
 const router: IRouter = Router();
 
@@ -45,6 +48,16 @@ function requireAdmin(req: Request, res: Response, next: NextFunction): void {
 }
 
 const ADMIN_ONLY = ["admin"] as const;
+
+router.get("/admin/db-health", requireAdmin, async (_req, res) => {
+  const snapshot = await probeDbLatency({ db, replicaId: getReplicaId() });
+  res.json(snapshot);
+});
+
+router.get("/admin/queue-health", requireAdmin, async (_req, res) => {
+  const snapshot = await getQueueHealthSnapshot(db);
+  res.json(snapshot);
+});
 
 router.get("/admin/payment-gateway-health", requireAdmin, async (_req, res) => {
   const rows = await db.select().from(schema.gatewayHealthTable);

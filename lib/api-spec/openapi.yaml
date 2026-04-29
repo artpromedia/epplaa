@@ -737,6 +737,47 @@ paths:
         "403": { description: Forbidden }
         "401": { $ref: "#/components/responses/Unauthorized" }
 
+  /admin/db-health:
+    get:
+      operationId: adminGetDbHealth
+      tags: [admin]
+      summary: Per-replica Postgres latency snapshot
+      description: |
+        Runs a small burst of `SELECT 1` probes on the api-server's
+        Postgres pool and returns the p50/p95 round-trip time plus the
+        timestamp of the last successful probe. Used by the admin
+        status page to show whether the api-server's primary backing
+        store is responding within expected limits.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DbHealthSnapshot" }
+        "403": { description: Forbidden }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /admin/queue-health:
+    get:
+      operationId: adminGetQueueHealth
+      tags: [admin]
+      summary: Background notification-outbox queue depth
+      description: |
+        Aggregate counts of pending vs in-flight (processing) vs failed
+        rows in the `notifications_outbox` table, plus the timestamp of
+        the oldest unprocessed row. This is the same queue the
+        scheduler drains every 30s for retryable notifications and
+        recurring jobs (reconciliation, payouts) that fan out through
+        it.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/QueueHealthSnapshot" }
+        "403": { description: Forbidden }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
   /admin/reconciliation-runs:
     get:
       operationId: adminListReconciliationRuns
@@ -3119,6 +3160,91 @@ components:
         windowStartedAtIso: { type: string }
         circuitOpenUntilIso: { type: ["string", "null"] }
         lastEventAtIso: { type: ["string", "null"] }
+
+    DbHealthSnapshot:
+      type: object
+      description: |
+        Live, on-demand Postgres latency probe answered by the
+        api-server replica that handled the request. The replica runs a
+        small burst of `SELECT 1` queries and reports the resulting
+        p50/p95 round-trip time in milliseconds. `state` is `degraded`
+        if the burst threw, exceeded the slow-probe threshold, or no
+        sample completed.
+      required:
+        [replicaId, state, sampleCount, p50LatencyMs, p95LatencyMs, lastProbedAtIso, lastSuccessAtIso, lastError]
+      properties:
+        replicaId:
+          type: string
+          description: Hostname or `pid:<n>` identifier of the replica that answered.
+        state:
+          type: string
+          enum: [healthy, degraded]
+        sampleCount:
+          type: integer
+          minimum: 0
+          description: Number of `SELECT 1` round-trips that completed in this burst.
+        p50LatencyMs:
+          type: ["number", "null"]
+          description: 50th-percentile round-trip in milliseconds, null when sampleCount is 0.
+        p95LatencyMs:
+          type: ["number", "null"]
+          description: 95th-percentile round-trip in milliseconds, null when sampleCount is 0.
+        lastProbedAtIso:
+          type: string
+          description: ISO timestamp when this burst started.
+        lastSuccessAtIso:
+          type: ["string", "null"]
+          description: |
+            ISO timestamp of the most recent `SELECT 1` that completed
+            in this burst, or null if every probe failed.
+        lastError:
+          type: ["string", "null"]
+          description: |
+            Error message from the failing probe(s), or null when the
+            full burst succeeded.
+
+    QueueHealthSnapshot:
+      type: object
+      description: |
+        Aggregate row counts of the `notifications_outbox` table, the
+        single shared queue the api-server drains every 30s for
+        retryable notifications and the periodic background jobs that
+        fan out through it (reconciliation, payouts).
+      required:
+        [state, pendingCount, processingCount, failedCount, oldestPendingAtIso, oldestProcessingAtIso, sampledAtIso]
+      properties:
+        state:
+          type: string
+          enum: [healthy, degraded]
+          description: |
+            `degraded` when there is at least one failed row OR the oldest
+            unprocessed row has been waiting longer than the configured
+            staleness threshold (default 10 minutes).
+        pendingCount:
+          type: integer
+          minimum: 0
+          description: Rows in `pending` status (waiting for the next drain).
+        processingCount:
+          type: integer
+          minimum: 0
+          description: Rows currently leased to a worker (`processing`).
+        failedCount:
+          type: integer
+          minimum: 0
+          description: Rows that have exhausted retries (`failed`).
+        oldestPendingAtIso:
+          type: ["string", "null"]
+          description: |
+            `nextAttemptAt` of the oldest pending row whose attempt time
+            has already elapsed, or null when no pending row is overdue.
+        oldestProcessingAtIso:
+          type: ["string", "null"]
+          description: |
+            `nextAttemptAt` of the oldest in-flight row, or null when no
+            row is currently leased.
+        sampledAtIso:
+          type: string
+          description: ISO timestamp when the snapshot was taken.
 
     ReconciliationRun:
       type: object
