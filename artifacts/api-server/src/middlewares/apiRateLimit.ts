@@ -867,6 +867,16 @@ export interface ApiRateLimitOptions {
    * bucket name is already route-scoped.
    */
   perRoute?: boolean;
+  /**
+   * Absolute per-identity cap that overrides the per-tier `base *
+   * tierMultiplier` calculation. Used by mounts that need a hard
+   * ceiling regardless of which tier the caller sits in — e.g. the
+   * sensitive MFA mutation routes (regenerate backup codes, disable)
+   * where the right number of legitimate calls per hour is "a
+   * handful" no matter whether the user is a buyer, seller, or admin
+   * operator. When set, `tierMultiplier` is ignored.
+   */
+  max?: number;
 }
 
 export function apiRateLimit(opts: ApiRateLimitOptions = {}): RequestHandler {
@@ -874,11 +884,14 @@ export function apiRateLimit(opts: ApiRateLimitOptions = {}): RequestHandler {
   const windowMs = opts.windowMs ?? 60_000;
   const mult = opts.tierMultiplier ?? {};
   const perRoute = opts.perRoute ?? opts.name === undefined;
+  const absoluteMax =
+    opts.max !== undefined ? Math.max(1, Math.floor(opts.max)) : null;
   return (req, res, next) => {
     void (async () => {
       const { tier, identity } = await resolveTier(req);
       const base = DEFAULTS[tier];
-      const max = Math.max(1, Math.floor(base * (mult[tier] ?? 1)));
+      const max =
+        absoluteMax ?? Math.max(1, Math.floor(base * (mult[tier] ?? 1)));
       // Per-route + per-identity key. Using `req.route?.path` would be
       // ideal but it's only populated after the matching layer runs;
       // `req.path` is stable here. We strip query string to avoid

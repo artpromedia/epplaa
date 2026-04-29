@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import crypto from "node:crypto";
 import RedisMock from "ioredis-mock";
 
 const sentryCalls = {
@@ -16,8 +17,22 @@ vi.mock("../lib/sentry", () => ({
   initSentryServer: () => {},
 }));
 
+// Hoisted Clerk mock — `getAuth` reads the calling user from the
+// `x-test-user-id` header so the apiRateLimit middleware tests below
+// can drive both the anon-tier and signed-in-tier branches without
+// pulling in a real Clerk session. Mirrors the convention used by
+// routes/mfa.regenerate.int.test.ts.
+vi.mock("@clerk/express", () => ({
+  getAuth: (req: { headers?: Record<string, string | string[] | undefined> }) => {
+    const raw = req.headers?.["x-test-user-id"];
+    const userId = typeof raw === "string" && raw.length > 0 ? raw : null;
+    return { userId };
+  },
+}));
+
 import {
   __test__,
+  apiRateLimit,
   assertRateLimitStoreConfiguredForProduction,
   getRateLimitStoreKind,
   getRateLimitStoreReadyzStatus,
@@ -1332,5 +1347,204 @@ describe("getRateLimitStoreReadyzStatus — /readyz config block (Task #101)", (
         PRODUCTION_HOSTNAME_PATTERN: "^api\\.epplaa\\.com$",
       }),
     ).toBe("memory_not_required");
+  });
+});
+
+/**
+ * Focused tests for the `max` option added in task #68. The MFA
+ * mutation routes need a hard per-identity ceiling that's the same
+ * regardless of which tier the caller sits in (anon/buyer/seller/admin)
+ * — the per-tier `base * tierMultiplier` model can't express
+ * "exactly 5 calls per hour for everyone" without setting a different
+ * fractional multiplier per tier, which is a foot-gun. These tests
+ * lock in the absolute-cap semantics so a future refactor of the
+ * tier-resolution path can't silently re-introduce tier-proportional
+ * behaviour for `max`-capped mounts.
+ */
+describe("apiRateLimit `max` option (absolute per-identity cap)", () => {
+  type MockReq = {
+    method: string;
+    path: string;
+    headers: Record<string, string>;
+    ip: string;
+    socket: { remoteAddress: string };
+  };
+  type MockRes = {
+    status: (code: number) => MockRes;
+    json: (body: unknown) => MockRes;
+    setHeader: (name: string, value: string | number) => void;
+    statusCode: number | null;
+    body: unknown;
+    headers: Record<string, string | number>;
+  };
+
+  function makeReq(userId: string | null, path = "/api/some-route"): MockReq {
+    return {
+      method: "POST",
+      path,
+      headers: userId ? { "x-test-user-id": userId } : {},
+      ip: "127.0.0.1",
+      socket: { remoteAddress: "127.0.0.1" },
+    };
+  }
+
+  function makeRes(): MockRes {
+    const res: MockRes = {
+      statusCode: null,
+      body: null,
+      headers: {},
+      status(code) {
+        this.statusCode = code;
+        return this;
+      },
+      json(b) {
+        this.body = b;
+        return this;
+      },
+      setHeader(name, value) {
+        this.headers[name] = value;
+      },
+    };
+    return res;
+  }
+
+  async function runMiddleware(
+    middleware: ReturnType<typeof apiRateLimit>,
+    req: MockReq,
+  ): Promise<{ res: MockRes; nexted: boolean }> {
+    const res = makeRes();
+    let nexted = false;
+    await new Promise<void>((resolve) => {
+      // The middleware returns void and dispatches its own promise; we
+      // settle the harness as soon as either branch (next() or
+      // res.status().json()) fires. A microtask drain on each is enough
+      // because the bucket store and resolveTier stubs all resolve in
+      // the same microtask chain under the in-memory store + mocked
+      // Clerk used in this suite.
+      middleware(
+        req as never,
+        Object.assign(res, {
+          status(code: number) {
+            res.statusCode = code;
+            return {
+              json(body: unknown) {
+                res.body = body;
+                resolve();
+                return res;
+              },
+            };
+          },
+        }) as never,
+        () => {
+          nexted = true;
+          resolve();
+        },
+      );
+    });
+    return { res, nexted };
+  }
+
+  it("caps an anonymous (IP-keyed) caller at exactly `max` regardless of the anon tier ceiling", async () => {
+    // Anon tier defaults to 60/min, so without `max` an IP-keyed
+    // caller could fire 60 in a minute. With `max: 3` only the first
+    // 3 must succeed, the 4th must 429.
+    // Use a unique route path so this test's bucket doesn't collide
+    // with any other test's; the per-process InMemoryStore is shared
+    // across the whole test file.
+    const middleware = apiRateLimit({
+      name: "max_anon_test",
+      windowMs: 60_000,
+      max: 3,
+      perRoute: true,
+    });
+    const outcomes: Array<{ status: number | null; nexted: boolean }> = [];
+    for (let i = 0; i < 4; i++) {
+      const r = await runMiddleware(
+        middleware,
+        makeReq(null, `/api/max-anon-${i % 1}`), // same path → same bucket
+      );
+      outcomes.push({ status: r.res.statusCode, nexted: r.nexted });
+    }
+    expect(outcomes.slice(0, 3).every((o) => o.nexted)).toBe(true);
+    expect(outcomes.slice(0, 3).every((o) => o.status === null)).toBe(true);
+    expect(outcomes[3]!.nexted).toBe(false);
+    expect(outcomes[3]!.status).toBe(429);
+  });
+
+  it("caps a signed-in (user-keyed) caller at the same `max` — per-tier base does NOT widen the ceiling", async () => {
+    // Signed-in callers go through buyer (240/min) / seller (600/min) /
+    // admin (1200/min) by default. The cap must still be `max`
+    // regardless — that's the whole point of the option, and the
+    // reason the MFA routes use it.
+    const middleware = apiRateLimit({
+      name: "max_user_test",
+      windowMs: 60_000,
+      max: 2,
+      perRoute: true,
+    });
+    const userId = `task-68-max-test-${crypto.randomUUID()}`;
+    const r1 = await runMiddleware(middleware, makeReq(userId, "/api/max-u"));
+    const r2 = await runMiddleware(middleware, makeReq(userId, "/api/max-u"));
+    const r3 = await runMiddleware(middleware, makeReq(userId, "/api/max-u"));
+    expect(r1.nexted).toBe(true);
+    expect(r2.nexted).toBe(true);
+    expect(r3.nexted).toBe(false);
+    expect(r3.res.statusCode).toBe(429);
+  });
+
+  it("isolates buckets per identity — one user breaching does not lock out another", async () => {
+    const middleware = apiRateLimit({
+      name: "max_isolation_test",
+      windowMs: 60_000,
+      max: 1,
+      perRoute: true,
+    });
+    const userA = `task-68-iso-A-${crypto.randomUUID()}`;
+    const userB = `task-68-iso-B-${crypto.randomUUID()}`;
+    const a1 = await runMiddleware(middleware, makeReq(userA, "/api/max-iso"));
+    const a2 = await runMiddleware(middleware, makeReq(userA, "/api/max-iso"));
+    const b1 = await runMiddleware(middleware, makeReq(userB, "/api/max-iso"));
+    expect(a1.nexted).toBe(true);
+    expect(a2.nexted).toBe(false);
+    expect(a2.res.statusCode).toBe(429);
+    // userB has its own bucket and is unaffected by userA's breach.
+    expect(b1.nexted).toBe(true);
+  });
+
+  it("emits Retry-After header on 429 so well-behaved clients can back off", async () => {
+    const middleware = apiRateLimit({
+      name: "max_retry_after_test",
+      windowMs: 60_000,
+      max: 1,
+      perRoute: true,
+    });
+    const userId = `task-68-retry-${crypto.randomUUID()}`;
+    await runMiddleware(middleware, makeReq(userId, "/api/max-retry"));
+    const r = await runMiddleware(middleware, makeReq(userId, "/api/max-retry"));
+    expect(r.res.statusCode).toBe(429);
+    const retryAfter = Number(r.res.headers["Retry-After"]);
+    expect(Number.isFinite(retryAfter)).toBe(true);
+    expect(retryAfter).toBeGreaterThanOrEqual(1);
+    expect(retryAfter).toBeLessThanOrEqual(60);
+  });
+
+  it("Math.floor(0.7) and Math.max(1, …) coerce a fractional `max` to a sane integer floor of 1", async () => {
+    // Defensive: even if a caller passes `max: 0` or `max: 0.4` (e.g.
+    // from a misconfigured env-tunable in a future change), the
+    // limiter must NOT turn into "deny everything" — that would brick
+    // the route. The Math.max(1, Math.floor(opts.max)) clamp in the
+    // implementation guarantees a minimum of 1.
+    const middleware = apiRateLimit({
+      name: "max_floor_test",
+      windowMs: 60_000,
+      max: 0.4,
+      perRoute: true,
+    });
+    const userId = `task-68-floor-${crypto.randomUUID()}`;
+    const r1 = await runMiddleware(middleware, makeReq(userId, "/api/max-floor"));
+    const r2 = await runMiddleware(middleware, makeReq(userId, "/api/max-floor"));
+    expect(r1.nexted).toBe(true);
+    expect(r2.nexted).toBe(false);
+    expect(r2.res.statusCode).toBe(429);
   });
 });

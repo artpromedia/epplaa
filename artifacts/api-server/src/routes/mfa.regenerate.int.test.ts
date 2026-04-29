@@ -175,6 +175,64 @@ d("POST /api/mfa/totp/regenerate-backup-codes", () => {
     expect(r.body.error).toBe("mfa_not_enrolled");
   });
 
+  it("rate-limits to 5 calls per hour per user — the 6th call is rejected with 429", async () => {
+    // The endpoint is gated by a recent TOTP assertion, but inside that
+    // 15-minute window there's nothing stopping a stolen session (or a
+    // runaway client retry loop) from minting fresh sheets indefinitely.
+    // The per-user hourly cap added in task #68 bounds the blast radius:
+    // a realistic user regenerates at most a handful of times per year,
+    // so 5/hour is conservative and the 6th call must 429.
+    const userId = makeUserId();
+    const setup = await mfa.setupTotp(userId, `${userId}@example.com`);
+    authenticator.options = { window: 1, step: 30 };
+    await mfa.verifyTotpAndActivate(userId, authenticator.generate(setup.secret));
+
+    const app = buildApp();
+    const statuses: number[] = [];
+    for (let i = 0; i < 6; i++) {
+      // Each successful regenerate consumes the recent challenge slot
+      // for `hasRecentChallenge`? No — `hasRecentChallenge` only reads,
+      // it doesn't burn. But the row inserted by verifyTotpAndActivate
+      // is good for the entire test (14-min default expiry), so the
+      // gate stays open across all 6 calls and the only thing
+      // distinguishing the 6th from the first five is the rate limiter.
+      const r = await request(app)
+        .post("/api/mfa/totp/regenerate-backup-codes")
+        .set("x-test-user-id", userId)
+        .send({});
+      statuses.push(r.status);
+      if (i === 5) {
+        expect(r.status).toBe(429);
+        expect(r.body.error).toBe("rate_limited");
+        // Retry-After header MUST be present so well-behaved clients
+        // (and our own SPA's react-query retry policy) back off
+        // instead of hammering. The value is in seconds and bounded
+        // below by the limiter at 1s, above by the 1h window.
+        const retryAfter = Number(r.headers["retry-after"]);
+        expect(retryAfter).toBeGreaterThanOrEqual(1);
+        expect(retryAfter).toBeLessThanOrEqual(60 * 60);
+      }
+    }
+    // First five succeed (200), sixth is 429.
+    expect(statuses.slice(0, 5).every((s) => s === 200)).toBe(true);
+    expect(statuses[5]).toBe(429);
+
+    // The bucket is keyed by identity, so a different user is unaffected
+    // — the cap is per-user, not global. Otherwise one buggy client
+    // could lock the whole tenant out of recovery.
+    const otherUser = makeUserId();
+    const otherSetup = await mfa.setupTotp(otherUser, `${otherUser}@example.com`);
+    await mfa.verifyTotpAndActivate(
+      otherUser,
+      authenticator.generate(otherSetup.secret),
+    );
+    const otherR = await request(app)
+      .post("/api/mfa/totp/regenerate-backup-codes")
+      .set("x-test-user-id", otherUser)
+      .send({});
+    expect(otherR.status).toBe(200);
+  });
+
   it("issues 10 fresh single-use backup codes and invalidates the previous sheet", async () => {
     const userId = makeUserId();
     const setup = await mfa.setupTotp(userId, `${userId}@example.com`);
