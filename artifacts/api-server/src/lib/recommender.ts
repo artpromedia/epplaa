@@ -116,8 +116,29 @@ export interface TrendingStream {
 }
 
 interface CacheEntry { at: number; value: TrendingStream[]; }
-const TRENDING_TTL_MS = 15_000;
+/**
+ * Trending streams cache TTL. Trending is read on every discovery
+ * page open and live presence churn (joins/leaves) bumps the
+ * underlying `current_viewers` integer many times per second per
+ * stream, so we cap the recompute frequency at this interval.
+ *
+ * The cache is also explicitly flushed by `invalidateTrendingCache()`
+ * whenever a stream transitions live/ended (see `streamLifecycle.ts`)
+ * so a brand-new live stream — or a just-ended one — never has to
+ * wait the full TTL to appear/disappear from the rail.
+ */
+export const TRENDING_TTL_MS = 15_000;
 let cache: CacheEntry | null = null;
+
+/**
+ * Drop the trending-streams cache so the next caller recomputes from
+ * Postgres. Safe to call from any code path that materially changes
+ * what trending should rank (go-live, end, viewer thrash that crosses
+ * a meaningful threshold). No-op when the cache is already cold.
+ */
+export function invalidateTrendingCache(): void {
+  cache = null;
+}
 
 export async function trendingStreams(limit = 10): Promise<TrendingStream[]> {
   const now = Date.now();

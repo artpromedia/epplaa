@@ -41,6 +41,53 @@ export function getSocketServer(): SocketServer | null {
   return io;
 }
 
+/**
+ * Persist a viewer-count delta for a stream so the trending recommender
+ * sees real signal. Extracted from the socket handlers so the same code
+ * path can be unit-tested and reused if we ever add a non-WS presence
+ * source (HLS heartbeats, stream-key probes, etc.).
+ *
+ * Contract:
+ *   - `count` is the current room size as observed by the caller
+ *     (i.e. AFTER the joining socket joined the room, or AFTER the
+ *     leaving socket was evicted / minus one if not yet evicted).
+ *   - `kind === "join"` also bumps `peak_viewers` monotonically via
+ *     `GREATEST(peak_viewers, count)` so the all-time-session peak is
+ *     captured even if `current_viewers` later drops.
+ *   - `kind === "leave"` only writes `current_viewers`; peak never
+ *     decreases.
+ *
+ * Errors are logged but never thrown — presence is a best-effort
+ * signal; we must not fail a chat join because of a flaky DB write.
+ */
+export async function applyPresenceUpdate(
+  streamId: string,
+  count: number,
+  kind: "join" | "leave",
+): Promise<void> {
+  try {
+    if (kind === "join") {
+      await db
+        .update(schema.streamsTable)
+        .set({
+          currentViewers: count,
+          peakViewers: sql`GREATEST(${schema.streamsTable.peakViewers}, ${count})`,
+        })
+        .where(eq(schema.streamsTable.id, streamId));
+    } else {
+      await db
+        .update(schema.streamsTable)
+        .set({ currentViewers: count })
+        .where(eq(schema.streamsTable.id, streamId));
+    }
+  } catch (err) {
+    logger.error(
+      { err: (err as Error).message, streamId, kind },
+      kind === "join" ? "presence_update_failed" : "presence_leave_failed",
+    );
+  }
+}
+
 async function resolveUsername(userId: string): Promise<string> {
   try {
     const [u] = await db
@@ -149,17 +196,7 @@ export function bootstrapSocketServer(httpServer: HttpServer): SocketServer {
       await socket.join(room);
       socket.data.joinedStreams.add(streamId);
       const count = await getRoomSize(ns, room);
-      try {
-        await db
-          .update(schema.streamsTable)
-          .set({
-            currentViewers: count,
-            peakViewers: sql`GREATEST(${schema.streamsTable.peakViewers}, ${count})`,
-          })
-          .where(eq(schema.streamsTable.id, streamId));
-      } catch (err) {
-        logger.error({ err: (err as Error).message, streamId }, "presence_update_failed");
-      }
+      await applyPresenceUpdate(streamId, count, "join");
       ns.to(room).emit("presence:count", { streamId, count });
     });
 
@@ -315,14 +352,7 @@ async function leaveStream(socket: AuthedSocket, streamId: string, alreadyInRoom
   // that case to report the post-disconnect total.
   const raw = await getRoomSize(ns, room);
   const count = alreadyInRoom ? Math.max(0, raw - 1) : raw;
-  try {
-    await db
-      .update(schema.streamsTable)
-      .set({ currentViewers: count })
-      .where(eq(schema.streamsTable.id, streamId));
-  } catch (err) {
-    logger.error({ err: (err as Error).message, streamId }, "presence_leave_failed");
-  }
+  await applyPresenceUpdate(streamId, count, "leave");
   ns.to(room).emit("presence:count", { streamId, count });
 }
 

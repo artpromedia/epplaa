@@ -14,6 +14,7 @@ import { isHost, listRecentMessages, chatSendAtomic, softDeleteMessage, toPublic
 import { recordReaction, recentReactions } from "../lib/reactions";
 import { getSocketServer } from "../lib/socket";
 import { moderateText, moderateImage } from "../lib/moderation";
+import { invalidateTrendingCache } from "../lib/recommender";
 
 const router: IRouter = Router();
 
@@ -125,11 +126,29 @@ router.post("/streams/:streamId/start", async (req, res) => {
     return;
   }
   const wasLive = row.status === "live";
+  // Reset per-session viewer counters on a fresh transition into live so a
+  // viral previous session (peak=10k from yesterday, currentViewers stale
+  // from a missed /stop) does not unfairly skew today's trending score.
+  // When the stream is already live this is a no-op resume — leave the
+  // counters alone so the recommender keeps seeing the live signal.
+  const sessionPatch = wasLive
+    ? { status: "live" as const, isLive: true, startedAt: row.startedAt ?? new Date() }
+    : {
+        status: "live" as const,
+        isLive: true,
+        startedAt: new Date(),
+        currentViewers: 0,
+        peakViewers: 0,
+        endedAt: null,
+      };
   const [updated] = await db
     .update(schema.streamsTable)
-    .set({ status: "live", isLive: true, startedAt: row.startedAt ?? new Date() })
+    .set(sessionPatch)
     .where(eq(schema.streamsTable.id, row.id))
     .returning();
+  // Discovery /trending-streams is cached for ~15s; flush it so a freshly
+  // live stream (or a resumed one) appears on the rail immediately.
+  invalidateTrendingCache();
   if (!wasLive) {
     const followers = await db
       .select({ userId: schema.followsTable.userId })
@@ -167,6 +186,9 @@ router.post("/streams/:streamId/stop", async (req, res) => {
     .set({ status: "ended", isLive: false, endedAt: new Date(), currentViewers: 0 })
     .where(eq(schema.streamsTable.id, row.id))
     .returning();
+  // Pop the just-ended stream off /trending-streams immediately instead
+  // of waiting up to 15s for the cache to age out.
+  invalidateTrendingCache();
   await persistReplayForEndedStream(row.id);
   res.json(toStreamWithSecrets(updated));
 });
