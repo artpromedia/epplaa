@@ -113,7 +113,21 @@ interface FakeReadyzBody {
   rateLimitStore?: "memory" | "redis";
 }
 
-function jsonResponse(status: number, body: FakeReadyzBody): Response {
+interface FakeHealthzSubsystem {
+  state: "healthy" | "degraded";
+  failureCount: number;
+  firstFailureAt: number | null;
+  lastRecoveredAt: number | null;
+}
+
+interface FakeHealthzBody {
+  status: string;
+  replicaId: string;
+  subsystems: Record<string, FakeHealthzSubsystem>;
+  rateLimitStore?: unknown;
+}
+
+function jsonResponse(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), {
     status,
     headers: { "content-type": "application/json" },
@@ -134,6 +148,46 @@ function constantResponse(status: number, body: FakeReadyzBody) {
     const canned = defaultHealthResponse(url);
     if (canned) return Promise.resolve(canned);
     return Promise.resolve(jsonResponse(status, body));
+  };
+}
+
+/**
+ * Per-URL routing helper for tests that need to vary the /healthz or
+ * /payment-gateway-health body across calls (e.g. the stuck-degraded
+ * streak tests below, which switch healthz from healthy to failing
+ * mid-test). For static panel responses, prefer `setHealthResponse(...)`
+ * in `beforeEach` — `dispatchByUrl` is just for the dynamic cases.
+ * Falls back to the canned `healthResponses` map when a handler is not
+ * supplied so dependency panels keep loading sane defaults.
+ */
+function dispatchByUrl(handlers: {
+  readyz: () => Promise<Response> | Response;
+  healthz?: () => Promise<Response> | Response;
+  gateways?: () => Promise<Response> | Response;
+}) {
+  return (input: RequestInfo | URL) => {
+    const url =
+      typeof input === "string"
+        ? input
+        : input instanceof URL
+          ? input.toString()
+          : input.url;
+    if (url.includes("/api/admin/payment-gateway-health")) {
+      if (handlers.gateways) return Promise.resolve(handlers.gateways());
+      const canned = defaultHealthResponse(url);
+      return Promise.resolve(canned ?? jsonResponse(200, []));
+    }
+    if (url.includes("/api/healthz")) {
+      if (handlers.healthz) return Promise.resolve(handlers.healthz());
+      const canned = defaultHealthResponse(url);
+      return Promise.resolve(
+        canned ?? jsonResponse(200, { status: "ok", subsystems: {} }),
+      );
+    }
+    if (url.includes("/api/readyz")) return Promise.resolve(handlers.readyz());
+    const canned = defaultHealthResponse(url);
+    if (canned) return Promise.resolve(canned);
+    return Promise.resolve(handlers.readyz());
   };
 }
 
@@ -159,11 +213,14 @@ function renderWithQuery(ui: ReactNode) {
 describe("StatusPage", () => {
   it("renders a Ready row for a healthy replica", async () => {
     fetchMock.mockImplementation(
-      constantResponse(200, {
-        status: "ready",
-        replicaId: "replica-A",
-        checks: { db: "ok", redis: "ok" },
-        rateLimitStore: "redis",
+      dispatchByUrl({
+        readyz: () =>
+          jsonResponse(200, {
+            status: "ready",
+            replicaId: "replica-A",
+            checks: { db: "ok", redis: "ok" },
+            rateLimitStore: "redis",
+          } satisfies FakeReadyzBody),
       }),
     );
     renderWithQuery(<StatusPage />);
@@ -186,12 +243,15 @@ describe("StatusPage", () => {
 
   it("renders a Degraded row with failures when /readyz returns 503", async () => {
     fetchMock.mockImplementation(
-      constantResponse(503, {
-        status: "not_ready",
-        replicaId: "replica-B",
-        checks: { db: "ok", redis: "failed" },
-        failures: { redis: "redis_ping_timeout_after_2000ms" },
-        rateLimitStore: "redis",
+      dispatchByUrl({
+        readyz: () =>
+          jsonResponse(503, {
+            status: "not_ready",
+            replicaId: "replica-B",
+            checks: { db: "ok", redis: "failed" },
+            failures: { redis: "redis_ping_timeout_after_2000ms" },
+            rateLimitStore: "redis",
+          } satisfies FakeReadyzBody),
       }),
     );
     renderWithQuery(<StatusPage />);
@@ -211,24 +271,24 @@ describe("StatusPage", () => {
   });
 
   it("groups results by replicaId when the LB samples two different replicas", async () => {
-    let call = 0;
-    fetchMock.mockImplementation((input: unknown) => {
-      const url = typeof input === "string" ? input : (input as Request).url;
-      // Route the dependency-panel endpoints to their canned responses
-      // so the readyz alternation below isn't applied to every fetch.
-      const canned = defaultHealthResponse(url);
-      if (canned) return Promise.resolve(canned);
-      call += 1;
-      const replicaId = call % 2 === 0 ? "replica-A" : "replica-B";
-      return Promise.resolve(
-        jsonResponse(200, {
-          status: "ready",
-          replicaId,
-          checks: { db: "ok", redis: "ok" },
-          rateLimitStore: "redis",
-        }),
-      );
-    });
+    // Use dispatchByUrl so the alternation only applies to /readyz —
+    // dependency-panel polling falls back to the canned defaults set up
+    // in beforeEach via setHealthResponse(...).
+    let readyzCall = 0;
+    fetchMock.mockImplementation(
+      dispatchByUrl({
+        readyz: () => {
+          readyzCall += 1;
+          const replicaId = readyzCall % 2 === 0 ? "replica-A" : "replica-B";
+          return jsonResponse(200, {
+            status: "ready",
+            replicaId,
+            checks: { db: "ok", redis: "ok" },
+            rateLimitStore: "redis",
+          } satisfies FakeReadyzBody);
+        },
+      }),
+    );
     renderWithQuery(<StatusPage />);
     await flushAsync();
     await waitFor(() => {
@@ -253,11 +313,14 @@ describe("StatusPage", () => {
 
   it("re-polls when the operator clicks Refresh now", async () => {
     fetchMock.mockImplementation(
-      constantResponse(200, {
-        status: "ready",
-        replicaId: "replica-A",
-        checks: { db: "ok", redis: "ok" },
-        rateLimitStore: "redis",
+      dispatchByUrl({
+        readyz: () =>
+          jsonResponse(200, {
+            status: "ready",
+            replicaId: "replica-A",
+            checks: { db: "ok", redis: "ok" },
+            rateLimitStore: "redis",
+          } satisfies FakeReadyzBody),
       }),
     );
     renderWithQuery(<StatusPage />);
@@ -412,5 +475,226 @@ describe("StatusPage", () => {
     expect(
       screen.getByTestId("queue-health-oldest-pending").textContent,
     ).toMatch(/m ago|h ago/);
+  });
+
+  it("renders a healthz failure-streak block on the replica card with the offending subsystem and duration", async () => {
+    // db has been degraded for ~30s — below the 5m page threshold, so the
+    // card should show the streak as informational (no pageable badge).
+    const dbFirstFailureAt = Date.now() - 30_000;
+    fetchMock.mockImplementation(
+      dispatchByUrl({
+        readyz: () =>
+          jsonResponse(503, {
+            status: "not_ready",
+            replicaId: "replica-A",
+            checks: { db: "failed", redis: "ok" },
+            failures: { db: "db_timeout_after_2000ms" },
+            rateLimitStore: "redis",
+          } satisfies FakeReadyzBody),
+        healthz: () =>
+          jsonResponse(200, {
+            status: "ok",
+            replicaId: "replica-A",
+            subsystems: {
+              db: {
+                state: "degraded",
+                failureCount: 4,
+                firstFailureAt: dbFirstFailureAt,
+                lastRecoveredAt: null,
+              },
+              rateLimitStore: {
+                state: "healthy",
+                failureCount: 0,
+                firstFailureAt: null,
+                lastRecoveredAt: null,
+              },
+            },
+          } satisfies FakeHealthzBody),
+      }),
+    );
+    renderWithQuery(<StatusPage />);
+    await flushAsync();
+    await waitFor(() => {
+      expect(screen.getByTestId("streaks-replica-A")).toBeTruthy();
+    });
+    // Only the degraded subsystem is listed, not the healthy one.
+    expect(screen.getByTestId("streak-replica-A-db")).toBeTruthy();
+    expect(screen.queryByTestId("streak-replica-A-rateLimitStore")).toBeNull();
+    // Duration label reflects the streak age and names the subsystem.
+    const dbRow = screen.getByTestId("streak-replica-A-db");
+    expect(dbRow.textContent).toContain("db");
+    expect(dbRow.textContent).toMatch(/stuck-degraded for \d+s/);
+    // Below the page threshold, so neither the per-streak nor the
+    // per-card pageable badges fire.
+    expect(
+      screen.queryByTestId("streak-pageable-replica-A-db"),
+    ).toBeNull();
+    expect(
+      screen.queryByTestId("replica-stuck-degraded-replica-A"),
+    ).toBeNull();
+    expect(screen.queryByTestId("stuck-degraded-banner")).toBeNull();
+    expect(screen.getByTestId("tile-stuck-degraded").textContent).toContain("0");
+  });
+
+  it("flags a streak that has crossed the duration probe's page threshold", async () => {
+    // rateLimitStore stuck-degraded for 7 minutes — past the 5 minute
+    // checkHealthzDegraded threshold. Even though /readyz is still OK
+    // (memory store fallback keeps the replica ready), the panel must
+    // make it obvious the duration probe would page now.
+    const stuckFirstFailureAt = Date.now() - 7 * 60 * 1000;
+    fetchMock.mockImplementation(
+      dispatchByUrl({
+        readyz: () =>
+          jsonResponse(200, {
+            status: "ready",
+            replicaId: "replica-X",
+            checks: { db: "ok", redis: "ok" },
+            rateLimitStore: "redis",
+          } satisfies FakeReadyzBody),
+        healthz: () =>
+          jsonResponse(200, {
+            status: "ok",
+            replicaId: "replica-X",
+            subsystems: {
+              rateLimitStore: {
+                state: "degraded",
+                failureCount: 42,
+                firstFailureAt: stuckFirstFailureAt,
+                lastRecoveredAt: null,
+              },
+              db: {
+                state: "healthy",
+                failureCount: 0,
+                firstFailureAt: null,
+                lastRecoveredAt: null,
+              },
+            },
+          } satisfies FakeHealthzBody),
+      }),
+    );
+    renderWithQuery(<StatusPage />);
+    await flushAsync();
+    await waitFor(() => {
+      expect(screen.getByTestId("streaks-replica-X")).toBeTruthy();
+    });
+    // Per-streak pageable badge fires.
+    expect(
+      screen.getByTestId("streak-pageable-replica-X-rateLimitStore"),
+    ).toBeTruthy();
+    // Per-card badge in the header so on-call sees it without scrolling.
+    expect(
+      screen.getByTestId("replica-stuck-degraded-replica-X").textContent,
+    ).toContain("Stuck-degraded");
+    // Top-level banner + tile reflect the page-worthy streak.
+    expect(screen.getByTestId("stuck-degraded-banner").textContent).toContain(
+      "stuck-degraded",
+    );
+    expect(screen.getByTestId("tile-stuck-degraded").textContent).toContain(
+      "1",
+    );
+    // Duration formatting drops to minutes for streaks longer than 60s.
+    const row = screen.getByTestId("streak-replica-X-rateLimitStore");
+    expect(row.textContent).toMatch(/stuck-degraded for 7m/);
+  });
+
+  it("drops a previously-degraded streak when /healthz stops responding for longer than the stale window", async () => {
+    // Pin time so we can deterministically cross the 60s stale window.
+    const t0 = new Date("2026-04-29T12:00:00Z").getTime();
+    vi.setSystemTime(t0);
+    const dbFirstFailureAt = t0 - 30_000;
+
+    // Phase 1: healthz reports a degraded subsystem so the streak row
+    // gets recorded in component state.
+    let healthzShouldFail = false;
+    fetchMock.mockImplementation(
+      dispatchByUrl({
+        readyz: () =>
+          jsonResponse(200, {
+            status: "ready",
+            replicaId: "replica-A",
+            checks: { db: "ok", redis: "ok" },
+            rateLimitStore: "redis",
+          } satisfies FakeReadyzBody),
+        healthz: () => {
+          if (healthzShouldFail) return Promise.reject(new Error("healthz down"));
+          return jsonResponse(200, {
+            status: "ok",
+            replicaId: "replica-A",
+            subsystems: {
+              db: {
+                state: "degraded",
+                failureCount: 4,
+                firstFailureAt: dbFirstFailureAt,
+                lastRecoveredAt: null,
+              },
+            },
+          } satisfies FakeHealthzBody);
+        },
+      }),
+    );
+    renderWithQuery(<StatusPage />);
+    await flushAsync();
+    await waitFor(() => {
+      expect(screen.getByTestId("streaks-replica-A")).toBeTruthy();
+    });
+
+    // Phase 2: /healthz starts failing while /readyz keeps succeeding.
+    // Jump past REPLICA_STALE_AFTER_MS (60s) and trigger another poll
+    // via the operator's Refresh button.
+    healthzShouldFail = true;
+    vi.setSystemTime(t0 + 90_000);
+    fireEvent.click(screen.getByTestId("button-refresh-status"));
+    await flushAsync();
+
+    // The stale streak must age out even though no successful healthz
+    // sample arrived to evict it implicitly.
+    await waitFor(() => {
+      expect(screen.queryByTestId("streaks-replica-A")).toBeNull();
+    });
+    expect(screen.queryByTestId("streak-replica-A-db")).toBeNull();
+    expect(screen.getByTestId("tile-stuck-degraded").textContent).toContain("0");
+  });
+
+  it("does not render a streak block when every healthz subsystem is healthy", async () => {
+    fetchMock.mockImplementation(
+      dispatchByUrl({
+        readyz: () =>
+          jsonResponse(200, {
+            status: "ready",
+            replicaId: "replica-A",
+            checks: { db: "ok", redis: "ok" },
+            rateLimitStore: "redis",
+          } satisfies FakeReadyzBody),
+        healthz: () =>
+          jsonResponse(200, {
+            status: "ok",
+            replicaId: "replica-A",
+            subsystems: {
+              db: {
+                state: "healthy",
+                failureCount: 0,
+                firstFailureAt: null,
+                lastRecoveredAt: Date.now() - 60_000,
+              },
+              rateLimitStore: {
+                state: "healthy",
+                failureCount: 0,
+                firstFailureAt: null,
+                lastRecoveredAt: null,
+              },
+            },
+          } satisfies FakeHealthzBody),
+      }),
+    );
+    renderWithQuery(<StatusPage />);
+    await flushAsync();
+    await waitFor(() => {
+      expect(screen.getByTestId("replica-replica-A")).toBeTruthy();
+    });
+    expect(screen.queryByTestId("streaks-replica-A")).toBeNull();
+    expect(
+      screen.queryByTestId("replica-stuck-degraded-replica-A"),
+    ).toBeNull();
+    expect(screen.queryByTestId("stuck-degraded-banner")).toBeNull();
   });
 });

@@ -9,6 +9,8 @@ import {
   HardDrive,
   Layers,
   RefreshCw,
+  Siren,
+  Timer,
   XCircle,
 } from "lucide-react";
 import {
@@ -28,6 +30,13 @@ import { cn } from "@/lib/utils";
 const POLL_INTERVAL_MS = 10_000;
 const SAMPLES_PER_CYCLE = 5;
 const REPLICA_STALE_AFTER_MS = 60_000;
+// Mirrors the default in
+// `artifacts/api-server/src/scripts/checkHealthzDegraded.ts` so the panel
+// highlights any per-replica streak that the GitHub Actions stuck-degraded
+// probe would already be paging on. Kept in lockstep — if the probe's
+// default ever changes, update this constant too so on-call sees the same
+// "probe would page now" boundary in the UI as in their pages.
+const STUCK_DEGRADED_THRESHOLD_MS = 5 * 60 * 1000;
 
 type CheckState = "ok" | "failed" | "skipped";
 
@@ -53,6 +62,43 @@ interface SamplerError {
   observedAt: number;
 }
 
+// Subset of the /healthz `subsystems` map entry shape we render. Kept narrow
+// because the api-server adds new subsystem-specific fields over time
+// (auditDlq, auditChainVerify, ...) and we don't want a new field to break
+// parsing here. The four required fields are the canonical
+// SubsystemSnapshot contract from `lib/subsystemHealth.ts`.
+interface HealthzSubsystem {
+  state: "healthy" | "degraded" | string;
+  failureCount?: number;
+  firstFailureAt: number | null;
+  lastRecoveredAt?: number | null;
+}
+
+interface HealthzBody {
+  status?: string;
+  replicaId?: string;
+  subsystems?: Record<string, HealthzSubsystem>;
+}
+
+interface HealthzSample {
+  replicaId: string;
+  observedAt: number;
+  subsystems: Record<string, HealthzSubsystem>;
+}
+
+interface DegradedStreak {
+  name: string;
+  firstFailureAt: number;
+  failureCount: number;
+  durationMs: number;
+  // True once the streak has been open for longer than
+  // STUCK_DEGRADED_THRESHOLD_MS — i.e. the
+  // checkHealthzDegraded probe would already be paging on this. Used to
+  // pull the streak forward visually so on-call sees the page-worthy
+  // streak before the merely-recent ones.
+  pageable: boolean;
+}
+
 async function probeOnce(): Promise<ReplicaSample> {
   const observedAt = Date.now();
   const res = await fetch("/api/readyz", {
@@ -73,6 +119,115 @@ async function probeOnce(): Promise<ReplicaSample> {
       ? body.replicaId
       : `unknown-${observedAt}`;
   return { replicaId, httpStatus: res.status, body, parseError, observedAt };
+}
+
+/**
+ * Sister probe to `probeOnce` that hits /healthz instead of /readyz so we
+ * can merge the per-replica `subsystems` failure-streak data onto each
+ * replica card. /readyz only carries point-in-time check results
+ * (db: ok / failed); /healthz additionally reports `firstFailureAt`,
+ * `failureCount`, and `lastRecoveredAt` per subsystem (db, rateLimitStore,
+ * auditChain, ...). Surfacing the streak fields makes "stuck-degraded for
+ * 7 minutes" visible without leaving the panel and lets on-call see when
+ * the duration-based GitHub Actions probe would already be paging.
+ *
+ * Returns `null` (rather than throwing) on any malformed response so the
+ * caller can silently skip the sample. The /readyz probe drives the
+ * primary error banner; /healthz reachability problems would be redundant
+ * noise here because the existing rate-limit-store panel already surfaces
+ * them.
+ */
+async function probeHealthzOnce(): Promise<HealthzSample | null> {
+  const observedAt = Date.now();
+  let res: Response;
+  try {
+    res = await fetch("/api/healthz", {
+      method: "GET",
+      headers: { accept: "application/json" },
+      cache: "no-store",
+      credentials: "omit",
+    });
+  } catch {
+    return null;
+  }
+  if (!res.ok) return null;
+  let body: HealthzBody;
+  try {
+    body = (await res.json()) as HealthzBody;
+  } catch {
+    return null;
+  }
+  if (!body || typeof body !== "object") return null;
+  if (typeof body.replicaId !== "string" || body.replicaId.trim() === "") {
+    return null;
+  }
+  const subsystems: Record<string, HealthzSubsystem> = {};
+  const map = body.subsystems;
+  if (map && typeof map === "object" && !Array.isArray(map)) {
+    for (const [name, entry] of Object.entries(map)) {
+      if (entry && typeof entry === "object") {
+        subsystems[name] = entry as HealthzSubsystem;
+      }
+    }
+  }
+  return { replicaId: body.replicaId, observedAt, subsystems };
+}
+
+/**
+ * Pull the in-progress degraded streaks out of a /healthz sample, sorted
+ * worst-first so the operator's eye lands on the longest streak and any
+ * pageable streaks appear before merely-recent ones. Skips entries that
+ * are healthy or that are degraded but missing firstFailureAt — the
+ * latter would trip the duration probe's "page on shape regression"
+ * branch, but here we just decline to render a streak we can't time.
+ */
+function collectDegradedStreaks(
+  sample: HealthzSample,
+  now: number,
+): DegradedStreak[] {
+  const out: DegradedStreak[] = [];
+  for (const [name, entry] of Object.entries(sample.subsystems)) {
+    if (entry.state !== "degraded") continue;
+    const first =
+      typeof entry.firstFailureAt === "number" &&
+      Number.isFinite(entry.firstFailureAt)
+        ? entry.firstFailureAt
+        : null;
+    if (first === null) continue;
+    const durationMs = Math.max(0, now - first);
+    out.push({
+      name,
+      firstFailureAt: first,
+      failureCount:
+        typeof entry.failureCount === "number" && Number.isFinite(entry.failureCount)
+          ? entry.failureCount
+          : 0,
+      durationMs,
+      pageable: durationMs > STUCK_DEGRADED_THRESHOLD_MS,
+    });
+  }
+  out.sort((a, b) => {
+    if (a.pageable !== b.pageable) return a.pageable ? -1 : 1;
+    return b.durationMs - a.durationMs;
+  });
+  return out;
+}
+
+/**
+ * "7m 23s"-style compact duration for streak display. Matches the
+ * granularity on-call cares about — a streak of seconds is harmless,
+ * minutes is when the duration probe starts mattering, hours is an
+ * incident.
+ */
+function formatDurationMs(ms: number): string {
+  const safe = Math.max(0, Math.floor(ms / 1000));
+  if (safe < 60) return `${safe}s`;
+  const m = Math.floor(safe / 60);
+  const rs = safe % 60;
+  if (m < 60) return rs > 0 ? `${m}m ${rs}s` : `${m}m`;
+  const h = Math.floor(m / 60);
+  const rm = m % 60;
+  return rm > 0 ? `${h}h ${rm}m` : `${h}h`;
 }
 
 function isReplicaUnhealthy(s: ReplicaSample): boolean {
@@ -128,6 +283,9 @@ function formatRelativeFlexible(value: number | string | null, now: number): str
 
 export default function StatusPage() {
   const [replicas, setReplicas] = useState<Record<string, ReplicaSample>>({});
+  const [healthzReplicas, setHealthzReplicas] = useState<
+    Record<string, HealthzSample>
+  >({});
   const [lastError, setLastError] = useState<SamplerError | null>(null);
   const [lastPolledAt, setLastPolledAt] = useState<number | null>(null);
   const [isPolling, setIsPolling] = useState(false);
@@ -139,15 +297,31 @@ export default function StatusPage() {
   const pollNow = useCallback(async () => {
     setIsPolling(true);
     try {
-      const samples = await Promise.allSettled(
-        Array.from({ length: SAMPLES_PER_CYCLE }, () => probeOnce()),
-      );
+      // Run readyz + healthz probe batches in parallel. They hit different
+      // endpoints with the same fan-out strategy so the LB spreads samples
+      // across replicas; merging by replicaId on each side gives us a
+      // per-replica view of both the readyz check matrix and the healthz
+      // failure-streak fields.
+      const [readyzSettled, healthzSettled] = await Promise.all([
+        Promise.allSettled(
+          Array.from({ length: SAMPLES_PER_CYCLE }, () => probeOnce()),
+        ),
+        Promise.allSettled(
+          Array.from({ length: SAMPLES_PER_CYCLE }, () => probeHealthzOnce()),
+        ),
+      ]);
       if (!mountedRef.current) return;
       const fulfilled: ReplicaSample[] = [];
       const errors: string[] = [];
-      for (const s of samples) {
+      for (const s of readyzSettled) {
         if (s.status === "fulfilled") fulfilled.push(s.value);
         else errors.push((s.reason as Error)?.message ?? String(s.reason));
+      }
+      const healthzFulfilled: HealthzSample[] = [];
+      for (const s of healthzSettled) {
+        if (s.status === "fulfilled" && s.value !== null) {
+          healthzFulfilled.push(s.value);
+        }
       }
       if (fulfilled.length > 0) {
         setReplicas((prev) => {
@@ -168,6 +342,31 @@ export default function StatusPage() {
           return next;
         });
       }
+      // Always run the staleness sweep, even when every healthz probe in
+      // this cycle failed. Otherwise a healthz outage that lasts longer
+      // than REPLICA_STALE_AFTER_MS would leave the previous degraded
+      // streak rendered indefinitely and overstate current degradation.
+      setHealthzReplicas((prev) => {
+        const next = { ...prev };
+        for (const sample of healthzFulfilled) {
+          const existing = next[sample.replicaId];
+          if (!existing || existing.observedAt <= sample.observedAt) {
+            next[sample.replicaId] = sample;
+          }
+        }
+        // Same staleness rule as readyz: a replica we haven't heard
+        // from in a minute is likely gone, and showing its last-known
+        // streak forever would be misleading.
+        const cutoff = Date.now() - REPLICA_STALE_AFTER_MS;
+        let mutated = healthzFulfilled.length > 0;
+        for (const [id, value] of Object.entries(next)) {
+          if (value.observedAt < cutoff) {
+            delete next[id];
+            mutated = true;
+          }
+        }
+        return mutated ? next : prev;
+      });
       if (errors.length > 0 && fulfilled.length === 0) {
         setLastError({ message: errors[0] ?? "Probe failed", observedAt: Date.now() });
       } else if (fulfilled.length > 0) {
@@ -213,6 +412,19 @@ export default function StatusPage() {
   const degradedCount = sortedReplicas.filter(isReplicaUnhealthy).length;
   const healthyCount = sortedReplicas.length - degradedCount;
   const now = Date.now();
+
+  // How many replicas have at least one subsystem stuck-degraded longer
+  // than the duration probe's threshold. Surfaced as a top-level tile +
+  // banner so on-call sees "the GitHub Actions probe would page right
+  // now" without scanning every card.
+  const stuckDegradedReplicaCount = useMemo(() => {
+    let count = 0;
+    for (const sample of Object.values(healthzReplicas)) {
+      const streaks = collectDegradedStreaks(sample, now);
+      if (streaks.some((s) => s.pageable)) count += 1;
+    }
+    return count;
+  }, [healthzReplicas, now]);
 
   return (
     <div data-testid="page-status">
@@ -263,13 +475,16 @@ export default function StatusPage() {
           Replica health
         </h2>
         <p className="text-xs text-muted-foreground mb-3">
-          Polls <code>/api/readyz</code> every {POLL_INTERVAL_MS / 1000}s and
-          groups responses by replica. Multiple parallel probes per cycle
-          increase the odds of sampling every replica behind the load
-          balancer.
+          Polls <code>/api/readyz</code> and <code>/api/healthz</code> every{" "}
+          {POLL_INTERVAL_MS / 1000}s and groups responses by replica. Multiple
+          parallel probes per cycle increase the odds of sampling every replica
+          behind the load balancer. Each card shows the readyz check matrix
+          plus, when degraded, the healthz failure-streak duration so on-call
+          can see at a glance which subsystem owns a "stuck-degraded for N
+          minutes" page.
         </p>
 
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-6">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
           <SummaryTile
             label="Replicas observed"
             value={sortedReplicas.length}
@@ -290,7 +505,36 @@ export default function StatusPage() {
             tone={degradedCount > 0 ? "bad" : "neutral"}
             testId="tile-degraded"
           />
+          <SummaryTile
+            label="Stuck-degraded"
+            value={stuckDegradedReplicaCount}
+            icon={Siren}
+            tone={stuckDegradedReplicaCount > 0 ? "bad" : "neutral"}
+            testId="tile-stuck-degraded"
+          />
         </div>
+
+        {stuckDegradedReplicaCount > 0 && (
+          <div
+            className="mb-4 rounded-md border border-destructive/60 bg-destructive/5 p-3 text-sm text-destructive flex items-start gap-2"
+            data-testid="stuck-degraded-banner"
+          >
+            <Siren className="w-4 h-4 mt-0.5 shrink-0" />
+            <div>
+              <p className="font-medium">
+                {stuckDegradedReplicaCount === 1
+                  ? "1 replica has a subsystem stuck-degraded past the probe threshold."
+                  : `${stuckDegradedReplicaCount} replicas have a subsystem stuck-degraded past the probe threshold.`}
+              </p>
+              <p className="text-xs mt-0.5">
+                The GitHub Actions <code>checkHealthzDegraded</code> probe pages
+                on-call once a streak exceeds{" "}
+                {STUCK_DEGRADED_THRESHOLD_MS / 60_000}m. See each card below
+                for the offending subsystem.
+              </p>
+            </div>
+          </div>
+        )}
 
         {lastError && sortedReplicas.length === 0 && (
           <div
@@ -310,7 +554,12 @@ export default function StatusPage() {
             </Card>
           )}
           {sortedReplicas.map((replica) => (
-            <ReplicaCard key={replica.replicaId} replica={replica} now={now} />
+            <ReplicaCard
+              key={replica.replicaId}
+              replica={replica}
+              healthz={healthzReplicas[replica.replicaId]}
+              now={now}
+            />
           ))}
         </div>
 
@@ -630,16 +879,32 @@ function PaymentGatewayHealthPanel() {
   );
 }
 
-function ReplicaCard({ replica, now }: { replica: ReplicaSample; now: number }) {
+function ReplicaCard({
+  replica,
+  healthz,
+  now,
+}: {
+  replica: ReplicaSample;
+  healthz: HealthzSample | undefined;
+  now: number;
+}) {
   const unhealthy = isReplicaUnhealthy(replica);
   const checks = replica.body?.checks ?? {};
   const failures = replica.body?.failures ?? {};
   const rateLimitStore = replica.body?.rateLimitStore;
   const productionHostnamePattern = replica.body?.config?.productionHostnamePattern;
+  const streaks = healthz ? collectDegradedStreaks(healthz, now) : [];
+  const hasPageableStreak = streaks.some((s) => s.pageable);
   return (
     <Card
       data-testid={`replica-${replica.replicaId}`}
-      className={cn(unhealthy && "border-destructive/60")}
+      className={cn(
+        unhealthy && "border-destructive/60",
+        // Even when readyz still passes, a streak past the duration
+        // probe's threshold is on-call-paging-worthy and the card
+        // should look that way.
+        hasPageableStreak && "border-destructive/60",
+      )}
     >
       <CardHeader className="pb-3">
         <div className="flex items-start justify-between gap-3 flex-wrap">
@@ -651,7 +916,7 @@ function ReplicaCard({ replica, now }: { replica: ReplicaSample; now: number }) 
               HTTP {replica.httpStatus} · last seen {formatRelativeMs(now, replica.observedAt)}
             </p>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap justify-end">
             {unhealthy ? (
               <Badge variant="destructive" data-testid={`replica-status-${replica.replicaId}`}>
                 <XCircle className="w-3 h-3 mr-1" /> Degraded
@@ -659,6 +924,15 @@ function ReplicaCard({ replica, now }: { replica: ReplicaSample; now: number }) 
             ) : (
               <Badge variant="secondary" data-testid={`replica-status-${replica.replicaId}`}>
                 <CheckCircle2 className="w-3 h-3 mr-1" /> Ready
+              </Badge>
+            )}
+            {hasPageableStreak && (
+              <Badge
+                variant="destructive"
+                data-testid={`replica-stuck-degraded-${replica.replicaId}`}
+                title={`At least one subsystem has been degraded for more than ${STUCK_DEGRADED_THRESHOLD_MS / 60_000}m — the duration probe would page on-call.`}
+              >
+                <Siren className="w-3 h-3 mr-1" /> Stuck-degraded
               </Badge>
             )}
             {rateLimitStore && (
@@ -699,6 +973,73 @@ function ReplicaCard({ replica, now }: { replica: ReplicaSample; now: number }) 
                 </li>
               ))}
             </ul>
+          </div>
+        )}
+        {streaks.length > 0 && (
+          <div
+            className={cn(
+              "rounded-md border p-2 text-xs",
+              hasPageableStreak
+                ? "border-destructive/60 bg-destructive/5"
+                : "border-amber-500/40 bg-amber-500/5",
+            )}
+            data-testid={`streaks-${replica.replicaId}`}
+          >
+            <p
+              className={cn(
+                "font-medium mb-1 flex items-center gap-1.5",
+                hasPageableStreak ? "text-destructive" : "text-amber-700 dark:text-amber-400",
+              )}
+            >
+              {hasPageableStreak ? (
+                <Siren className="w-3.5 h-3.5" />
+              ) : (
+                <Timer className="w-3.5 h-3.5" />
+              )}
+              Failure-streak history (from <code>/api/healthz</code>)
+            </p>
+            <ul className="space-y-1">
+              {streaks.map((s) => (
+                <li
+                  key={s.name}
+                  className="flex items-baseline gap-2 flex-wrap"
+                  data-testid={`streak-${replica.replicaId}-${s.name}`}
+                >
+                  <span className="font-mono font-semibold">{s.name}</span>
+                  <span
+                    className={cn(
+                      "tabular-nums",
+                      s.pageable
+                        ? "text-destructive font-medium"
+                        : "text-foreground",
+                    )}
+                    data-testid={`streak-duration-${replica.replicaId}-${s.name}`}
+                    title={`Streak began ${formatTimestamp(s.firstFailureAt)} (${formatRelativeFlexible(s.firstFailureAt, now)})`}
+                  >
+                    stuck-degraded for {formatDurationMs(s.durationMs)}
+                  </span>
+                  {s.pageable && (
+                    <Badge
+                      variant="destructive"
+                      data-testid={`streak-pageable-${replica.replicaId}-${s.name}`}
+                      title={`> ${STUCK_DEGRADED_THRESHOLD_MS / 60_000}m — checkHealthzDegraded would page now`}
+                    >
+                      probe pages now
+                    </Badge>
+                  )}
+                  <span className="text-muted-foreground">
+                    · {s.failureCount} failure{s.failureCount === 1 ? "" : "s"}
+                  </span>
+                </li>
+              ))}
+            </ul>
+            {!hasPageableStreak && (
+              <p className="text-[11px] text-muted-foreground mt-1.5">
+                Page threshold: {STUCK_DEGRADED_THRESHOLD_MS / 60_000}m. Below
+                that the streak is informational; above it the GitHub Actions{" "}
+                <code>checkHealthzDegraded</code> probe pages on-call.
+              </p>
+            )}
           </div>
         )}
         {productionHostnamePattern && productionHostnamePattern !== "not_required" && (
