@@ -1,5 +1,4 @@
 uploads = []
-outputs = []
 
 [[generated]]
 id = "bsf1tLhEUXcRPqPvGzCVn"
@@ -132,3 +131,9 @@ id = "Wvz60hLGl5HulvTGBnpBu"
 uri = "file://artifacts/mockup-sandbox/public/images/naija-pop-feed-3.png"
 type = "image"
 title = "Sneakers"
+
+[[outputs]]
+id = "bjR9M5ohFL9oAaQIf0m3T"
+uri = "file://.local/tasks/sprint-groupings.md"
+type = "text"
+title = "Sprint Groupings — Epplaa Backlog"
