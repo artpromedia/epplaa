@@ -432,6 +432,34 @@ schedule.
 > the hostname check (so a typo doesn't crash an otherwise-correct
 > production boot — the other signals still fire).
 >
+> **Boot-time presence check (task #84).** Because the hostname signal
+> is silently disabled when no operator ever set
+> `PRODUCTION_HOSTNAME_PATTERN`, the api-server entrypoint also runs
+> `assertProductionHostnamePatternConfigured` (in
+> `artifacts/api-server/src/routes/healthzRehearsal.ts`) on every
+> boot. When a production-shaped deploy is detected (any of
+> `NODE_ENV=production`, `REPLIT_DEPLOYMENT=1`,
+> `DEPLOYMENT_ENVIRONMENT=production`) but `PRODUCTION_HOSTNAME_PATTERN`
+> is unset/empty, the api-server logs a warning identified by the
+> message tag `production_hostname_pattern_missing` and continues
+> booting. This is intentionally a warning rather than a hard fail so
+> existing production deploys that haven't yet been rotated to
+> include the pattern don't crash-loop on the first restart after the
+> change ships. **Wire a Sentry / log-aggregator alert on the
+> `production_hostname_pattern_missing` message tag**, route it to the
+> rate-limit owners, and treat it as a misconfigured-deploy
+> remediation: set `PRODUCTION_HOSTNAME_PATTERN` on the offending
+> deploy and restart. The structured log payload includes
+> `production_signals` (which signals tripped the production-shape
+> detection), `node_env`, `hostname`, `replit_deployment`, and
+> `deployment_environment` so triage can confirm the misconfiguration
+> without shelling onto the box. The healthy boot logs nothing — a
+> production deploy with the pattern set produces zero output from
+> this check, so the alert can fire on first occurrence without
+> tuning. The check is unit-covered in
+> `artifacts/api-server/src/routes/healthzRehearsal.test.ts`
+> (`assertProductionHostnamePatternConfigured —` describe block).
+>
 > **If you see this error in a production crash log,** unset
 > `HEALTHZ_REHEARSAL_ENABLED` on that deploy and restart — do **not**
 > work around it by setting `NODE_ENV` to something other than

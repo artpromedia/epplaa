@@ -1,6 +1,9 @@
 import { createServer } from "node:http";
 import { logger } from "./lib/logger";
-import { assertRehearsalKillSwitchSafe } from "./routes/healthzRehearsal";
+import {
+  assertProductionHostnamePatternConfigured,
+  assertRehearsalKillSwitchSafe,
+} from "./routes/healthzRehearsal";
 
 // Defense-in-depth: refuse to boot if the staging-only rehearsal
 // injector kill switch (HEALTHZ_REHEARSAL_ENABLED=1) is observed in a
@@ -21,6 +24,21 @@ const rehearsalGuard = assertRehearsalKillSwitchSafe(process.env, logger);
 if (!rehearsalGuard.ok) {
   process.exit(1);
 }
+
+// Boot-time sanity check (task #84): on production-shaped deploys
+// (NODE_ENV=production / REPLIT_DEPLOYMENT=1 / DEPLOYMENT_ENVIRONMENT=production),
+// warn loudly if PRODUCTION_HOSTNAME_PATTERN is missing. The hostname
+// signal in `assertRehearsalKillSwitchSafe` is the strongest backstop
+// against a copy-pasted staging env into production, but it's silently
+// absent if no operator ever configured the regex. The runbook
+// recommends setting it; this check turns that recommendation into an
+// automated boot-time signal so the misconfiguration shows up in
+// log aggregators / Sentry instead of waiting for a real outage. The
+// outcome is intentionally NOT used to abort boot — the other guard
+// layers above still work without the hostname backstop, and crash-
+// looping every existing production deploy that never set this env
+// var would be more disruptive than the marginal security gain.
+assertProductionHostnamePatternConfigured(process.env, logger);
 
 const rawPort = process.env["PORT"];
 

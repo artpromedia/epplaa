@@ -150,9 +150,18 @@ function compileHostnamePattern(
   }
 }
 
-function detectProductionSignals(
+/**
+ * Subset of `detectProductionSignals` that only considers the env vars
+ * an operator can set independently of `HOSTNAME` / `PRODUCTION_HOSTNAME_PATTERN`.
+ *
+ * Used by `assertProductionHostnamePatternConfigured` below to decide
+ * whether a deploy is "production-shaped" *without* relying on the
+ * hostname pattern itself — the whole point of that check is to warn
+ * when the hostname pattern is missing on a production deploy, so we
+ * must determine production-ness via the other signals.
+ */
+function detectNonHostnameProductionSignals(
   env: NodeJS.ProcessEnv,
-  log: { error: (obj: unknown, msg: string) => void },
 ): ProductionSignal[] {
   const signals: ProductionSignal[] = [];
 
@@ -176,6 +185,15 @@ function detectProductionSignals(
       detail: "DEPLOYMENT_ENVIRONMENT=production",
     });
   }
+
+  return signals;
+}
+
+function detectProductionSignals(
+  env: NodeJS.ProcessEnv,
+  log: { error: (obj: unknown, msg: string) => void },
+): ProductionSignal[] {
+  const signals = detectNonHostnameProductionSignals(env);
 
   const hostnamePattern = compileHostnamePattern(
     env.PRODUCTION_HOSTNAME_PATTERN,
@@ -225,6 +243,104 @@ export function assertRehearsalKillSwitchSafe(
       production_signals: signals.map((s) => s.signal),
     },
     `healthz_rehearsal_kill_switch_on_in_production: ${reason}`,
+  );
+  return { ok: false, reason };
+}
+
+/**
+ * Boot-time sanity check: production deploys MUST set
+ * `PRODUCTION_HOSTNAME_PATTERN`.
+ *
+ * The hostname signal in `assertRehearsalKillSwitchSafe` is the
+ * strongest backstop — even if `NODE_ENV` / `REPLIT_DEPLOYMENT` /
+ * `DEPLOYMENT_ENVIRONMENT` all drift, a deploy whose container
+ * `HOSTNAME` matches the operator-configured production-hostname
+ * regex will still refuse to boot with the rehearsal injector enabled.
+ *
+ * That whole layer is silently absent if no operator ever configured
+ * `PRODUCTION_HOSTNAME_PATTERN` on the production deploy: the runbook
+ * recommends setting it but nothing in the platform enforces it. Until
+ * task #84 the only feedback an operator got was a runbook prose
+ * sentence — easy to miss across env-var rotations and platform
+ * migrations.
+ *
+ * This check turns the runbook recommendation into an automated boot-
+ * time signal:
+ *
+ *   - If a production-shaped deploy is detected (any of `NODE_ENV=production`,
+ *     `REPLIT_DEPLOYMENT=1`, `DEPLOYMENT_ENVIRONMENT=production`),
+ *   - AND `PRODUCTION_HOSTNAME_PATTERN` is unset / empty,
+ *   - THEN emit a loud structured warning naming the missing env var,
+ *     the production signals that triggered the check, and the
+ *     runbook section to read.
+ *
+ * The check deliberately determines production-ness via the OTHER
+ * signals — using the hostname pattern itself would be circular (the
+ * whole point is to detect when the pattern is missing).
+ *
+ * This is a warning, not a hard failure: the existing layered defence
+ * (the runtime 404, the rehearsal token guard, and the kill-switch
+ * boot guard via the other signals) already prevents a leaked URL
+ * from inducing a real page even without the hostname backstop, so
+ * crash-looping every existing production deploy that never set
+ * `PRODUCTION_HOSTNAME_PATTERN` would be more disruptive than the
+ * marginal security gain. The warning is structured (`pino` warn
+ * level + dedicated message identifier) so an operator can configure
+ * a Sentry / log-aggregator alert on
+ * `production_hostname_pattern_missing` to catch the misconfiguration
+ * within minutes of the next deploy.
+ *
+ * Pure function — takes `env` and a `log` sink so the unit test can
+ * exercise both the staging-skipped, production-warned, and
+ * production-configured paths without poisoning `process.env` or
+ * piping pino output. Returns the outcome instead of side-effects so
+ * the caller can decide what to do (today: log + continue; in the
+ * future a deploy gate could reject).
+ */
+export type HostnamePatternConfigOutcome =
+  | { ok: true }
+  | { ok: false; reason: string };
+
+export function assertProductionHostnamePatternConfigured(
+  env: NodeJS.ProcessEnv,
+  log: { warn: (obj: unknown, msg: string) => void },
+): HostnamePatternConfigOutcome {
+  const productionSignals = detectNonHostnameProductionSignals(env);
+  if (productionSignals.length === 0) {
+    // Not a production deploy — the hostname pattern is optional on
+    // staging / dev / preview environments. Nothing to warn about.
+    return { ok: true };
+  }
+
+  const raw = env.PRODUCTION_HOSTNAME_PATTERN;
+  if (raw && raw.trim() !== "") {
+    // Configured. We deliberately do NOT re-validate the regex here —
+    // `compileHostnamePattern` already logs `healthz_rehearsal_invalid_hostname_pattern`
+    // when the pattern is malformed, and surfacing a second error from
+    // this check would be noisy duplication. A typo'd pattern still
+    // counts as "the operator configured it" for the purposes of this
+    // sanity check; the malformed-regex log is the actionable signal.
+    return { ok: true };
+  }
+
+  const signalDetails = productionSignals.map((s) => s.detail).join("; ");
+  const reason =
+    "PRODUCTION_HOSTNAME_PATTERN is not set on this production deploy. " +
+    `Detected production signal(s): ${signalDetails}. ` +
+    "Without this env var the hostname-based backstop in " +
+    "assertRehearsalKillSwitchSafe is silently disabled — see " +
+    "docs/runbooks/rate-limit-store.md (boot-time guard) for the " +
+    "recommended pattern (e.g. PRODUCTION_HOSTNAME_PATTERN='^api\\.epplaa\\.com$').";
+  log.warn(
+    {
+      node_env: env.NODE_ENV,
+      hostname: env.HOSTNAME,
+      replit_deployment: env.REPLIT_DEPLOYMENT,
+      deployment_environment: env.DEPLOYMENT_ENVIRONMENT,
+      production_hostname_pattern: env.PRODUCTION_HOSTNAME_PATTERN ?? null,
+      production_signals: productionSignals.map((s) => s.signal),
+    },
+    `production_hostname_pattern_missing: ${reason}`,
   );
   return { ok: false, reason };
 }

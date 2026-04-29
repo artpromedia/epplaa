@@ -22,9 +22,11 @@ vi.mock("../lib/logger", () => ({
 }));
 
 const { dbHealthWatcher } = await import("../lib/subsystemHealth");
-const { default: rehearsalRouter, assertRehearsalKillSwitchSafe } = await import(
-  "./healthzRehearsal"
-);
+const {
+  default: rehearsalRouter,
+  assertRehearsalKillSwitchSafe,
+  assertProductionHostnamePatternConfigured,
+} = await import("./healthzRehearsal");
 const { csrfMiddleware } = await import("../middlewares/csrf");
 
 function buildApp(): Express {
@@ -754,6 +756,269 @@ describe("assertRehearsalKillSwitchSafe — boot-time guard", () => {
       log,
     );
     expect(result.ok).toBe(true);
+    expect(log.calls).toEqual([]);
+  });
+});
+
+describe("assertProductionHostnamePatternConfigured — production hostname pattern presence check", () => {
+  // The hostname signal in `assertRehearsalKillSwitchSafe` is the
+  // strongest backstop against a copy-pasted staging env file ending
+  // up on a production deploy — but it's silently disabled if no
+  // operator ever set `PRODUCTION_HOSTNAME_PATTERN`. The runbook
+  // recommends configuring it on production deploys; this check turns
+  // that recommendation into an automated boot-time signal so a
+  // misconfigured deploy shows up in log aggregators / Sentry within
+  // minutes instead of the next real outage.
+  //
+  // The check intentionally determines production-ness via the OTHER
+  // production signals (NODE_ENV / REPLIT_DEPLOYMENT /
+  // DEPLOYMENT_ENVIRONMENT) — using the hostname pattern itself would
+  // be circular.
+
+  type WarnCall = [obj: unknown, msg: string];
+  function buildWarnSink(): {
+    warn: (obj: unknown, msg: string) => void;
+    calls: WarnCall[];
+  } {
+    const calls: WarnCall[] = [];
+    return {
+      warn: (obj, msg) => {
+        calls.push([obj, msg]);
+      },
+      calls,
+    };
+  }
+
+  it("does nothing on a non-production deploy (staging) with no hostname pattern set", () => {
+    // The pattern is optional on staging — the check must not warn,
+    // otherwise every staging boot would emit noise about a
+    // production-only configuration.
+    const log = buildWarnSink();
+    const result = assertProductionHostnamePatternConfigured(
+      { NODE_ENV: "staging" },
+      log,
+    );
+    expect(result.ok).toBe(true);
+    expect(log.calls).toEqual([]);
+  });
+
+  it("does nothing on a development deploy", () => {
+    // Local dev parity — never warn outside production-shaped envs.
+    const log = buildWarnSink();
+    const result = assertProductionHostnamePatternConfigured(
+      { NODE_ENV: "development" },
+      log,
+    );
+    expect(result.ok).toBe(true);
+    expect(log.calls).toEqual([]);
+  });
+
+  it("does nothing on a Replit dev workspace (REPLIT_DEPLOYMENT unset/0) with no pattern", () => {
+    // REPLIT_DEPLOYMENT=0 / unset means "Replit dev workspace, not a
+    // production deployment" — the pattern is not required.
+    const log = buildWarnSink();
+    for (const value of [undefined, "", "0", "true"]) {
+      const env: NodeJS.ProcessEnv = { NODE_ENV: "development" };
+      if (value !== undefined) env.REPLIT_DEPLOYMENT = value;
+      const result = assertProductionHostnamePatternConfigured(env, log);
+      expect(result.ok, `value=${String(value)}`).toBe(true);
+    }
+    expect(log.calls).toEqual([]);
+  });
+
+  it("WARNS when NODE_ENV=production and PRODUCTION_HOSTNAME_PATTERN is unset", () => {
+    // The original task case: a production-shaped deploy ships
+    // without the hostname backstop configured. The check must
+    // surface a loud structured warning so an operator notices
+    // before the next real outage proves the layer was missing.
+    const log = buildWarnSink();
+    const result = assertProductionHostnamePatternConfigured(
+      { NODE_ENV: "production" },
+      log,
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("unreachable");
+    expect(result.reason).toMatch(/PRODUCTION_HOSTNAME_PATTERN/);
+    expect(result.reason).toMatch(/NODE_ENV=production/);
+    expect(result.reason).toMatch(/runbook|rate-limit-store/i);
+    expect(log.calls).toHaveLength(1);
+    const [obj, msg] = log.calls[0]!;
+    // The structured log must surface the offending env vars so an
+    // operator reading a Sentry warning can confirm the
+    // misconfiguration without shelling onto the box.
+    expect(obj).toMatchObject({
+      node_env: "production",
+      production_hostname_pattern: null,
+      production_signals: ["node_env"],
+    });
+    // Dedicated message identifier so log aggregators / Sentry
+    // alerts can be wired up exactly to this event.
+    expect(msg).toMatch(/production_hostname_pattern_missing/);
+  });
+
+  it("WARNS when REPLIT_DEPLOYMENT=1 alone triggers production-shape detection", () => {
+    // A deploy with NODE_ENV unset / staging but the Replit platform
+    // marker set is still production-shaped. The hostname pattern is
+    // still required for the backstop layer.
+    const log = buildWarnSink();
+    const result = assertProductionHostnamePatternConfigured(
+      { REPLIT_DEPLOYMENT: "1" },
+      log,
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("unreachable");
+    expect(result.reason).toMatch(/REPLIT_DEPLOYMENT=1/);
+    expect(log.calls).toHaveLength(1);
+    const [obj] = log.calls[0]!;
+    expect(obj).toMatchObject({
+      replit_deployment: "1",
+      production_signals: ["replit_deployment"],
+    });
+  });
+
+  it("WARNS when DEPLOYMENT_ENVIRONMENT=production alone triggers production-shape detection", () => {
+    const log = buildWarnSink();
+    const result = assertProductionHostnamePatternConfigured(
+      { DEPLOYMENT_ENVIRONMENT: "production" },
+      log,
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("unreachable");
+    expect(result.reason).toMatch(/DEPLOYMENT_ENVIRONMENT=production/);
+    expect(log.calls).toHaveLength(1);
+    const [obj] = log.calls[0]!;
+    expect(obj).toMatchObject({
+      deployment_environment: "production",
+      production_signals: ["deployment_environment"],
+    });
+  });
+
+  it("aggregates every production signal into a single warning so on-call sees them all at once", () => {
+    // If multiple signals are lit, the warning must list every one
+    // — otherwise an operator who fixes the first signal would have
+    // to redeploy and re-read logs to discover the next.
+    const log = buildWarnSink();
+    const result = assertProductionHostnamePatternConfigured(
+      {
+        NODE_ENV: "production",
+        REPLIT_DEPLOYMENT: "1",
+        DEPLOYMENT_ENVIRONMENT: "production",
+      },
+      log,
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("unreachable");
+    expect(result.reason).toMatch(/NODE_ENV=production/);
+    expect(result.reason).toMatch(/REPLIT_DEPLOYMENT=1/);
+    expect(result.reason).toMatch(/DEPLOYMENT_ENVIRONMENT=production/);
+    expect(log.calls).toHaveLength(1);
+    const [obj] = log.calls[0]!;
+    expect(obj).toMatchObject({
+      production_signals: [
+        "node_env",
+        "replit_deployment",
+        "deployment_environment",
+      ],
+    });
+  });
+
+  it("does NOT warn when PRODUCTION_HOSTNAME_PATTERN is configured on a production deploy (the healthy path)", () => {
+    // The common, correct case: a real production deploy with the
+    // hostname backstop configured. Must return ok with zero log
+    // output — the check is meant to be silent on a healthy boot.
+    const log = buildWarnSink();
+    const result = assertProductionHostnamePatternConfigured(
+      {
+        NODE_ENV: "production",
+        REPLIT_DEPLOYMENT: "1",
+        DEPLOYMENT_ENVIRONMENT: "production",
+        HOSTNAME: "api.epplaa.com",
+        PRODUCTION_HOSTNAME_PATTERN: "^api\\.epplaa\\.com$",
+      },
+      log,
+    );
+    expect(result.ok).toBe(true);
+    expect(log.calls).toEqual([]);
+  });
+
+  it("treats a whitespace-only PRODUCTION_HOSTNAME_PATTERN as missing", () => {
+    // A pattern that's just spaces / tabs is functionally unset —
+    // `compileHostnamePattern` ignores it and the hostname signal is
+    // silently disabled. Surface it the same way as a missing var.
+    const log = buildWarnSink();
+    for (const value of [" ", "  ", "\t", "\n"]) {
+      const result = assertProductionHostnamePatternConfigured(
+        {
+          NODE_ENV: "production",
+          PRODUCTION_HOSTNAME_PATTERN: value,
+        },
+        log,
+      );
+      expect(result.ok, `value=${JSON.stringify(value)}`).toBe(false);
+    }
+    expect(log.calls.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("treats an empty-string PRODUCTION_HOSTNAME_PATTERN as missing", () => {
+    // Equivalent to unset for the purposes of the hostname check —
+    // surface it as a missing-config warning rather than silently
+    // accepting it.
+    const log = buildWarnSink();
+    const result = assertProductionHostnamePatternConfigured(
+      {
+        NODE_ENV: "production",
+        PRODUCTION_HOSTNAME_PATTERN: "",
+      },
+      log,
+    );
+    expect(result.ok).toBe(false);
+  });
+
+  it("does NOT re-validate the regex (malformed-pattern logging is owned by compileHostnamePattern)", () => {
+    // A typo in the regex (e.g. unbalanced bracket) is already logged
+    // by compileHostnamePattern as `healthz_rehearsal_invalid_hostname_pattern`
+    // when assertRehearsalKillSwitchSafe runs. Re-emitting a warning
+    // here would be duplicate noise. From the perspective of THIS
+    // check, "operator set the env var" is enough — the malformed-
+    // regex log is the actionable signal.
+    const log = buildWarnSink();
+    const result = assertProductionHostnamePatternConfigured(
+      {
+        NODE_ENV: "production",
+        PRODUCTION_HOSTNAME_PATTERN: "[invalid(regex",
+      },
+      log,
+    );
+    expect(result.ok).toBe(true);
+    expect(log.calls).toEqual([]);
+  });
+
+  it("ignores REPLIT_DEPLOYMENT values other than the literal '1'", () => {
+    // Mirrors the kill-switch guard's strictness — only the literal
+    // "1" trips the production-deployment signal.
+    const log = buildWarnSink();
+    for (const bogus of ["0", "true", "false", "yes", " 1 "]) {
+      const result = assertProductionHostnamePatternConfigured(
+        { REPLIT_DEPLOYMENT: bogus },
+        log,
+      );
+      expect(result.ok, `bogus=${bogus}`).toBe(true);
+    }
+    expect(log.calls).toEqual([]);
+  });
+
+  it("ignores DEPLOYMENT_ENVIRONMENT values other than the literal 'production'", () => {
+    // Mirrors the kill-switch guard: only the lowercase literal
+    // matches. Casing drift (e.g. "Production", "PROD") is the
+    // operator's responsibility to normalise upstream.
+    const log = buildWarnSink();
+    for (const value of ["staging", "preview", "Production", "PROD", "qa"]) {
+      const result = assertProductionHostnamePatternConfigured(
+        { DEPLOYMENT_ENVIRONMENT: value },
+        log,
+      );
+      expect(result.ok, `value=${value}`).toBe(true);
+    }
     expect(log.calls).toEqual([]);
   });
 });
