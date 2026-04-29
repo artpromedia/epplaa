@@ -286,24 +286,34 @@ const devMock = new DevMockGateway();
  * router will simply not failover. The DevMockGateway is ONLY used when no
  * real gateway keys are configured at all; under no circumstance can a live
  * gateway charge fall over to dev-mock (which would silently fake success).
+ *
+ * Exported (with injectable gateway args) so the regression suite can pin
+ * the dev-mock containment rule with synthetic gateways — the alternative,
+ * re-importing the module under different env permutations, was both slow
+ * and fragile because it tangled with the module-init side effects (watcher
+ * registration, payments_initialized log).
  */
-function selectPrimaryAndSecondary(): {
+export function selectPrimaryAndSecondary(
+  paystackGw: PaymentGateway = paystack,
+  flutterwaveGw: PaymentGateway = flutterwave,
+  devMockGw: PaymentGateway = devMock,
+): {
   primary: PaymentGateway;
   secondary: PaymentGateway;
   effectiveMode: "live" | "live-only-paystack" | "live-only-flutterwave" | "dev-mock";
 } {
-  if (paystack.isConfigured() && flutterwave.isConfigured()) {
-    return { primary: paystack, secondary: flutterwave, effectiveMode: "live" };
+  if (paystackGw.isConfigured() && flutterwaveGw.isConfigured()) {
+    return { primary: paystackGw, secondary: flutterwaveGw, effectiveMode: "live" };
   }
-  if (paystack.isConfigured()) {
+  if (paystackGw.isConfigured()) {
     // No failover available — secondary === primary so a primary failure
     // surfaces as a real error instead of silently routing to dev-mock.
-    return { primary: paystack, secondary: paystack, effectiveMode: "live-only-paystack" };
+    return { primary: paystackGw, secondary: paystackGw, effectiveMode: "live-only-paystack" };
   }
-  if (flutterwave.isConfigured()) {
-    return { primary: flutterwave, secondary: flutterwave, effectiveMode: "live-only-flutterwave" };
+  if (flutterwaveGw.isConfigured()) {
+    return { primary: flutterwaveGw, secondary: flutterwaveGw, effectiveMode: "live-only-flutterwave" };
   }
-  return { primary: devMock, secondary: devMock, effectiveMode: "dev-mock" };
+  return { primary: devMockGw, secondary: devMockGw, effectiveMode: "dev-mock" };
 }
 
 const selection = selectPrimaryAndSecondary();
