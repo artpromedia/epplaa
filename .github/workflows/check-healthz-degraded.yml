@@ -55,6 +55,37 @@ name: Healthz degraded probe (per-minute)
 #                                               rotate it independently of
 #                                               the runtime DSN.
 #
+# Optional chat heads-up (Slack incoming webhook or Teams workflow webhook).
+# Mirrors the same degrade-safe pattern the rehearsal workflow uses for its
+# start/result heads-up: when the secret is unset the chat path no-ops and
+# the rest of the probe behaves identically; when it's set, the probe loop
+# posts a real-time message to chat the first time an iteration exits 2
+# (page) and again the first time a subsequent iteration in the same run
+# goes back to exit 0 (resolved). On-call still gets the Sentry page —
+# the chat heads-up exists so #ops sees the incident in real time without
+# waiting for someone to re-broadcast the Sentry issue manually.
+#
+#   secrets.HEALTHZ_PROBE_NOTIFY_WEBHOOK      — Incoming webhook URL. The
+#                                               probe POSTs `{"text": ...}`
+#                                               which works for both Slack
+#                                               incoming webhooks and Teams
+#                                               Workflows webhook triggers.
+#                                               Stored as a secret because
+#                                               the URL is itself the
+#                                               credential. Leave unset to
+#                                               disable the chat heads-up
+#                                               entirely (Sentry path is
+#                                               unaffected).
+#   vars.HEALTHZ_PROBE_NOTIFY_CHANNEL         — Cosmetic channel label
+#                                               (e.g. `#ops`) included in
+#                                               the message body so the
+#                                               destination is obvious in
+#                                               the workflow logs and the
+#                                               chat post itself. Defaults
+#                                               to `#ops`. The actual
+#                                               routing is determined by
+#                                               the webhook URL.
+#
 # Heartbeat / Sentry Cron monitor:
 #   The probe loop is wrapped with `sentry-cli monitors run
 #   check-healthz-degraded --environment production -- ...`. This sends
@@ -136,6 +167,12 @@ jobs:
       HEALTHZ_URL: ${{ vars.HEALTHZ_URL }}
       HEALTHZ_DEGRADED_ALERT_THRESHOLD_MS: ${{ vars.HEALTHZ_DEGRADED_ALERT_THRESHOLD_MS || '300000' }}
       HEALTHZ_PROBE_TIMEOUT_MS: ${{ vars.HEALTHZ_PROBE_TIMEOUT_MS || '5000' }}
+      # Optional chat heads-up. NOTIFY_WEBHOOK is empty when the secret
+      # is unset, in which case the in-loop notify helper no-ops — the
+      # Sentry pager path is unaffected. Same degrade-safe pattern as
+      # the rehearsal workflow's start/result chat posts.
+      NOTIFY_WEBHOOK: ${{ secrets.HEALTHZ_PROBE_NOTIFY_WEBHOOK }}
+      NOTIFY_CHANNEL: ${{ vars.HEALTHZ_PROBE_NOTIFY_CHANNEL || '#ops' }}
 
     steps:
       - uses: actions/checkout@v4
@@ -189,6 +226,44 @@ jobs:
           fails=0
           last_output=""
           last_code=0
+          # Track whether we've already posted a "firing" / "resolved"
+          # chat message in this workflow run so we mirror Sentry's
+          # fingerprint dedup: one chat post per page (not five), and
+          # at most one matching "resolved" if a later iteration
+          # recovers. Across-run state is intentionally not tracked —
+          # if a streak spans multiple 5-minute runs, each run's first
+          # paging iteration re-announces, which is the right behaviour
+          # for an ongoing incident that hasn't been ack'd yet.
+          notified_firing=0
+          notified_resolved=0
+          firing_iteration=0
+          run_url="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+
+          # Helper: POST a `{"text": ...}` payload to NOTIFY_WEBHOOK
+          # (Slack incoming webhook OR Teams workflow webhook — both
+          # accept this shape). No-op when NOTIFY_WEBHOOK is unset
+          # (degrade-safe). A non-2xx response is logged via
+          # ::warning:: but never aborts the probe loop — a broken
+          # chat path must not interfere with the Sentry pager path.
+          notify_chat() {
+            local text="$1"
+            if [ -z "$NOTIFY_WEBHOOK" ]; then
+              return 0
+            fi
+            local payload
+            payload=$(jq -nc --arg text "$text" '{text: $text}')
+            local code body
+            code=$(curl -sS -o /tmp/notify_resp -w '%{http_code}' \
+              -X POST -H 'Content-Type: application/json' \
+              --data "$payload" "$NOTIFY_WEBHOOK" || echo "000")
+            body=$(cat /tmp/notify_resp 2>/dev/null || true)
+            if [ "$code" != "200" ] && [ "$code" != "204" ]; then
+              echo "::warning::notify webhook returned HTTP $code (body: $body) — chat heads-up did not reach ${NOTIFY_CHANNEL}; check webhook URL rotation"
+              return 1
+            fi
+            echo "chat heads-up posted to ${NOTIFY_CHANNEL} (HTTP $code)"
+          }
+
           for i in 1 2 3 4 5; do
             echo "::group::iteration $i (UTC $(date -u +%FT%TZ))"
             out=$(pnpm --silent --filter @workspace/api-server run check-healthz-degraded 2>&1)
@@ -222,10 +297,80 @@ jobs:
                   --extra "probe_output=$out" \
                   --extra "exit_code=$code" \
                   --extra "iteration=$i" \
-                  --extra "workflow_run=https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+                  --extra "workflow_run=$run_url" \
                   || echo "::warning::sentry-cli send-event failed (Sentry forwarder error, not the probe itself)"
               else
                 echo "::warning::HEALTHZ_PROBE_SENTRY_DSN not configured; relying on GitHub workflow-failure notification"
+              fi
+              # Chat heads-up on the FIRST paging iteration (exit 2)
+              # in this run. Subsequent paging iterations are silent
+              # in chat — Sentry rolls them up into one issue and
+              # #ops doesn't need 5 copies. exit 1 (probe error, not
+              # a stuck-degraded page) deliberately stays silent on
+              # chat: a probe-host error isn't an api outage and
+              # would only confuse #ops. The GitHub failed-workflow
+              # notification still covers the exit-1 case.
+              if [ "$code" -eq 2 ] && [ "$notified_firing" -eq 0 ]; then
+                # Pull subsystem / streak duration / threshold straight
+                # from the probe's JSON line so the chat post matches
+                # what Sentry's `extra.probe_output` would show. jq
+                # falls through to defaults when the line isn't valid
+                # JSON (e.g. probe printed a stderr error before the
+                # JSON), so a malformed body still produces a useful
+                # post instead of an empty one.
+                subsystem=$(printf '%s' "$out" | jq -r '.subsystem // "unknown"' 2>/dev/null || echo "unknown")
+                if [ -z "$subsystem" ] || [ "$subsystem" = "null" ]; then subsystem="unknown"; fi
+                duration_ms=$(printf '%s' "$out" | jq -r '.durationMs // 0' 2>/dev/null || echo "0")
+                if [ -z "$duration_ms" ] || [ "$duration_ms" = "null" ]; then duration_ms="0"; fi
+                threshold_ms=$(printf '%s' "$out" | jq -r '.thresholdMs // 0' 2>/dev/null || echo "0")
+                if [ -z "$threshold_ms" ] || [ "$threshold_ms" = "null" ] || [ "$threshold_ms" = "0" ]; then
+                  threshold_ms="$HEALTHZ_DEGRADED_ALERT_THRESHOLD_MS"
+                fi
+                text=$(printf '%s\n%s\n%s' \
+                  ":rotating_light: *Healthz stuck-degraded page FIRING* on production (${NOTIFY_CHANNEL}, run \`${GITHUB_RUN_ID}\`)." \
+                  "Subsystem: \`${subsystem}\`, streak duration: \`${duration_ms}ms\` (> threshold \`${threshold_ms}ms\`). On-call has been paged via Sentry — this post is so #ops sees the incident in real time. See runbook: docs/runbooks/rate-limit-store.md (Step 5)." \
+                  "Workflow run: ${run_url}")
+                # Only mark the firing notification as "delivered" when
+                # notify_chat actually succeeded (or no-op'd because the
+                # webhook is unset — that's a config decision, not a
+                # transient failure, so retrying every iteration would
+                # just spam ::warning::s into the log without changing
+                # outcome). On a transient HTTP failure (rotated
+                # webhook URL, Slack/Teams 5xx, runner network blip)
+                # we LEAVE notified_firing=0 so the next paging
+                # iteration in this run gets another chance to deliver
+                # the heads-up. The Sentry pager path is unaffected
+                # either way.
+                if notify_chat "$text"; then
+                  notified_firing=1
+                  firing_iteration=$i
+                else
+                  echo "::warning::firing chat post failed on iteration $i; will retry on the next paging iteration in this run"
+                fi
+              fi
+            else
+              # Recovery heads-up. Only post if a previous iteration
+              # in THIS run paged AND we haven't already posted a
+              # resolved message. Cross-run recovery (this run is
+              # all-green after a previous run paged) is intentionally
+              # NOT posted — Sentry's auto-resolve on the issue is
+              # the source of truth across runs, and posting on every
+              # green run would flood #ops between incidents.
+              if [ "$notified_firing" -eq 1 ] && [ "$notified_resolved" -eq 0 ]; then
+                text=$(printf '%s\n%s\n%s' \
+                  ":white_check_mark: *Healthz stuck-degraded page RESOLVED* on production (${NOTIFY_CHANNEL}, run \`${GITHUB_RUN_ID}\`)." \
+                  "Iteration $i went back to exit 0 after iteration ${firing_iteration} paged. The probe sees the subsystem as healthy again from this run's perspective; confirm via the Sentry issue and \`/healthz\` before fully closing the incident." \
+                  "Workflow run: ${run_url}")
+                # Same retry-on-transient-failure pattern as the firing
+                # post: leave notified_resolved=0 if the chat path was
+                # transiently broken so the next healthy iteration can
+                # try again. (No-op when webhook is unset still counts
+                # as success — see notify_chat above.)
+                if notify_chat "$text"; then
+                  notified_resolved=1
+                else
+                  echo "::warning::resolved chat post failed on iteration $i; will retry on the next healthy iteration in this run"
+                fi
               fi
             fi
             echo "::endgroup::"

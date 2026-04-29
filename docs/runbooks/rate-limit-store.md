@@ -176,7 +176,17 @@ external uptime monitor or in-process timer doing this job.
 | Probe command | `pnpm --filter @workspace/api-server run check-healthz-degraded` (the same CLI you can run locally) |
 | Pager channel | On non-zero exit each iteration calls `sentry-cli send-event --level fatal --tag subsystem:rate_limit --tag alert:rate_limit_store_stuck_degraded --fingerprint rate_limit_store_stuck_degraded`. Sentry's default new-issue rule pages on fatal-level events. The fingerprint groups all five iterations into a single Sentry issue per outage so on-call gets one page, not five. |
 | Page body | The probe's JSON stdout line is forwarded as `extra.probe_output` so on-call sees `state`, `firstFailureAt`, `durationMs`, `thresholdMs`, and the probe's reason without re-curling `/healthz`. The link to the failing GitHub Actions run is forwarded as `extra.workflow_run`. |
+| Real-time chat heads-up | Optional. When `secrets.HEALTHZ_PROBE_NOTIFY_WEBHOOK` is set, the probe loop posts a `:rotating_light: page FIRING on <subsystem> (streak <durationMs> > threshold <thresholdMs>)` message to the configured Slack/Teams webhook on the *first* iteration in a run that exits 2, and a matching `:white_check_mark: page RESOLVED` message on the first subsequent iteration in the same run that returns to exit 0. The Sentry pager path is the canonical alerting channel for on-call; this post exists so #ops sees the incident in real time without waiting for someone to re-broadcast the Sentry issue. Mirrors the rehearsal workflow's chat heads-up so on-call can tell rehearsal blips from real pages by the message text (`REHEARSAL` vs `FIRING/RESOLVED`). Probe-host errors (exit 1) are deliberately *not* posted to chat — they're not api outages and would only confuse #ops; the GitHub failed-workflow-run notification still covers them. |
 | Backstop | Even with `HEALTHZ_PROBE_SENTRY_DSN` unset, the workflow itself exits non-zero on any failing iteration, which triggers the standard GitHub "Failed workflow run" notification to repo watchers. |
+
+#### Interpreting the chat heads-up
+
+| Observation | What it means | What to do |
+| --- | --- | --- |
+| `:rotating_light: page FIRING on <subsystem> (streak <durationMs> > threshold <thresholdMs>)` post in `${HEALTHZ_PROBE_NOTIFY_CHANNEL}` | A real (non-rehearsal) iteration of the per-minute probe just exited 2 — i.e. `<subsystem>` has been in `state=degraded` for longer than the streak threshold and Sentry has been paged for on-call. The chat post is purely informational so #ops sees the incident without waiting for a Sentry re-broadcast. | Confirm on-call has acknowledged the matching `rate_limit_store_stuck_degraded` Sentry issue; coordinate triage in-thread. Walk the rest of this runbook starting at Step 1 for the named subsystem. |
+| `:white_check_mark: page RESOLVED` post in the same thread/channel | A subsequent iteration in the *same* workflow run returned to exit 0 — the probe sees the subsystem as healthy again. This is per-run only; cross-run recovery (this run all-green after a previous run paged) is intentionally silent and Sentry's auto-resolve is the source of truth across runs. | Cross-check `/healthz` and the Sentry issue before fully closing the incident — a subsystem can flap healthy briefly and re-degrade. |
+| `::warning::notify webhook returned HTTP <code>` in the workflow log AND no chat post in `${HEALTHZ_PROBE_NOTIFY_CHANNEL}` while the run still failed via Sentry | The chat path is broken (rotated webhook URL, archived destination channel, Slack/Teams rate-limiting). The Sentry pager is unaffected — on-call still got the page — but #ops won't see the next real outage in real time until the webhook is fixed. Same failure modes as the rehearsal `Notify chat …` steps. | Slack: re-issue the incoming webhook from the app's *Incoming Webhooks* config and update `secrets.HEALTHZ_PROBE_NOTIFY_WEBHOOK`. Teams: rebuild the workflow trigger URL and update the secret. To verify without waiting for a real outage, trigger `Rehearse stuck-degraded page` via `workflow_dispatch:` — its chat path uses the same webhook pattern. |
+| Workflow ran red (Sentry page fired) but no chat post AND no webhook warning | `secrets.HEALTHZ_PROBE_NOTIFY_WEBHOOK` is unset — the chat path is disabled by design. | If you want #ops in the loop, configure the secret per the table above. |
 
 ### Heartbeat — paging when the scheduler itself stops running
 
@@ -258,6 +268,13 @@ Secrets (`secrets.*`):
 | Name | Purpose |
 | --- | --- |
 | `HEALTHZ_PROBE_SENTRY_DSN` | DSN that `sentry-cli send-event` uses to ingest the page event. Usually the same DSN as the api-server's `SENTRY_DSN` so the alert lands in the same project; kept as a separate repo secret so it can be rotated independently of the runtime DSN. |
+| `HEALTHZ_PROBE_NOTIFY_WEBHOOK` | Optional. Slack incoming webhook URL or Teams workflow webhook URL. When set, the probe posts a `:rotating_light: page FIRING` message to chat the first time an iteration in a run exits 2 (page), and a `:white_check_mark: page RESOLVED` message the first time a subsequent iteration in the same run goes back to exit 0. Mirrors the rehearsal workflow's `HEALTHZ_REHEARSAL_NOTIFY_WEBHOOK`. Leave unset to disable the chat heads-up entirely — the Sentry pager path is unaffected. The URL itself is the credential, hence `secret` not `var`. |
+
+Variables (chat heads-up):
+
+| Name | Production value | Purpose |
+| --- | --- | --- |
+| `HEALTHZ_PROBE_NOTIFY_CHANNEL` | `#ops` (default) | Cosmetic channel label included in the chat message and the workflow log so the destination is obvious without inspecting the webhook URL. The actual routing is determined by the webhook URL, not by this value. |
 
 ### Probe exit codes
 
