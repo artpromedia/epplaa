@@ -24,6 +24,12 @@ import {
   pingRateLimitRedis,
   type RateLimitStoreReadyzStatus,
 } from "../middlewares/apiRateLimit";
+import {
+  getDependencyProbeConfigBlock,
+  pingDependency,
+  type DependencyProbeConfigBlock,
+  type DependencyProbeName,
+} from "../lib/dependencyProbes";
 
 const router: IRouter = Router();
 
@@ -172,6 +178,17 @@ export interface ReadyzConfigBlock {
   stubFulfillmentEnabled: StubFulfillmentEnabledStatus;
   rateLimitStore: RateLimitStoreReadyzStatus;
   sentryDsn: SentryDsnStatus;
+  /**
+   * Per-dependency probe configuration (Clerk, Paystack, Flutterwave).
+   * Each entry surfaces `{ enabled, url, timeoutMs }` so an external
+   * dashboard can confirm at a glance which optional probes are wired
+   * on a given replica without grepping env vars on the box. The
+   * actual probe results are reported under the top-level `checks` /
+   * `failures` maps; this block is purely the **config** side, and
+   * — like `productionHostnamePattern` — does not influence the
+   * ready/not_ready decision.
+   */
+  dependencyProbes: DependencyProbeConfigBlock;
 }
 
 export function getReadyzConfigBlock(
@@ -187,6 +204,7 @@ export function getReadyzConfigBlock(
       env,
     ),
     sentryDsn: getSentryDsnStatus(env),
+    dependencyProbes: getDependencyProbeConfigBlock(env),
   };
 }
 
@@ -221,10 +239,19 @@ export function getReadyzConfigBlock(
  * conflate "this one statement failed" with "the pool is unreachable",
  * and the probe is meant to surface the latter.
  *
- * We deliberately do NOT touch the audit chain, Sentry, or external
- * payment gateways here — readiness is "can this replica serve a
- * request at all", not "is every downstream healthy". Coupling readyz
- * to flaky third parties would cause cascading drains.
+ * We deliberately do NOT touch the audit chain or Sentry here —
+ * readiness is "can this replica serve a request at all", not "is
+ * every downstream healthy". Coupling readyz to flaky third parties
+ * would cause cascading drains.
+ *
+ * Optional per-dependency probes (Clerk, Paystack, Flutterwave) ARE
+ * supported but default OFF. They are gated behind explicit opt-in
+ * env flags (`READYZ_PROBE_<NAME>=1`) precisely so an operator must
+ * acknowledge the cascading-drain risk before enabling one. When a
+ * probe is disabled it reports `<name>: "skipped"` and never
+ * contributes to the 503 decision. See
+ * `docs/runbooks/readyz-dependency-probes.md` for the in-incident
+ * disable path and tuning guidance.
  */
 router.get("/readyz", (_req, res) => {
   void (async () => {
@@ -249,6 +276,41 @@ router.get("/readyz", (_req, res) => {
     } else {
       checks.redis = "failed";
       failures.redis = redisResult.error;
+    }
+
+    // Optional per-dependency probes (task #91). Disabled by default;
+    // each is opt-in via `READYZ_PROBE_<NAME>=1`. We run them in
+    // parallel because they're independent network calls and the
+    // platform LB cadence is tight — serialising would compound their
+    // worst-case wait. The result map keeps each probe's response
+    // under its own `checks.<name>` / `failures.<name>` key so the
+    // shape stays uniform with `db` and `redis` above and external
+    // dashboards don't need per-probe parsing branches.
+    //
+    // To disable a flaky probe during an incident, flip its env flag
+    // to anything other than `"1"` (typically `"0"`) and the next
+    // probe will report `<name>: "skipped"` instead of failing
+    // readyz. See `docs/runbooks/readyz-dependency-probes.md`.
+    const probeNames: DependencyProbeName[] = [
+      "clerk",
+      "paystack",
+      "flutterwave",
+    ];
+    const probeResults = await Promise.all(
+      probeNames.map(async (name) => ({
+        name,
+        result: await pingDependency(name),
+      })),
+    );
+    for (const { name, result } of probeResults) {
+      if (result === null) {
+        checks[name] = "skipped";
+      } else if (result.ok) {
+        checks[name] = "ok";
+      } else {
+        checks[name] = "failed";
+        failures[name] = result.error;
+      }
     }
 
     const config = getReadyzConfigBlock();

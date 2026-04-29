@@ -90,7 +90,34 @@ const PRODUCTION_CONFIG_ENV_KEYS = [
   "STUB_FULFILLMENT",
   "RATE_LIMIT_STORE_ALLOW_MEMORY_IN_PRODUCTION",
   "SENTRY_DSN",
+  // Dependency-probe env vars — cleared so the probes default to
+  // disabled in every test that doesn't explicitly opt them in.
+  "READYZ_PROBE_CLERK",
+  "READYZ_CLERK_URL",
+  "READYZ_CLERK_TIMEOUT_MS",
+  "READYZ_PROBE_PAYSTACK",
+  "READYZ_PAYSTACK_URL",
+  "READYZ_PAYSTACK_TIMEOUT_MS",
+  "READYZ_PROBE_FLUTTERWAVE",
+  "READYZ_FLUTTERWAVE_URL",
+  "READYZ_FLUTTERWAVE_TIMEOUT_MS",
 ] as const;
+
+// Reused across the route-level and helper tests so adding a new
+// optional probe doesn't require touching every assertion site.
+const DEFAULT_PROBES_CONFIG = {
+  clerk: { enabled: false, url: "https://api.clerk.com", timeoutMs: 2000 },
+  paystack: {
+    enabled: false,
+    url: "https://api.paystack.co",
+    timeoutMs: 2000,
+  },
+  flutterwave: {
+    enabled: false,
+    url: "https://api.flutterwave.com",
+    timeoutMs: 2000,
+  },
+};
 
 // Default config-block shape on a clean dev/staging env. Every new
 // test assertion either compares against this baseline or overrides
@@ -105,6 +132,7 @@ const DEFAULT_CONFIG_BLOCK = {
   // status helper short-circuits to "redis" regardless of env shape.
   rateLimitStore: "redis",
   sentryDsn: "not_required",
+  dependencyProbes: DEFAULT_PROBES_CONFIG,
 };
 
 function clearProductionConfigEnv(): void {
@@ -313,7 +341,13 @@ describe("GET /readyz (readiness)", () => {
     expect(res.body.status).toBe("ready");
     expect(typeof res.body.replicaId).toBe("string");
     expect(res.body.replicaId.length).toBeGreaterThan(0);
-    expect(res.body.checks).toEqual({ db: "ok", redis: "ok" });
+    expect(res.body.checks).toEqual({
+      db: "ok",
+      redis: "ok",
+      clerk: "skipped",
+      paystack: "skipped",
+      flutterwave: "skipped",
+    });
     expect(res.body.failures).toBeUndefined();
     expect(res.body.rateLimitStore).toBe("redis");
     // The config block is always present (even on a non-production
@@ -321,8 +355,9 @@ describe("GET /readyz (readiness)", () => {
     // assert its shape unconditionally — callers that only care about
     // production deploys filter on the value, not the field's
     // presence. The block now surfaces every high-risk operator-set
-    // setting (task #101); on a clean dev env every status defaults
-    // to a non-paging value so the probe stays silent.
+    // setting (task #101) plus the opt-in dependency-probe config
+    // (task #91); on a clean dev env every status defaults to a
+    // non-paging value so the probe stays silent.
     expect(res.body.config).toEqual(DEFAULT_CONFIG_BLOCK);
   });
 
@@ -332,7 +367,13 @@ describe("GET /readyz (readiness)", () => {
     const res = await request(buildApp()).get("/readyz");
     expect(res.status).toBe(200);
     expect(res.body.status).toBe("ready");
-    expect(res.body.checks).toEqual({ db: "ok", redis: "skipped" });
+    expect(res.body.checks).toEqual({
+      db: "ok",
+      redis: "skipped",
+      clerk: "skipped",
+      paystack: "skipped",
+      flutterwave: "skipped",
+    });
   });
 
   it("returns 503 not_ready with failure detail when DB is unreachable", async () => {
@@ -367,7 +408,13 @@ describe("GET /readyz (readiness)", () => {
     pingRedisMock.mockResolvedValueOnce({ ok: false, error: "redis gone" });
     const res = await request(buildApp()).get("/readyz");
     expect(res.status).toBe(503);
-    expect(res.body.checks).toEqual({ db: "failed", redis: "failed" });
+    expect(res.body.checks).toEqual({
+      db: "failed",
+      redis: "failed",
+      clerk: "skipped",
+      paystack: "skipped",
+      flutterwave: "skipped",
+    });
     expect(res.body.failures).toEqual({
       db: expect.stringContaining("db gone"),
       redis: "redis gone",
@@ -647,6 +694,196 @@ describe("GET /readyz (readiness)", () => {
   });
 });
 
+describe("GET /readyz — optional dependency probes (Clerk / payment gateways)", () => {
+  // The probes default OFF and report `<name>: "skipped"` so a
+  // misbehaving third party can't drain replicas without an explicit
+  // opt-in. These tests pin down the four combinations that matter
+  // operationally:
+  //   1. Default (no flag): "skipped", does NOT fail readyz.
+  //   2. Enabled + reachable: "ok", does NOT fail readyz.
+  //   3. Enabled + network error: "failed", DOES fail readyz (503).
+  //   4. Enabled + timeout: "failed" with the *_timeout_after_*ms
+  //      marker, DOES fail readyz.
+  //
+  // We stub the global `fetch` so the probes never make real network
+  // calls — `pingHttpEndpoint` captures `fetch` lazily at call time
+  // via its default parameter, so a `vi.stubGlobal` per test suffices.
+  const realFetch = globalThis.fetch;
+
+  beforeEach(() => {
+    // Make DB / Redis paths green so the only failure source is the
+    // probe under test.
+    dbExecuteMock.mockResolvedValue({ rows: [] });
+    pingRedisMock.mockResolvedValue({ ok: true });
+  });
+
+  function stubFetch(
+    impl: (input: string | URL, init?: RequestInit) => Promise<Response>,
+  ) {
+    vi.stubGlobal("fetch", vi.fn(impl) as typeof fetch);
+  }
+
+  function restoreFetch() {
+    vi.stubGlobal("fetch", realFetch);
+  }
+
+  it("reports each disabled probe as 'skipped' and stays ready", async () => {
+    // Default test env has none of the READYZ_PROBE_* flags set.
+    const res = await request(buildApp()).get("/readyz");
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe("ready");
+    expect(res.body.checks.clerk).toBe("skipped");
+    expect(res.body.checks.paystack).toBe("skipped");
+    expect(res.body.checks.flutterwave).toBe("skipped");
+  });
+
+  it("reports an enabled-and-reachable probe as 'ok' (any HTTP status counts as reachable)", async () => {
+    process.env.READYZ_PROBE_CLERK = "1";
+    process.env.READYZ_PROBE_PAYSTACK = "1";
+    // 404 is intentionally chosen — the route doesn't care WHICH
+    // status the probe got, only that one came back. A network
+    // round-trip = the gateway is reachable.
+    stubFetch(async () => new Response("not found", { status: 404 }));
+    try {
+      const res = await request(buildApp()).get("/readyz");
+      expect(res.status).toBe(200);
+      expect(res.body.checks.clerk).toBe("ok");
+      expect(res.body.checks.paystack).toBe("ok");
+      expect(res.body.checks.flutterwave).toBe("skipped");
+      expect(res.body.failures).toBeUndefined();
+    } finally {
+      restoreFetch();
+    }
+  });
+
+  it("returns 503 with a per-probe failure detail when the probe's fetch throws (DNS / TCP refused)", async () => {
+    process.env.READYZ_PROBE_CLERK = "1";
+    stubFetch(async () => {
+      throw new Error("getaddrinfo ENOTFOUND api.clerk.com");
+    });
+    try {
+      const res = await request(buildApp()).get("/readyz");
+      expect(res.status).toBe(503);
+      expect(res.body.status).toBe("not_ready");
+      expect(res.body.checks.clerk).toBe("failed");
+      expect(res.body.failures.clerk).toContain("ENOTFOUND");
+    } finally {
+      restoreFetch();
+    }
+  });
+
+  it("translates an AbortError into the http_probe_timeout_after_*ms marker so failures.<name> stays uniform with the redis probe", async () => {
+    process.env.READYZ_PROBE_CLERK = "1";
+    process.env.READYZ_CLERK_TIMEOUT_MS = "25";
+    // Never resolve — the AbortSignal will fire after 25ms and the
+    // probe must translate that into a stable marker string. The
+    // `signal` carries through so we can hook 'abort' and reject
+    // with the same error name `fetch` would.
+    stubFetch(
+      (_input, init?: RequestInit) =>
+        new Promise<Response>((_, reject) => {
+          init?.signal?.addEventListener("abort", () => {
+            const err = new Error("aborted");
+            (err as Error & { name: string }).name = "AbortError";
+            reject(err);
+          });
+        }),
+    );
+    try {
+      const res = await request(buildApp()).get("/readyz");
+      expect(res.status).toBe(503);
+      expect(res.body.checks.clerk).toBe("failed");
+      expect(res.body.failures.clerk).toMatch(/http_probe_timeout_after_\d+ms/);
+    } finally {
+      restoreFetch();
+      delete process.env.READYZ_CLERK_TIMEOUT_MS;
+    }
+  });
+
+  it("treats a non-'1' flag value (e.g. 'true', '0') as disabled — strict matching prevents accidental opt-in via casing drift", async () => {
+    // Same strictness as REPLIT_DEPLOYMENT=1 elsewhere in the boot
+    // sequence so a typo doesn't enable a probe an operator didn't
+    // intend to. We assert by NOT installing a fetch mock — if the
+    // probe were enabled, a real fetch attempt would be made (and
+    // either time out or throw network errors), failing readyz.
+    process.env.READYZ_PROBE_CLERK = "true";
+    process.env.READYZ_PROBE_PAYSTACK = "0";
+    process.env.READYZ_PROBE_FLUTTERWAVE = " 1 ";
+    const res = await request(buildApp()).get("/readyz");
+    expect(res.status).toBe(200);
+    expect(res.body.checks.clerk).toBe("skipped");
+    expect(res.body.checks.paystack).toBe("skipped");
+    expect(res.body.checks.flutterwave).toBe("skipped");
+  });
+
+  it("runs the probes in parallel, not serially, so the worst-case wait is one probe — not the sum", async () => {
+    // Document the parallelism guarantee with a timing-based assertion.
+    // Each probe waits 60ms; if the route serialised them the wall
+    // time would be >180ms; in parallel it should land under ~120ms
+    // even with vitest scheduling jitter.
+    process.env.READYZ_PROBE_CLERK = "1";
+    process.env.READYZ_PROBE_PAYSTACK = "1";
+    process.env.READYZ_PROBE_FLUTTERWAVE = "1";
+    stubFetch(
+      () =>
+        new Promise<Response>((resolve) =>
+          setTimeout(() => resolve(new Response("", { status: 200 })), 60),
+        ),
+    );
+    try {
+      const t0 = Date.now();
+      const res = await request(buildApp()).get("/readyz");
+      const elapsed = Date.now() - t0;
+      expect(res.status).toBe(200);
+      expect(res.body.checks.clerk).toBe("ok");
+      expect(res.body.checks.paystack).toBe("ok");
+      expect(res.body.checks.flutterwave).toBe("ok");
+      expect(elapsed).toBeLessThan(150);
+    } finally {
+      restoreFetch();
+    }
+  });
+
+  it("a probe failure does NOT mask db/redis failures — every failed dependency surfaces under failures.<name>", async () => {
+    process.env.READYZ_PROBE_CLERK = "1";
+    dbExecuteMock.mockReset();
+    dbExecuteMock.mockRejectedValueOnce(new Error("ECONNREFUSED 5432"));
+    pingRedisMock.mockReset();
+    pingRedisMock.mockResolvedValueOnce({ ok: true });
+    stubFetch(async () => {
+      throw new Error("clerk down");
+    });
+    try {
+      const res = await request(buildApp()).get("/readyz");
+      expect(res.status).toBe(503);
+      expect(res.body.checks.db).toBe("failed");
+      expect(res.body.checks.clerk).toBe("failed");
+      expect(res.body.failures.db).toContain("ECONNREFUSED");
+      expect(res.body.failures.clerk).toContain("clerk down");
+    } finally {
+      restoreFetch();
+    }
+  });
+
+  it("uses the URL override from READYZ_<NAME>_URL so an operator can swap in a regional endpoint without a code change", async () => {
+    process.env.READYZ_PROBE_CLERK = "1";
+    process.env.READYZ_CLERK_URL = "https://clerk-eu.example/probe";
+    const fetchMock = vi.fn(
+      async () => new Response("", { status: 200 }),
+    );
+    vi.stubGlobal("fetch", fetchMock as typeof fetch);
+    try {
+      await request(buildApp()).get("/readyz");
+      expect(fetchMock).toHaveBeenCalledWith(
+        "https://clerk-eu.example/probe",
+        expect.objectContaining({ method: "GET" }),
+      );
+    } finally {
+      restoreFetch();
+    }
+  });
+});
+
 describe("getReadyzConfigBlock — pure helper", () => {
   // The pure helper is the source of truth surfaced on /readyz. The
   // route-level tests above exercise the wire shape; these tests pin
@@ -665,6 +902,7 @@ describe("getReadyzConfigBlock — pure helper", () => {
       stubFulfillmentEnabled: "disabled",
       rateLimitStore: "redis",
       sentryDsn: "not_required",
+      dependencyProbes: DEFAULT_PROBES_CONFIG,
     });
   });
 
@@ -688,6 +926,7 @@ describe("getReadyzConfigBlock — pure helper", () => {
       stubFulfillmentEnabled: "enabled_in_production",
       rateLimitStore: "memory_misconfigured",
       sentryDsn: "missing",
+      dependencyProbes: DEFAULT_PROBES_CONFIG,
     });
   });
 
@@ -707,6 +946,7 @@ describe("getReadyzConfigBlock — pure helper", () => {
       stubFulfillmentEnabled: "disabled",
       rateLimitStore: "redis",
       sentryDsn: "configured",
+      dependencyProbes: DEFAULT_PROBES_CONFIG,
     });
   });
 
@@ -741,5 +981,69 @@ describe("getReadyzConfigBlock — pure helper", () => {
         "memory",
       ).rateLimitStore,
     ).toBe("memory_opt_out_acknowledged");
+  });
+
+  it("includes per-probe enabled/url/timeout in dependencyProbes when env flags are set", () => {
+    // Strict matching on "1" — values like "true" / " 1 " stay
+    // disabled. URL and timeout overrides flow through. Only the
+    // dependency-probe sub-block is asserted here so this test is
+    // not coupled to the rest of the config-block shape (which is
+    // already pinned by the composite tests above).
+    expect(
+      getReadyzConfigBlock(
+        {
+          READYZ_PROBE_CLERK: "1",
+          READYZ_CLERK_URL: "https://clerk.example/probe",
+          READYZ_CLERK_TIMEOUT_MS: "1500",
+          READYZ_PROBE_PAYSTACK: "true", // not "1" → stays disabled
+          READYZ_PROBE_FLUTTERWAVE: "1",
+          // No URL/timeout overrides for flutterwave → defaults apply.
+        },
+        "redis",
+      ).dependencyProbes,
+    ).toEqual({
+      clerk: {
+        enabled: true,
+        url: "https://clerk.example/probe",
+        timeoutMs: 1500,
+      },
+      paystack: {
+        enabled: false,
+        url: "https://api.paystack.co",
+        timeoutMs: 2000,
+      },
+      flutterwave: {
+        enabled: true,
+        url: "https://api.flutterwave.com",
+        timeoutMs: 2000,
+      },
+    });
+  });
+
+  it("falls back to the safe default for malformed timeouts and blank URLs", () => {
+    // NaN / zero / negative timeouts would otherwise produce a timer
+    // that fires immediately on every probe — same sanitisation as
+    // READYZ_DB_TIMEOUT_MS. Whitespace-only URL falls back to the
+    // documented default so an operator mis-pasting an env var
+    // doesn't accidentally probe the empty string.
+    const block = getReadyzConfigBlock(
+      {
+        READYZ_PROBE_CLERK: "1",
+        READYZ_CLERK_URL: "   ",
+        READYZ_CLERK_TIMEOUT_MS: "not-a-number",
+        READYZ_PROBE_PAYSTACK: "1",
+        READYZ_PAYSTACK_TIMEOUT_MS: "0",
+        READYZ_PROBE_FLUTTERWAVE: "1",
+        READYZ_FLUTTERWAVE_TIMEOUT_MS: "-5",
+      },
+      "redis",
+    );
+    expect(block.dependencyProbes.clerk).toEqual({
+      enabled: true,
+      url: "https://api.clerk.com",
+      timeoutMs: 2000,
+    });
+    expect(block.dependencyProbes.paystack.timeoutMs).toBe(2000);
+    expect(block.dependencyProbes.flutterwave.timeoutMs).toBe(2000);
   });
 });

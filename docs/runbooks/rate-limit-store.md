@@ -287,6 +287,11 @@ rotation without human intervention.
 > `replicaId` field added to `/healthz` and `/readyz` for exactly
 > this purpose.
 
+Optional per-dependency probes (Clerk, payment gateways) can also be
+enabled and surfaced under the same `checks.<name>` / `failures.<name>`
+shape — see [`readyz-dependency-probes.md`](./readyz-dependency-probes.md)
+for how to enable them and how to disable a flaky one mid-incident.
+
 ```sh
 curl -s "$REPL_API_URL/api/readyz" | jq .
 # Healthy:
