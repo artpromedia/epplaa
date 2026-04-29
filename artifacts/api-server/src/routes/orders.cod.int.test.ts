@@ -97,6 +97,24 @@ d("POST /api/orders — cash-on-delivery pickup dispatches shipment", () => {
     });
   }
 
+  /**
+   * Seed a `users` row for the buyer. The DB-level FK
+   * orders.user_id -> users.clerk_id (added by initMoneyFlowFkConstraints)
+   * rejects POST /orders when the caller's Clerk id has no matching
+   * user row, which previously slipped through in test because the
+   * column was unconstrained. Real production requests can't hit this
+   * path either — they pass through the Clerk webhook that upserts the
+   * user row before the first order — but the unit tests bypass that
+   * flow by stubbing getAuth, so we have to seed the row manually.
+   */
+  async function seedUser(userId: string): Promise<void> {
+    await db.insert(schema.usersTable).values({
+      clerkId: userId,
+      email: `${userId}@example.test`,
+      displayName: "COD test buyer",
+    });
+  }
+
   async function cleanup(): Promise<void> {
     // Box reservations FK-style on order id — wipe first.
     await db.execute(
@@ -126,6 +144,11 @@ d("POST /api/orders — cash-on-delivery pickup dispatches shipment", () => {
     await db.execute(
       sql`DELETE FROM products WHERE id LIKE ${TEST_PRODUCT_PREFIX + "%"};`,
     );
+    // Users last — orders FK into users.clerk_id, so the user row must
+    // outlive every row that references it. Cascade-style delete order.
+    await db.execute(
+      sql`DELETE FROM users WHERE clerk_id LIKE ${TEST_USER_PREFIX + "%"};`,
+    );
   }
 
   beforeAll(async () => {
@@ -146,6 +169,7 @@ d("POST /api/orders — cash-on-delivery pickup dispatches shipment", () => {
   it("creates a shipment + box reservation + timeline event for a COD Box pickup", async () => {
     const userId = makeUserId();
     const productId = makeProductId();
+    await seedUser(userId);
     await insertProduct(productId);
 
     const r = await request(buildApp())
@@ -223,6 +247,7 @@ d("POST /api/orders — cash-on-delivery pickup dispatches shipment", () => {
   it("GET /orders/:id returns the same shipment timeline for a COD pickup", async () => {
     const userId = makeUserId();
     const productId = makeProductId();
+    await seedUser(userId);
     await insertProduct(productId);
 
     const post = await request(buildApp())
@@ -277,6 +302,7 @@ d("POST /api/orders — cash-on-delivery pickup dispatches shipment", () => {
     // is the idempotency boundary tested here.
     const userId = makeUserId();
     const productId = makeProductId();
+    await seedUser(userId);
     await insertProduct(productId);
     const orderId = `EP-COD-${crypto.randomBytes(2).toString("hex").toUpperCase()}`;
 

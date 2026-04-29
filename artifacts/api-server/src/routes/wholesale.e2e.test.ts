@@ -41,11 +41,28 @@ import request from "supertest";
 // `x-test-user-id` header so the requireUserId / requireRole
 // middlewares can be exercised without standing up a real Clerk
 // session. Identical pattern to fulfillment.e2e.test.ts.
+//
+// `factorVerificationAge: [0, 0]` simulates an MFA-verified session
+// (firstFactorAge=0, secondFactorAge=0 minutes — both factors
+// verified just now). `requireRole` calls `hasMfaVerifiedSession`
+// AFTER the role check and 403s with `mfa_required` when the second
+// factor is missing, which would block every admin call this e2e
+// makes. The test's intent is to model a signed-in, MFA-verified
+// admin walking the cross-border wholesale flow, so the mock has to
+// supply both halves of the auth contract — userId AND fva. Without
+// this the test only passes when run as part of a larger suite (where
+// some preceding file's vi.mock state happens to leak into shared
+// vitest module state); in isolation the admin-decide call 403s.
 vi.mock("@clerk/express", () => ({
   getAuth: (req: { headers: Record<string, string | string[] | undefined> }) => {
     const raw = req.headers["x-test-user-id"];
     const userId = typeof raw === "string" && raw.length > 0 ? raw : null;
-    return { userId };
+    const fva: [number, number] = [0, 0];
+    return {
+      userId,
+      factorVerificationAge: fva,
+      sessionClaims: { fva },
+    };
   },
 }));
 

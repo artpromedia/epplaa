@@ -1,8 +1,18 @@
 import { pgTable, text, jsonb, timestamp, integer } from "drizzle-orm/pg-core";
+import { usersTable } from "./users";
 
 export const ordersTable = pgTable("orders", {
   id: text("id").primaryKey(),
-  userId: text("user_id").notNull(),
+  /**
+   * Owning buyer. Real DB-level FK to `users.clerk_id` so an INSERT/UPDATE
+   * referencing a non-existent user fails loudly at write time instead of
+   * surfacing a week later in the backup verifier's anti-join (exit 7).
+   * Users are anonymised-in-place by NDPR `applyErase`, never hard-deleted,
+   * so default `NO ACTION` (≈ restrict) on the FK is the right semantics.
+   */
+  userId: text("user_id")
+    .notNull()
+    .references(() => usersTable.clerkId),
   /**
    * Order lifecycle:
    *   pending_payment → placed → ready_for_pickup | out_for_delivery → delivered

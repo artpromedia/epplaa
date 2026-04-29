@@ -1,4 +1,6 @@
 import { pgTable, text, integer, timestamp, jsonb, boolean, uniqueIndex } from "drizzle-orm/pg-core";
+import { ordersTable } from "./orders";
+import { usersTable } from "./users";
 
 /**
  * Authoritative ledger of money-movement intents. One row per
@@ -6,10 +8,25 @@ import { pgTable, text, integer, timestamp, jsonb, boolean, uniqueIndex } from "
  */
 export const paymentIntentsTable = pgTable("payment_intents", {
   id: text("id").primaryKey(),
-  userId: text("user_id").notNull(),
+  /**
+   * Owning buyer / wallet owner. Real DB-level FK to `users.clerk_id` so a
+   * money-movement intent can never be written for a non-existent user
+   * (the failure mode the backup verifier's anti-join catches as exit 7).
+   * Users are anonymised-in-place by NDPR, never hard-deleted, so default
+   * `NO ACTION` is the right semantics.
+   */
+  userId: text("user_id")
+    .notNull()
+    .references(() => usersTable.clerkId),
   /** "order" (linked to orders.id) or "wallet_topup" (no order). */
   purpose: text("purpose").notNull(),
-  orderId: text("order_id"),
+  /**
+   * Linked order id when `purpose = "order"`, NULL for `"wallet_topup"`.
+   * Real DB-level FK to `orders.id` so an order-linked intent can never
+   * point at a deleted/missing order. Nullable on purpose: wallet top-ups
+   * legitimately have no order to link to.
+   */
+  orderId: text("order_id").references(() => ordersTable.id),
   /** Selected/initial gateway; failover may move it to the other one. */
   gateway: text("gateway").notNull(),
   /** Stable, single-use reference passed to the gateway (also our public id). */

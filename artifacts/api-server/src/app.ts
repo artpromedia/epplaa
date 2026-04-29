@@ -28,6 +28,7 @@ import { startAuditChainVerifier } from "./lib/auditChainVerifier";
 import { initAdminSchema } from "./lib/roles";
 import { initManufacturerSchema } from "./lib/manufacturers";
 import { initSecuritySchema } from "./lib/security";
+import { initMoneyFlowFkConstraints } from "./lib/moneyFlowFk";
 import { initOtel } from "./lib/otel";
 import { refreshFxRates, seedFxRatesIfEmpty } from "./lib/fx";
 import { processDueNdprRequests, requireProcessingNotRestricted } from "./lib/ndpr";
@@ -398,6 +399,18 @@ if (process.env.NODE_ENV !== "test") {
   // of the project. NEVER use a destructive force-push here.
   void initSecuritySchema().catch((err) =>
     logger.error({ err: (err as Error).message }, "security_schema_init_failed"),
+  );
+  // Money-flow FK constraints (Task #105): real DB-level FKs on
+  // orders.user_id, payment_intents.user_id, payment_intents.order_id
+  // so a bad money-movement INSERT/UPDATE rejects at write time
+  // instead of being caught a week later by the backup verifier's
+  // anti-join (`scripts/src/verifyBackup.ts` exit 7). Cleans pre-
+  // existing orphans (detach to NULL where the column allows it,
+  // backfill placeholder users elsewhere) in the same transaction
+  // so the ALTER TABLE doesn't reject. Verifier still runs as
+  // defence in depth.
+  void initMoneyFlowFkConstraints().catch((err) =>
+    logger.error({ err: (err as Error).message }, "money_flow_fk_init_failed"),
   );
   // Retention heartbeat table: per-arm `last_run_at` rows for the
   // daily sweep. Same additive `CREATE TABLE IF NOT EXISTS` pattern

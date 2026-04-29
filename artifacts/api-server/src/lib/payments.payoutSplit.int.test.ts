@@ -79,6 +79,11 @@ d("payments — mixed-seller order payout split", () => {
     await db.execute(
       sql`DELETE FROM sanctions_screenings WHERE user_id LIKE ${TEST_PREFIX + "%"};`,
     );
+    // Users last — orders/payment_intents now FK into users.clerk_id,
+    // so the user row must outlive the rows that reference it.
+    await db.execute(
+      sql`DELETE FROM users WHERE clerk_id LIKE ${TEST_PREFIX + "%"};`,
+    );
   }
 
   beforeAll(async () => {
@@ -190,6 +195,16 @@ d("payments — mixed-seller order payout split", () => {
         // buyer and the assertions below would catch it.
       },
     ]);
+
+    // Seed buyer user. The DB-level FK orders.user_id -> users.clerk_id
+    // (added by initMoneyFlowFkConstraints) requires a real user row
+    // before we can attach an order to `buyerId`. Tests previously got
+    // away with not seeding because the column was unconstrained.
+    await db.insert(schema.usersTable).values({
+      clerkId: buyerId,
+      email: `${buyerId}@example.test`,
+      displayName: "payout split buyer",
+    });
 
     // Seed order: 3 lines totalling 10000 + 5000 + 2500 = 17,500 NGN
     // (unit prices already in kobo via price_minor; qty=1 each).

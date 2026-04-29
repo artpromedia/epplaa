@@ -82,6 +82,11 @@ d("webhooks — concurrent delivery idempotency", () => {
     await db.execute(
       sql`DELETE FROM notifications_outbox WHERE user_id LIKE ${TEST_PREFIX + "%"};`,
     );
+    // Users last — payment_intents now FK into users.clerk_id, so the
+    // user row must outlive the rows that reference it.
+    await db.execute(
+      sql`DELETE FROM users WHERE clerk_id LIKE ${TEST_PREFIX + "%"};`,
+    );
   }
 
   beforeAll(async () => {
@@ -122,6 +127,17 @@ d("webhooks — concurrent delivery idempotency", () => {
     const reference = `${TEST_PREFIX}ref-${rid()}`;
     const N_DELIVERIES = 20;
     const TOPUP_AMOUNT_MINOR = 12_345_00;
+
+    // Seed user. The DB-level FK payment_intents.user_id ->
+    // users.clerk_id (added by initMoneyFlowFkConstraints) requires a
+    // real user row before we can attach an intent to `userId`. Tests
+    // previously got away with not seeding because the column was
+    // unconstrained.
+    await db.insert(schema.usersTable).values({
+      clerkId: userId,
+      email: `${userId}@example.test`,
+      displayName: "webhook concurrency test user",
+    });
 
     // Seed: one processing wallet-topup intent. The webhook handler
     // looks the intent up by `reference`, so reference must match.
