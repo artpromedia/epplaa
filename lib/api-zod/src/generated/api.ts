@@ -1949,6 +1949,185 @@ export const RejectKycVerificationResponse = zod.object({
   ok: zod.boolean(),
 });
 
+/**
+ * @summary Verification detail with attached document metadata.
+ */
+export const GetAdminKycDetailParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const GetAdminKycDetailResponse = zod.object({
+  id: zod.string(),
+  userId: zod.string(),
+  kind: zod.string(),
+  status: zod.string(),
+  targetTier: zod.number(),
+  reviewerNote: zod.string(),
+  reviewedBy: zod.string().nullish(),
+  reviewedAtIso: zod.string().nullish(),
+  submittedAtIso: zod.string().nullish(),
+  createdAtIso: zod.string(),
+  documents: zod.array(
+    zod.object({
+      id: zod.string(),
+      kind: zod.string(),
+      filename: zod.string(),
+      contentType: zod.string(),
+      sizeBytes: zod.number(),
+      sha256: zod.string(),
+      status: zod.string(),
+      createdAtIso: zod.string(),
+    }),
+  ),
+});
+
+/**
+ * @summary Decrypted document blob (base64) for review thumbnail rendering. PII read.
+ */
+export const GetAdminKycDocumentBlobParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const GetAdminKycDocumentBlobResponse = zod.object({
+  id: zod.string(),
+  kind: zod.string(),
+  filename: zod.string(),
+  contentType: zod.string(),
+  sizeBytes: zod.number(),
+  sha256: zod.string(),
+  blobBase64: zod.string(),
+});
+
+/**
+ * @summary List sanctions / PEP screening rows. Filterable by status.
+ */
+export const listAdminSanctionsHitsQueryLimitMax = 200;
+
+export const ListAdminSanctionsHitsQueryParams = zod.object({
+  status: zod
+    .enum(["all", "pending", "flagged", "blocked", "clear"])
+    .optional(),
+  limit: zod.coerce
+    .number()
+    .min(1)
+    .max(listAdminSanctionsHitsQueryLimitMax)
+    .optional(),
+});
+
+export const ListAdminSanctionsHitsResponse = zod.object({
+  items: zod.array(
+    zod.object({
+      id: zod.string(),
+      userId: zod.string(),
+      subjectKind: zod.string(),
+      provider: zod.string(),
+      subjectName: zod.string(),
+      subjectCountry: zod.string(),
+      matchScore: zod.number(),
+      status: zod.string(),
+      note: zod.string(),
+      nextReviewAtIso: zod.string().nullish(),
+      createdAtIso: zod.string(),
+      listHits: zod.array(zod.record(zod.string(), zod.unknown())),
+    }),
+  ),
+  totalCount: zod.number(),
+});
+
+/**
+ * @summary List data-subject requests across all users.
+ */
+export const listAdminNdprRequestsQueryLimitMax = 200;
+
+export const ListAdminNdprRequestsQueryParams = zod.object({
+  kind: zod
+    .enum(["all", "export", "erase", "rectify", "restrict", "portability"])
+    .optional(),
+  status: zod
+    .enum(["all", "pending", "ready", "completed", "cancelled", "failed"])
+    .optional(),
+  limit: zod.coerce
+    .number()
+    .min(1)
+    .max(listAdminNdprRequestsQueryLimitMax)
+    .optional(),
+});
+
+export const ListAdminNdprRequestsResponse = zod.object({
+  items: zod.array(
+    zod.object({
+      id: zod.string(),
+      userId: zod.string(),
+      kind: zod.string(),
+      status: zod.string(),
+      createdAtIso: zod.string(),
+      effectiveAtIso: zod.string().nullish(),
+      completedAtIso: zod.string().nullish(),
+      cancelledAtIso: zod.string().nullish(),
+      failureReason: zod.string().nullish(),
+    }),
+  ),
+  totalCount: zod.number(),
+});
+
+/**
+ * @summary Operator cancels a pending NDPR request (typically a within-grace erase).
+ */
+export const CancelAdminNdprRequestParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const CancelAdminNdprRequestBody = zod.object({
+  note: zod.string().optional(),
+});
+
+export const CancelAdminNdprRequestResponse = zod.object({
+  id: zod.string(),
+  userId: zod.string(),
+  kind: zod.string(),
+  status: zod.string(),
+  createdAtIso: zod.string(),
+  effectiveAtIso: zod.string().nullish(),
+  completedAtIso: zod.string().nullish(),
+  cancelledAtIso: zod.string().nullish(),
+  failureReason: zod.string().nullish(),
+});
+
+/**
+ * @summary Search the append-only audit log by actor, entity, action, or date.
+ */
+export const searchAdminAuditLogQueryLimitMax = 500;
+
+export const SearchAdminAuditLogQueryParams = zod.object({
+  actorId: zod.coerce.string().optional(),
+  entity: zod.coerce.string().optional(),
+  entityId: zod.coerce.string().optional(),
+  action: zod.coerce.string().optional(),
+  piiOnly: zod.coerce.boolean().optional(),
+  sinceIso: zod.coerce.string().optional(),
+  limit: zod.coerce
+    .number()
+    .min(1)
+    .max(searchAdminAuditLogQueryLimitMax)
+    .optional(),
+});
+
+export const SearchAdminAuditLogResponse = zod.object({
+  items: zod.array(
+    zod.object({
+      seq: zod.number(),
+      actorId: zod.string().nullish(),
+      action: zod.string(),
+      entity: zod.string(),
+      entityId: zod.string(),
+      piiRead: zod.boolean(),
+      payload: zod.record(zod.string(), zod.unknown()),
+      createdAtIso: zod.string(),
+    }),
+  ),
+  totalCount: zod.number(),
+});
+
 export const ListNdprRequestsResponseItem = zod.object({
   id: zod.string(),
   kind: zod

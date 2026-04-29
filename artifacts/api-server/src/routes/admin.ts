@@ -2,6 +2,7 @@ import { Router, type IRouter, type Request, type Response, type NextFunction } 
 import { desc, eq } from "drizzle-orm";
 import { db, schema } from "../lib/db";
 import { requireUserId } from "../lib/auth";
+import { requireRole } from "../lib/roles";
 import { runDailyReconciliation } from "../lib/reconciliation";
 import { processDuePayouts } from "../lib/payments";
 import { approveVerification, rejectVerification } from "../lib/kyc";
@@ -9,8 +10,16 @@ import { approveVerification, rejectVerification } from "../lib/kyc";
 const router: IRouter = Router();
 
 /**
- * Admin gate: comma-separated list of Clerk user IDs in EPPLAA_ADMIN_USER_IDS.
- * If empty, no one is admin (production-safe default).
+ * Legacy env-allowlist admin gate. Kept for the finance/recon endpoints
+ * below that have always used it. The KYC review routes have been
+ * migrated to the role-based gate (`requireRole(['admin'])` from
+ * lib/roles) so that role-granted admins (the canonical model used by
+ * the admin console) can act on the KYC queue without also having to
+ * be listed in `EPPLAA_ADMIN_USER_IDS`.
+ *
+ * Operators bootstrapped via `EPPLAA_ADMIN_USER_IDS` are still granted
+ * the `admin` role automatically by `initAdminSchema()` at boot, so
+ * existing env-listed admins keep working through the role gate.
  */
 function getAdminIds(): Set<string> {
   return new Set(
@@ -30,6 +39,8 @@ function requireAdmin(req: Request, res: Response, next: NextFunction): void {
   }
   next();
 }
+
+const ADMIN_ONLY = ["admin"] as const;
 
 router.get("/admin/payment-gateway-health", requireAdmin, async (_req, res) => {
   const rows = await db.select().from(schema.gatewayHealthTable);
@@ -108,7 +119,7 @@ router.get("/admin/payment-intents", requireAdmin, async (_req, res) => {
 // quarterly resweep). Rejection records the reason and emits an audit
 // event. Both actions are guarded by the same admin allow-list above.
 
-router.get("/admin/kyc/pending", requireAdmin, async (_req, res) => {
+router.get("/admin/kyc/pending", requireRole(ADMIN_ONLY), async (_req, res) => {
   const rows = await db
     .select()
     .from(schema.kycVerificationsTable)
@@ -127,7 +138,7 @@ router.get("/admin/kyc/pending", requireAdmin, async (_req, res) => {
   );
 });
 
-router.post("/admin/kyc/:id/approve", requireAdmin, async (req, res) => {
+router.post("/admin/kyc/:id/approve", requireRole(ADMIN_ONLY), async (req, res) => {
   const reviewerId = requireUserId(req, res);
   if (!reviewerId) return;
   const id = String(req.params.id ?? "");
@@ -143,7 +154,7 @@ router.post("/admin/kyc/:id/approve", requireAdmin, async (req, res) => {
   res.json({ ok: true, kycTier: result.kycTier });
 });
 
-router.post("/admin/kyc/:id/reject", requireAdmin, async (req, res) => {
+router.post("/admin/kyc/:id/reject", requireRole(ADMIN_ONLY), async (req, res) => {
   const reviewerId = requireUserId(req, res);
   if (!reviewerId) return;
   const id = String(req.params.id ?? "");

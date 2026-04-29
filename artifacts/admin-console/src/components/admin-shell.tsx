@@ -13,6 +13,11 @@ import {
   TestTube2,
   KeyRound,
   Activity,
+  IdCard,
+  Globe2,
+  FileLock2,
+  ScrollText,
+  AlertTriangle,
 } from "lucide-react";
 import { useAdminMyRoles, useGetMfaStatus } from "@workspace/api-client-react";
 import { RateLimitStoreAlerts } from "@/components/rate-limit-store-alerts";
@@ -24,13 +29,24 @@ interface NavItem {
   label: string;
   icon: typeof LayoutDashboard;
   section?: string;
+  /** Only show this nav entry to users holding one of these roles. Omit = all signed-in operators. */
+  requireRoles?: readonly string[];
 }
+
+// Trust & Safety items are admin-only and must match the API gate in
+// artifacts/api-server/src/routes/adminTrustSafety.ts (ADMIN_ONLY).
+const ADMIN_ONLY_NAV = ["admin"] as const;
 
 const NAV: NavItem[] = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
   { href: "/cases", label: "Cases", icon: Inbox },
   { href: "/disputes", label: "Disputes", icon: Scale },
+  { href: "/kyc", label: "KYC review", icon: IdCard, section: "Trust & Safety", requireRoles: ADMIN_ONLY_NAV },
+  { href: "/sanctions", label: "Sanctions", icon: Globe2, requireRoles: ADMIN_ONLY_NAV },
   { href: "/payouts", label: "Payouts", icon: Wallet },
+  { href: "/payouts?status=blocked", label: "Blocked payouts", icon: AlertTriangle, requireRoles: ADMIN_ONLY_NAV },
+  { href: "/ndpr", label: "NDPR requests", icon: FileLock2, requireRoles: ADMIN_ONLY_NAV },
+  { href: "/audit", label: "Audit log", icon: ScrollText, requireRoles: ADMIN_ONLY_NAV },
   { href: "/takedowns", label: "Takedowns", icon: Ban },
   { href: "/users", label: "Users & roles", icon: Users },
   { href: "/scan", label: "Scan bench", icon: TestTube2 },
@@ -64,13 +80,19 @@ export function AdminShell({ children }: { children: ReactNode }) {
           </div>
         </div>
         <nav className="flex-1 p-2 space-y-0.5">
-          {NAV.map((item, idx) => {
+          {NAV.filter((item) => {
+            if (!item.requireRoles) return true;
+            // Hide role-gated nav until we know the user's roles to avoid
+            // flashing entries that the API would reject anyway.
+            if (rolesQuery.isLoading) return false;
+            return item.requireRoles.some((r) => roles.includes(r));
+          }).map((item, idx, visible) => {
             const active =
               item.href === "/"
                 ? location === "/" || location === ""
                 : location.startsWith(item.href);
             const Icon = item.icon;
-            const prevSection = idx > 0 ? NAV[idx - 1].section : undefined;
+            const prevSection = idx > 0 ? visible[idx - 1].section : undefined;
             const showSection = item.section && item.section !== prevSection;
             return (
               <div key={item.href}>

@@ -1133,6 +1133,107 @@ export interface AdminKycVerification {
   createdAtIso: string;
 }
 
+export interface AdminKycDocument {
+  id: string;
+  kind: string;
+  filename: string;
+  contentType: string;
+  sizeBytes: number;
+  sha256: string;
+  status: string;
+  createdAtIso: string;
+}
+
+export interface AdminKycVerificationDetail {
+  id: string;
+  userId: string;
+  kind: string;
+  status: string;
+  targetTier: number;
+  reviewerNote: string;
+  /** @nullable */
+  reviewedBy?: string | null;
+  /** @nullable */
+  reviewedAtIso?: string | null;
+  /** @nullable */
+  submittedAtIso?: string | null;
+  createdAtIso: string;
+  documents: AdminKycDocument[];
+}
+
+export interface AdminKycDocumentBlob {
+  id: string;
+  kind: string;
+  filename: string;
+  contentType: string;
+  sizeBytes: number;
+  sha256: string;
+  blobBase64: string;
+}
+
+export type AdminSanctionsHitListHitsItem = { [key: string]: unknown };
+
+export interface AdminSanctionsHit {
+  id: string;
+  userId: string;
+  subjectKind: string;
+  provider: string;
+  subjectName: string;
+  subjectCountry: string;
+  matchScore: number;
+  status: string;
+  note: string;
+  /** @nullable */
+  nextReviewAtIso?: string | null;
+  createdAtIso: string;
+  listHits: AdminSanctionsHitListHitsItem[];
+}
+
+export interface AdminSanctionsPage {
+  items: AdminSanctionsHit[];
+  totalCount: number;
+}
+
+export interface AdminNdprRow {
+  id: string;
+  userId: string;
+  kind: string;
+  status: string;
+  createdAtIso: string;
+  /** @nullable */
+  effectiveAtIso?: string | null;
+  /** @nullable */
+  completedAtIso?: string | null;
+  /** @nullable */
+  cancelledAtIso?: string | null;
+  /** @nullable */
+  failureReason?: string | null;
+}
+
+export interface AdminNdprPage {
+  items: AdminNdprRow[];
+  totalCount: number;
+}
+
+export type AdminAuditEventPayload = { [key: string]: unknown };
+
+export interface AdminAuditEvent {
+  seq: number;
+  /** @nullable */
+  actorId?: string | null;
+  action: string;
+  entity: string;
+  entityId: string;
+  piiRead: boolean;
+  payload: AdminAuditEventPayload;
+  createdAtIso: string;
+}
+
+export interface AdminAuditPage {
+  items: AdminAuditEvent[];
+  totalCount: number;
+}
+
 export type NdprRequestBundlePayload = null | { [key: string]: unknown };
 
 export type NdprRequestRequestBody = null | { [key: string]: unknown };
@@ -1713,6 +1814,81 @@ export type ApproveKycVerificationBody = {
 
 export type RejectKycVerificationBody = {
   reason: string;
+};
+
+export type ListAdminSanctionsHitsParams = {
+  status?: ListAdminSanctionsHitsStatus;
+  /**
+   * @minimum 1
+   * @maximum 200
+   */
+  limit?: number;
+};
+
+export type ListAdminSanctionsHitsStatus =
+  (typeof ListAdminSanctionsHitsStatus)[keyof typeof ListAdminSanctionsHitsStatus];
+
+export const ListAdminSanctionsHitsStatus = {
+  all: "all",
+  pending: "pending",
+  flagged: "flagged",
+  blocked: "blocked",
+  clear: "clear",
+} as const;
+
+export type ListAdminNdprRequestsParams = {
+  kind?: ListAdminNdprRequestsKind;
+  status?: ListAdminNdprRequestsStatus;
+  /**
+   * @minimum 1
+   * @maximum 200
+   */
+  limit?: number;
+};
+
+export type ListAdminNdprRequestsKind =
+  (typeof ListAdminNdprRequestsKind)[keyof typeof ListAdminNdprRequestsKind];
+
+export const ListAdminNdprRequestsKind = {
+  all: "all",
+  export: "export",
+  erase: "erase",
+  rectify: "rectify",
+  restrict: "restrict",
+  portability: "portability",
+} as const;
+
+export type ListAdminNdprRequestsStatus =
+  (typeof ListAdminNdprRequestsStatus)[keyof typeof ListAdminNdprRequestsStatus];
+
+export const ListAdminNdprRequestsStatus = {
+  all: "all",
+  pending: "pending",
+  ready: "ready",
+  completed: "completed",
+  cancelled: "cancelled",
+  failed: "failed",
+} as const;
+
+export type CancelAdminNdprRequestBody = {
+  note?: string;
+};
+
+export type SearchAdminAuditLogParams = {
+  actorId?: string;
+  entity?: string;
+  entityId?: string;
+  /**
+   * Exact action verb or prefix (e.g. ndpr.* matches ndpr.export.requested).
+   */
+  action?: string;
+  piiOnly?: boolean;
+  sinceIso?: string;
+  /**
+   * @minimum 1
+   * @maximum 500
+   */
+  limit?: number;
 };
 
 export type RequestNdprRectifyBodyPatch = { [key: string]: unknown };

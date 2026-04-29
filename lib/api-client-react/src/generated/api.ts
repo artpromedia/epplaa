@@ -24,6 +24,7 @@ import type {
   AddStreamReactionBody,
   AddressVerification,
   AdminAssignCaseBody,
+  AdminAuditPage,
   AdminClawbackPayoutBody,
   AdminCreateTakedownBody,
   AdminDashboard,
@@ -31,14 +32,19 @@ import type {
   AdminDecideDisputeBody,
   AdminGrantUserRoleBody,
   AdminHoldPayoutBody,
+  AdminKycDocumentBlob,
   AdminKycVerification,
+  AdminKycVerificationDetail,
   AdminListCasesParams,
   AdminListDisputesParams,
   AdminListPayoutsParams,
   AdminListTakedownsParams,
+  AdminNdprPage,
+  AdminNdprRow,
   AdminReleasePayoutBody,
   AdminRunDuePayouts200,
   AdminRunReconciliation200,
+  AdminSanctionsPage,
   AdminScanTextBody,
   AdminTransitionCaseBody,
   ApiError,
@@ -50,6 +56,7 @@ import type {
   BlockedSeller,
   BoxUnlockBody,
   BoxUnlockResponse,
+  CancelAdminNdprRequestBody,
   Cart,
   CartItemUpsertBody,
   CasePage,
@@ -80,6 +87,8 @@ import type {
   GoLiveResponse,
   HealthStatus,
   KycStatus,
+  ListAdminNdprRequestsParams,
+  ListAdminSanctionsHitsParams,
   ListFulfillmentLocationsParams,
   ListProductsParams,
   ListRecentStreamReactions200,
@@ -135,6 +144,7 @@ import type {
   ReturnRecord,
   Review,
   SafetyReport,
+  SearchAdminAuditLogParams,
   SearchProductsParams,
   SearchProductsResponse,
   SearchProviderInfo,
@@ -10093,6 +10103,594 @@ export const useRejectKycVerification = <
 > => {
   return useMutation(getRejectKycVerificationMutationOptions(options));
 };
+
+/**
+ * @summary Verification detail with attached document metadata.
+ */
+export const getGetAdminKycDetailUrl = (id: string) => {
+  return `/api/admin/kyc/${id}`;
+};
+
+export const getAdminKycDetail = async (
+  id: string,
+  options?: RequestInit,
+): Promise<AdminKycVerificationDetail> => {
+  return customFetch<AdminKycVerificationDetail>(getGetAdminKycDetailUrl(id), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetAdminKycDetailQueryKey = (id: string) => {
+  return [`/api/admin/kyc/${id}`] as const;
+};
+
+export const getGetAdminKycDetailQueryOptions = <
+  TData = Awaited<ReturnType<typeof getAdminKycDetail>>,
+  TError = ErrorType<
+    UnauthorizedResponse | ForbiddenResponse | NotFoundResponse
+  >,
+>(
+  id: string,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getAdminKycDetail>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetAdminKycDetailQueryKey(id);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getAdminKycDetail>>
+  > = ({ signal }) => getAdminKycDetail(id, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: !!id,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getAdminKycDetail>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetAdminKycDetailQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getAdminKycDetail>>
+>;
+export type GetAdminKycDetailQueryError = ErrorType<
+  UnauthorizedResponse | ForbiddenResponse | NotFoundResponse
+>;
+
+/**
+ * @summary Verification detail with attached document metadata.
+ */
+
+export function useGetAdminKycDetail<
+  TData = Awaited<ReturnType<typeof getAdminKycDetail>>,
+  TError = ErrorType<
+    UnauthorizedResponse | ForbiddenResponse | NotFoundResponse
+  >,
+>(
+  id: string,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getAdminKycDetail>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetAdminKycDetailQueryOptions(id, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Decrypted document blob (base64) for review thumbnail rendering. PII read.
+ */
+export const getGetAdminKycDocumentBlobUrl = (id: string) => {
+  return `/api/admin/kyc/documents/${id}`;
+};
+
+export const getAdminKycDocumentBlob = async (
+  id: string,
+  options?: RequestInit,
+): Promise<AdminKycDocumentBlob> => {
+  return customFetch<AdminKycDocumentBlob>(getGetAdminKycDocumentBlobUrl(id), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetAdminKycDocumentBlobQueryKey = (id: string) => {
+  return [`/api/admin/kyc/documents/${id}`] as const;
+};
+
+export const getGetAdminKycDocumentBlobQueryOptions = <
+  TData = Awaited<ReturnType<typeof getAdminKycDocumentBlob>>,
+  TError = ErrorType<
+    UnauthorizedResponse | ForbiddenResponse | NotFoundResponse
+  >,
+>(
+  id: string,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getAdminKycDocumentBlob>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getGetAdminKycDocumentBlobQueryKey(id);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getAdminKycDocumentBlob>>
+  > = ({ signal }) =>
+    getAdminKycDocumentBlob(id, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: !!id,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getAdminKycDocumentBlob>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetAdminKycDocumentBlobQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getAdminKycDocumentBlob>>
+>;
+export type GetAdminKycDocumentBlobQueryError = ErrorType<
+  UnauthorizedResponse | ForbiddenResponse | NotFoundResponse
+>;
+
+/**
+ * @summary Decrypted document blob (base64) for review thumbnail rendering. PII read.
+ */
+
+export function useGetAdminKycDocumentBlob<
+  TData = Awaited<ReturnType<typeof getAdminKycDocumentBlob>>,
+  TError = ErrorType<
+    UnauthorizedResponse | ForbiddenResponse | NotFoundResponse
+  >,
+>(
+  id: string,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getAdminKycDocumentBlob>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetAdminKycDocumentBlobQueryOptions(id, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary List sanctions / PEP screening rows. Filterable by status.
+ */
+export const getListAdminSanctionsHitsUrl = (
+  params?: ListAdminSanctionsHitsParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : value.toString());
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/api/admin/sanctions?${stringifiedParams}`
+    : `/api/admin/sanctions`;
+};
+
+export const listAdminSanctionsHits = async (
+  params?: ListAdminSanctionsHitsParams,
+  options?: RequestInit,
+): Promise<AdminSanctionsPage> => {
+  return customFetch<AdminSanctionsPage>(getListAdminSanctionsHitsUrl(params), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getListAdminSanctionsHitsQueryKey = (
+  params?: ListAdminSanctionsHitsParams,
+) => {
+  return [`/api/admin/sanctions`, ...(params ? [params] : [])] as const;
+};
+
+export const getListAdminSanctionsHitsQueryOptions = <
+  TData = Awaited<ReturnType<typeof listAdminSanctionsHits>>,
+  TError = ErrorType<UnauthorizedResponse | ForbiddenResponse>,
+>(
+  params?: ListAdminSanctionsHitsParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof listAdminSanctionsHits>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getListAdminSanctionsHitsQueryKey(params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof listAdminSanctionsHits>>
+  > = ({ signal }) =>
+    listAdminSanctionsHits(params, { signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof listAdminSanctionsHits>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type ListAdminSanctionsHitsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listAdminSanctionsHits>>
+>;
+export type ListAdminSanctionsHitsQueryError = ErrorType<
+  UnauthorizedResponse | ForbiddenResponse
+>;
+
+/**
+ * @summary List sanctions / PEP screening rows. Filterable by status.
+ */
+
+export function useListAdminSanctionsHits<
+  TData = Awaited<ReturnType<typeof listAdminSanctionsHits>>,
+  TError = ErrorType<UnauthorizedResponse | ForbiddenResponse>,
+>(
+  params?: ListAdminSanctionsHitsParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof listAdminSanctionsHits>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getListAdminSanctionsHitsQueryOptions(params, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary List data-subject requests across all users.
+ */
+export const getListAdminNdprRequestsUrl = (
+  params?: ListAdminNdprRequestsParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : value.toString());
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/api/admin/ndpr/requests?${stringifiedParams}`
+    : `/api/admin/ndpr/requests`;
+};
+
+export const listAdminNdprRequests = async (
+  params?: ListAdminNdprRequestsParams,
+  options?: RequestInit,
+): Promise<AdminNdprPage> => {
+  return customFetch<AdminNdprPage>(getListAdminNdprRequestsUrl(params), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getListAdminNdprRequestsQueryKey = (
+  params?: ListAdminNdprRequestsParams,
+) => {
+  return [`/api/admin/ndpr/requests`, ...(params ? [params] : [])] as const;
+};
+
+export const getListAdminNdprRequestsQueryOptions = <
+  TData = Awaited<ReturnType<typeof listAdminNdprRequests>>,
+  TError = ErrorType<UnauthorizedResponse | ForbiddenResponse>,
+>(
+  params?: ListAdminNdprRequestsParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof listAdminNdprRequests>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getListAdminNdprRequestsQueryKey(params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof listAdminNdprRequests>>
+  > = ({ signal }) =>
+    listAdminNdprRequests(params, { signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof listAdminNdprRequests>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type ListAdminNdprRequestsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listAdminNdprRequests>>
+>;
+export type ListAdminNdprRequestsQueryError = ErrorType<
+  UnauthorizedResponse | ForbiddenResponse
+>;
+
+/**
+ * @summary List data-subject requests across all users.
+ */
+
+export function useListAdminNdprRequests<
+  TData = Awaited<ReturnType<typeof listAdminNdprRequests>>,
+  TError = ErrorType<UnauthorizedResponse | ForbiddenResponse>,
+>(
+  params?: ListAdminNdprRequestsParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof listAdminNdprRequests>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getListAdminNdprRequestsQueryOptions(params, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Operator cancels a pending NDPR request (typically a within-grace erase).
+ */
+export const getCancelAdminNdprRequestUrl = (id: string) => {
+  return `/api/admin/ndpr/requests/${id}/cancel`;
+};
+
+export const cancelAdminNdprRequest = async (
+  id: string,
+  cancelAdminNdprRequestBody?: CancelAdminNdprRequestBody,
+  options?: RequestInit,
+): Promise<AdminNdprRow> => {
+  return customFetch<AdminNdprRow>(getCancelAdminNdprRequestUrl(id), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(cancelAdminNdprRequestBody),
+  });
+};
+
+export const getCancelAdminNdprRequestMutationOptions = <
+  TError = ErrorType<
+    UnauthorizedResponse | ForbiddenResponse | NotFoundResponse | ApiError
+  >,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof cancelAdminNdprRequest>>,
+    TError,
+    { id: string; data: BodyType<CancelAdminNdprRequestBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof cancelAdminNdprRequest>>,
+  TError,
+  { id: string; data: BodyType<CancelAdminNdprRequestBody> },
+  TContext
+> => {
+  const mutationKey = ["cancelAdminNdprRequest"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof cancelAdminNdprRequest>>,
+    { id: string; data: BodyType<CancelAdminNdprRequestBody> }
+  > = (props) => {
+    const { id, data } = props ?? {};
+
+    return cancelAdminNdprRequest(id, data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type CancelAdminNdprRequestMutationResult = NonNullable<
+  Awaited<ReturnType<typeof cancelAdminNdprRequest>>
+>;
+export type CancelAdminNdprRequestMutationBody =
+  BodyType<CancelAdminNdprRequestBody>;
+export type CancelAdminNdprRequestMutationError = ErrorType<
+  UnauthorizedResponse | ForbiddenResponse | NotFoundResponse | ApiError
+>;
+
+/**
+ * @summary Operator cancels a pending NDPR request (typically a within-grace erase).
+ */
+export const useCancelAdminNdprRequest = <
+  TError = ErrorType<
+    UnauthorizedResponse | ForbiddenResponse | NotFoundResponse | ApiError
+  >,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof cancelAdminNdprRequest>>,
+    TError,
+    { id: string; data: BodyType<CancelAdminNdprRequestBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof cancelAdminNdprRequest>>,
+  TError,
+  { id: string; data: BodyType<CancelAdminNdprRequestBody> },
+  TContext
+> => {
+  return useMutation(getCancelAdminNdprRequestMutationOptions(options));
+};
+
+/**
+ * @summary Search the append-only audit log by actor, entity, action, or date.
+ */
+export const getSearchAdminAuditLogUrl = (
+  params?: SearchAdminAuditLogParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : value.toString());
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/api/admin/audit?${stringifiedParams}`
+    : `/api/admin/audit`;
+};
+
+export const searchAdminAuditLog = async (
+  params?: SearchAdminAuditLogParams,
+  options?: RequestInit,
+): Promise<AdminAuditPage> => {
+  return customFetch<AdminAuditPage>(getSearchAdminAuditLogUrl(params), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getSearchAdminAuditLogQueryKey = (
+  params?: SearchAdminAuditLogParams,
+) => {
+  return [`/api/admin/audit`, ...(params ? [params] : [])] as const;
+};
+
+export const getSearchAdminAuditLogQueryOptions = <
+  TData = Awaited<ReturnType<typeof searchAdminAuditLog>>,
+  TError = ErrorType<UnauthorizedResponse | ForbiddenResponse>,
+>(
+  params?: SearchAdminAuditLogParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof searchAdminAuditLog>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getSearchAdminAuditLogQueryKey(params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof searchAdminAuditLog>>
+  > = ({ signal }) =>
+    searchAdminAuditLog(params, { signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof searchAdminAuditLog>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type SearchAdminAuditLogQueryResult = NonNullable<
+  Awaited<ReturnType<typeof searchAdminAuditLog>>
+>;
+export type SearchAdminAuditLogQueryError = ErrorType<
+  UnauthorizedResponse | ForbiddenResponse
+>;
+
+/**
+ * @summary Search the append-only audit log by actor, entity, action, or date.
+ */
+
+export function useSearchAdminAuditLog<
+  TData = Awaited<ReturnType<typeof searchAdminAuditLog>>,
+  TError = ErrorType<UnauthorizedResponse | ForbiddenResponse>,
+>(
+  params?: SearchAdminAuditLogParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof searchAdminAuditLog>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getSearchAdminAuditLogQueryOptions(params, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
 
 export const getListNdprRequestsUrl = () => {
   return `/api/ndpr/requests`;

@@ -1713,6 +1713,162 @@ paths:
         "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Ok" } } } }
         "400": { $ref: "#/components/responses/BadRequest" }
         "403": { $ref: "#/components/responses/Forbidden" }
+  /admin/kyc/{id}:
+    get:
+      operationId: getAdminKycDetail
+      tags: [admin]
+      summary: Verification detail with attached document metadata.
+      parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AdminKycVerificationDetail" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /admin/kyc/documents/{id}:
+    get:
+      operationId: getAdminKycDocumentBlob
+      tags: [admin]
+      summary: Decrypted document blob (base64) for review thumbnail rendering. PII read.
+      parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AdminKycDocumentBlob" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  # ---- Sanctions / PEP screening review queue --------------------------
+  /admin/sanctions:
+    get:
+      operationId: listAdminSanctionsHits
+      tags: [admin]
+      summary: List sanctions / PEP screening rows. Filterable by status.
+      parameters:
+        - in: query
+          name: status
+          required: false
+          schema:
+            type: string
+            enum: [all, pending, flagged, blocked, clear]
+        - in: query
+          name: limit
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 200 }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AdminSanctionsPage" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  # ---- NDPR data-subject request review queue (admin) ------------------
+  /admin/ndpr/requests:
+    get:
+      operationId: listAdminNdprRequests
+      tags: [admin]
+      summary: List data-subject requests across all users.
+      parameters:
+        - in: query
+          name: kind
+          required: false
+          schema:
+            type: string
+            enum: [all, export, erase, rectify, restrict, portability]
+        - in: query
+          name: status
+          required: false
+          schema:
+            type: string
+            enum: [all, pending, ready, completed, cancelled, failed]
+        - in: query
+          name: limit
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 200 }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AdminNdprPage" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /admin/ndpr/requests/{id}/cancel:
+    post:
+      operationId: cancelAdminNdprRequest
+      tags: [admin]
+      summary: Operator cancels a pending NDPR request (typically a within-grace erase).
+      parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                note: { type: string }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AdminNdprRow" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { description: Not cancellable, content: { application/json: { schema: { $ref: "#/components/schemas/ApiError" } } } }
+
+  # ---- Audit log search (admin) ----------------------------------------
+  /admin/audit:
+    get:
+      operationId: searchAdminAuditLog
+      tags: [admin]
+      summary: Search the append-only audit log by actor, entity, action, or date.
+      parameters:
+        - in: query
+          name: actorId
+          required: false
+          schema: { type: string }
+        - in: query
+          name: entity
+          required: false
+          schema: { type: string }
+        - in: query
+          name: entityId
+          required: false
+          schema: { type: string }
+        - in: query
+          name: action
+          required: false
+          schema: { type: string, description: "Exact action verb or prefix (e.g. ndpr.* matches ndpr.export.requested)." }
+        - in: query
+          name: piiOnly
+          required: false
+          schema: { type: boolean }
+        - in: query
+          name: sinceIso
+          required: false
+          schema: { type: string }
+        - in: query
+          name: limit
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 500 }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AdminAuditPage" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
 
   # ---- NDPR ------------------------------------------------------------
   # Nigeria Data Protection Regulation — data-subject rights. All write
@@ -3303,6 +3459,117 @@ components:
         status: { type: string }
         submittedAtIso: { type: ["string", "null"] }
         createdAtIso: { type: string }
+    AdminKycDocument:
+      type: object
+      required: [id, kind, filename, contentType, sizeBytes, sha256, status, createdAtIso]
+      properties:
+        id: { type: string }
+        kind: { type: string }
+        filename: { type: string }
+        contentType: { type: string }
+        sizeBytes: { type: integer }
+        sha256: { type: string }
+        status: { type: string }
+        createdAtIso: { type: string }
+    AdminKycVerificationDetail:
+      type: object
+      required: [id, userId, kind, status, targetTier, reviewerNote, documents, createdAtIso]
+      properties:
+        id: { type: string }
+        userId: { type: string }
+        kind: { type: string }
+        status: { type: string }
+        targetTier: { type: integer }
+        reviewerNote: { type: string }
+        reviewedBy: { type: ["string", "null"] }
+        reviewedAtIso: { type: ["string", "null"] }
+        submittedAtIso: { type: ["string", "null"] }
+        createdAtIso: { type: string }
+        documents:
+          type: array
+          items: { $ref: "#/components/schemas/AdminKycDocument" }
+    AdminKycDocumentBlob:
+      type: object
+      required: [id, kind, filename, contentType, sizeBytes, sha256, blobBase64]
+      properties:
+        id: { type: string }
+        kind: { type: string }
+        filename: { type: string }
+        contentType: { type: string }
+        sizeBytes: { type: integer }
+        sha256: { type: string }
+        blobBase64: { type: string }
+    AdminSanctionsHit:
+      type: object
+      required: [id, userId, subjectKind, provider, subjectName, subjectCountry, matchScore, status, listHits, note, createdAtIso]
+      properties:
+        id: { type: string }
+        userId: { type: string }
+        subjectKind: { type: string }
+        provider: { type: string }
+        subjectName: { type: string }
+        subjectCountry: { type: string }
+        matchScore: { type: integer }
+        status: { type: string }
+        note: { type: string }
+        nextReviewAtIso: { type: ["string", "null"] }
+        createdAtIso: { type: string }
+        listHits:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+    AdminSanctionsPage:
+      type: object
+      required: [items, totalCount]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/AdminSanctionsHit" }
+        totalCount: { type: integer }
+    AdminNdprRow:
+      type: object
+      required: [id, userId, kind, status, createdAtIso]
+      properties:
+        id: { type: string }
+        userId: { type: string }
+        kind: { type: string }
+        status: { type: string }
+        createdAtIso: { type: string }
+        effectiveAtIso: { type: ["string", "null"] }
+        completedAtIso: { type: ["string", "null"] }
+        cancelledAtIso: { type: ["string", "null"] }
+        failureReason: { type: ["string", "null"] }
+    AdminNdprPage:
+      type: object
+      required: [items, totalCount]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/AdminNdprRow" }
+        totalCount: { type: integer }
+    AdminAuditEvent:
+      type: object
+      required: [seq, action, entity, entityId, piiRead, payload, createdAtIso]
+      properties:
+        seq: { type: integer }
+        actorId: { type: ["string", "null"] }
+        action: { type: string }
+        entity: { type: string }
+        entityId: { type: string }
+        piiRead: { type: boolean }
+        payload:
+          type: object
+          additionalProperties: true
+        createdAtIso: { type: string }
+    AdminAuditPage:
+      type: object
+      required: [items, totalCount]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/AdminAuditEvent" }
+        totalCount: { type: integer }
 
     NdprRequest:
       type: object

@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { useSearch } from "wouter";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   useAdminListPayouts,
@@ -115,7 +116,19 @@ function HistoryDialog({ payoutId }: { payoutId: string }) {
 }
 
 export default function PayoutsPage() {
-  const [status, setStatus] = useState<string>("all");
+  const search = useSearch();
+  const initialStatus = (() => {
+    const urlStatus = new URLSearchParams(search).get("status");
+    return urlStatus && STATUSES.includes(urlStatus) ? urlStatus : "all";
+  })();
+  const [status, setStatus] = useState<string>(initialStatus);
+  useEffect(() => {
+    const urlStatus = new URLSearchParams(search).get("status");
+    if (urlStatus && STATUSES.includes(urlStatus) && urlStatus !== status) {
+      setStatus(urlStatus);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [search]);
   const params = status === "all" ? undefined : { status };
   const qc = useQueryClient();
   const { data, isLoading, error } = useAdminListPayouts(params, {

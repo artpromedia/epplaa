@@ -22,6 +22,13 @@ import UsersPage from "@/pages/users";
 import ScanBenchPage from "@/pages/scan-bench";
 import SecurityPage from "@/pages/security";
 import StatusPage from "@/pages/status";
+import KycPage from "@/pages/kyc";
+import SanctionsPage from "@/pages/sanctions";
+import NdprPage from "@/pages/ndpr";
+import AuditPage from "@/pages/audit";
+import { RequireRoles } from "@/components/require-roles";
+
+const ADMIN_ONLY = ["admin"] as const;
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -91,7 +98,27 @@ function Router() {
             <Route path="/cases" component={CasesPage} />
             <Route path="/cases/:id" component={CaseDetailPage} />
             <Route path="/disputes" component={DisputesPage} />
+            <Route path="/kyc">
+              <RequireRoles roles={ADMIN_ONLY}>
+                <KycPage />
+              </RequireRoles>
+            </Route>
+            <Route path="/sanctions">
+              <RequireRoles roles={ADMIN_ONLY}>
+                <SanctionsPage />
+              </RequireRoles>
+            </Route>
             <Route path="/payouts" component={PayoutsPage} />
+            <Route path="/ndpr">
+              <RequireRoles roles={ADMIN_ONLY}>
+                <NdprPage />
+              </RequireRoles>
+            </Route>
+            <Route path="/audit">
+              <RequireRoles roles={ADMIN_ONLY}>
+                <AuditPage />
+              </RequireRoles>
+            </Route>
             <Route path="/takedowns" component={TakedownsPage} />
             <Route path="/users" component={UsersPage} />
             <Route path="/scan" component={ScanBenchPage} />
