@@ -624,6 +624,109 @@ d("mfa db integration", () => {
     expect(stamped.rows[0]!.sent_at).not.toBeNull();
   });
 
+  it("verifyTotpAndActivate inlines IP / browser / device into the activation email body when context is supplied", async () => {
+    // Forensic-detail tripwire: a seller who looks at the "Two-factor
+    // sign-in is now on" email should be able to spot a takeover that
+    // enrolled an authenticator from a place / browser / device they've
+    // never used. This locks in (a) the route-supplied context being
+    // plumbed end-to-end into the outbox payload, and (b) the
+    // human-readable "Where this happened" section actually carrying
+    // the parsed browser + device + raw IP. A regression that dropped
+    // the context arg, or that stopped including the IP / UA in the
+    // body, would fail here long before a real seller noticed.
+    const userId = makeUserId();
+    const setup = await mfa.setupTotp(userId, `${userId}@example.com`);
+    authenticator.options = { window: 1, step: 30 };
+    const ok = await mfa.verifyTotpAndActivate(
+      userId,
+      authenticator.generate(setup.secret),
+      {
+        ipAddress: "198.51.100.7",
+        userAgent:
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+          "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+        geoCity: "Lagos",
+        geoCountry: "NG",
+        occurredAt: new Date("2026-04-29T13:32:00.000Z"),
+      },
+    );
+    expect(ok).toBe(true);
+
+    const rows = await db.execute<{
+      channel: string;
+      payload: Record<string, unknown>;
+    }>(sql`
+      SELECT channel, payload
+        FROM notifications_outbox
+       WHERE user_id = ${userId} AND event_type = 'mfa_activated';
+    `);
+    expect(rows.rows).toHaveLength(1);
+    // Force-routed through email so a user who muted the email channel
+    // can't silence a security tripwire.
+    expect(rows.rows[0]!.channel).toBe("email");
+    const payload = rows.rows[0]!.payload as Record<string, unknown>;
+    const body = String(payload.body);
+    expect(body).toContain("Where this happened");
+    expect(body).toContain("198.51.100.7");
+    expect(body).toContain("Browser: Chrome");
+    expect(body).toContain("Device: Windows");
+    expect(body).toContain("Lagos, NG");
+    // Timestamp is rendered in the seller's timezone, not raw ISO. The
+    // user has no notification_prefs row, so the country-code default
+    // (NG → Africa/Lagos) kicks in and 13:32 UTC becomes 14:32.
+    expect(body).toMatch(/14:32 \(Africa\/Lagos\)/);
+    // Forensic fields also surface as structured payload keys so the
+    // worker / future template builders can render them without
+    // re-parsing the body string.
+    expect(payload.ipAddress).toBe("198.51.100.7");
+    expect(String(payload.userAgent)).toContain("Chrome/126");
+    expect(payload.geoCity).toBe("Lagos");
+    expect(payload.geoCountry).toBe("NG");
+    expect(typeof payload.occurredAt).toBe("string");
+    expect(payload.timezone).toBe("Africa/Lagos");
+  });
+
+  it("verifyTotpAndActivate degrades to 'details unavailable' when no context is supplied (still sends)", async () => {
+    // Lib-level callers (background jobs, internal admin tools, unit
+    // tests) may not have a meaningful request to attribute the
+    // activation to. The email MUST still ship — silently dropping
+    // the security alert because the system couldn't attribute it
+    // would be the worst possible failure mode — but the body
+    // should explicitly say "details unavailable" so the recipient
+    // knows the context wasn't merely omitted from the template,
+    // it was unknown to the system.
+    const userId = makeUserId();
+    const setup = await mfa.setupTotp(userId, `${userId}@example.com`);
+    authenticator.options = { window: 1, step: 30 };
+    const ok = await mfa.verifyTotpAndActivate(
+      userId,
+      authenticator.generate(setup.secret),
+    );
+    expect(ok).toBe(true);
+
+    const rows = await db.execute<{
+      channel: string;
+      payload: Record<string, unknown>;
+    }>(sql`
+      SELECT channel, payload
+        FROM notifications_outbox
+       WHERE user_id = ${userId} AND event_type = 'mfa_activated';
+    `);
+    expect(rows.rows).toHaveLength(1);
+    expect(rows.rows[0]!.channel).toBe("email");
+    const payload = rows.rows[0]!.payload as Record<string, unknown>;
+    const body = String(payload.body);
+    expect(body).toContain("details unavailable");
+    // No half-blank Browser/Device/IP lines — only the single
+    // graceful-degradation line.
+    expect(body).not.toContain("Browser:");
+    expect(body).not.toContain("IP:");
+    // Title/intro/closing copy is unchanged so existing inbox filters
+    // / search ("two-factor sign-in") keep working.
+    expect(String(payload.title)).toMatch(/two-factor/i);
+    expect(body).toMatch(/backup codes/i);
+  });
+
   it("verifyTotpAndActivate does NOT re-send the confirmation when a user re-enrols on the same device", async () => {
     const userId = makeUserId();
     // First enrolment + activate — sends one confirmation email.
@@ -719,6 +822,50 @@ d("mfa db integration", () => {
       expect(String(p.url)).toBe("/account/security");
       expect(String(p.title)).toMatch(/refreshed/i);
     }
+  });
+
+  it("regenerateBackupCodes degrades to 'details unavailable' when no context is supplied (still sends)", async () => {
+    // Mirror of the activation-side degradation test: a programmatic
+    // caller (or a future internal job that rotates codes for a
+    // service account) won't have a request to harvest IP / UA from.
+    // We must still send the security alert — losing the email would
+    // leave a seller blind to a code rotation — and the body must
+    // explicitly say "details unavailable" rather than rendering a
+    // half-blank "Where this happened" block with empty IP / Browser
+    // lines, which would look like a broken template.
+    const userId = makeUserId();
+    const setup = await mfa.setupTotp(userId, `${userId}@example.com`);
+    authenticator.options = { window: 1, step: 30 };
+    await mfa.verifyTotpAndActivate(
+      userId,
+      authenticator.generate(setup.secret),
+    );
+
+    // No context arg here — exercises the degradation path.
+    const result = await mfa.regenerateBackupCodes(userId);
+    expect(result).not.toBeNull();
+
+    const rows = await db.execute<{
+      channel: string;
+      payload: Record<string, unknown>;
+    }>(sql`
+      SELECT channel, payload
+        FROM notifications_outbox
+       WHERE user_id = ${userId}
+         AND event_type = 'mfa_backup_codes_regenerated';
+    `);
+    expect(rows.rows).toHaveLength(1);
+    expect(rows.rows[0]!.channel).toBe("email");
+    const payload = rows.rows[0]!.payload as Record<string, unknown>;
+    const body = String(payload.body);
+    expect(body).toContain("details unavailable");
+    // No half-blank lines: the formatter must not have emitted a
+    // bare "IP: " or "Browser: " when there was nothing to show.
+    expect(body).not.toMatch(/\nIP:\s*\n/);
+    expect(body).not.toMatch(/\nBrowser:\s*\n/);
+    // Title should fall back to the no-context "refreshed" wording
+    // that pre-existed this work — locks in the existing convention.
+    expect(String(payload.title)).toMatch(/refreshed/i);
   });
 
   it("regenerateBackupCodes returns null and enqueues nothing when the user has no active enrolment", async () => {

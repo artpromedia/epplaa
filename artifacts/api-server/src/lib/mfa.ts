@@ -6,6 +6,11 @@ import { db } from "./db";
 import { toDateOrNull } from "./dbTimestamps";
 import { newSafeId } from "./ids";
 import { logger } from "./logger";
+import {
+  formatWhereThisHappenedSection,
+  loadUserTimezone,
+  type MfaSecurityContext,
+} from "./mfaSecurityContext";
 import { detectNonHostnameProductionSignals } from "./productionSignals";
 
 /**
@@ -212,9 +217,27 @@ export async function setupTotp(
   return { enrollmentId: id, secret, otpauthUrl, qrCodeDataUrl, backupCodes };
 }
 
+/**
+ * Optional request-side context for the activation confirmation
+ * email. The route layer captures IP / user-agent / occurredAt
+ * (and, when available, geo lookup) and passes them through so the
+ * email carries forensic detail — "Where this happened: Lagos, NG
+ * from Chrome on Windows at 14:32 (Africa/Lagos)" — letting a seller
+ * spot a takeover that enrolled their authenticator from a place
+ * they've never been.
+ *
+ * Aliased to the shared `MfaSecurityContext` so the activation and
+ * regenerate flows speak the same language. Lib-level callers
+ * (background jobs, internal admin tools, unit tests) may omit it,
+ * in which case the email degrades to a "details unavailable" line
+ * but still ships.
+ */
+export type MfaActivationContext = MfaSecurityContext;
+
 export async function verifyTotpAndActivate(
   userId: string,
   code: string,
+  context?: MfaActivationContext,
 ): Promise<boolean> {
   const row = await db.execute<{ secret_encrypted: string; status: string }>(sql`
     SELECT secret_encrypted, status FROM mfa_enrollments
@@ -235,7 +258,7 @@ export async function verifyTotpAndActivate(
     WHERE user_id = ${userId} AND kind = 'totp';
   `);
   await recordChallenge(userId, "totp");
-  await sendActivationConfirmationIfFirst(userId);
+  await sendActivationConfirmationIfFirst(userId, context);
   return true;
 }
 
@@ -258,7 +281,10 @@ export async function verifyTotpAndActivate(
  * a guarantee. A dedicated marker makes the dedup intent explicit and
  * survives any future change to how `enrolled_at` is maintained.
  */
-async function sendActivationConfirmationIfFirst(userId: string): Promise<void> {
+async function sendActivationConfirmationIfFirst(
+  userId: string,
+  context?: MfaActivationContext,
+): Promise<void> {
   const claimed = await db.execute<{ id: string }>(sql`
     UPDATE mfa_enrollments
     SET activation_email_sent_at = now(),
@@ -272,19 +298,41 @@ async function sendActivationConfirmationIfFirst(userId: string): Promise<void> 
   if (claimed.rows.length === 0) return;
   const { enqueueNotification } = await import("./notifications");
   try {
+    // Resolve the seller's preferred timezone once so the timestamp
+    // in the body matches the timezone they see everywhere else in
+    // the product (notification prefs / order updates).
+    const tz = await loadUserTimezone(userId);
+    const occurredAt = context?.occurredAt ?? new Date();
+    const where = formatWhereThisHappenedSection(
+      context ? { ...context, occurredAt } : undefined,
+      tz,
+    );
+    const intro =
+      "You've enabled an authenticator app for two-factor sign-in. " +
+      "Make sure you've stored your backup codes somewhere safe — " +
+      "you'll need them if you ever lose access to your authenticator.";
+    const closing =
+      "If this wasn't you, change your password and contact support right away.";
+    const body = `${intro}\n\n${where}\n\n${closing}`;
     await enqueueNotification({
       userId,
       eventType: "mfa_activated",
       payload: {
         title: "Two-factor sign-in is now on for your account",
-        body:
-          "You've enabled an authenticator app for two-factor sign-in. " +
-          "Make sure you've stored your backup codes somewhere safe — " +
-          "you'll need them if you ever lose access to your authenticator. " +
-          "If this wasn't you, change your password and contact support " +
-          "right away.",
+        body,
         url: "/account/security",
+        ipAddress: context?.ipAddress ?? "",
+        userAgent: context?.userAgent ?? "",
+        geoCity: context?.geoCity ?? "",
+        geoCountry: context?.geoCountry ?? "",
+        occurredAt: occurredAt.toISOString(),
+        timezone: tz,
       },
+      // Force email so a seller who muted the email channel cannot
+      // silence the very alert that warns of a silent enrolment by
+      // an attacker. Same forced-channel pattern OTP delivery and
+      // backup-code regeneration use.
+      forcedChannels: [{ channel: "email", to: "*" }],
     });
   } catch (err) {
     logger.warn(
@@ -382,11 +430,7 @@ export async function consumeBackupCode(
  * user who muted email cannot silence the very alert that warns of a
  * silent takeover.
  */
-export interface RegenerateBackupCodesContext {
-  ipAddress?: string;
-  userAgent?: string;
-  occurredAt?: Date;
-}
+export type RegenerateBackupCodesContext = MfaSecurityContext;
 
 export async function regenerateBackupCodes(
   userId: string,
@@ -413,25 +457,33 @@ export async function regenerateBackupCodes(
   try {
     const { enqueueNotification } = await import("./notifications");
     if (context) {
-      const isoTimestamp = (context.occurredAt ?? new Date()).toISOString();
+      const occurredAt = context.occurredAt ?? new Date();
       const ipAddress = context.ipAddress ?? "";
       const userAgent = context.userAgent ?? "";
+      const tz = await loadUserTimezone(userId);
+      const where = formatWhereThisHappenedSection(
+        { ...context, occurredAt },
+        tz,
+      );
+      const intro =
+        "A fresh set of two-factor backup codes was just generated for your account. " +
+        "Your previous codes no longer work.";
+      const closing =
+        "If this was you, no action is needed — keep the new codes somewhere safe. " +
+        "If it wasn't, sign in immediately, change your password, and review your sessions.";
       await enqueueNotification({
         userId,
         eventType: "mfa_backup_codes_regenerated",
         payload: {
           title: "Your MFA backup codes were regenerated",
-          body:
-            "A fresh set of two-factor backup codes was just generated for your account. " +
-            `When: ${isoTimestamp}. ` +
-            `IP: ${ipAddress || "unknown"}. ` +
-            `Device: ${userAgent || "unknown"}. ` +
-            "If this was you, no action is needed — keep the new codes somewhere safe. " +
-            "If it wasn't, sign in immediately, change your password, and review your sessions.",
+          body: `${intro}\n\n${where}\n\n${closing}`,
           url: "/account/security",
           ipAddress,
           userAgent,
-          occurredAt: isoTimestamp,
+          geoCity: context.geoCity ?? "",
+          geoCountry: context.geoCountry ?? "",
+          occurredAt: occurredAt.toISOString(),
+          timezone: tz,
         },
         // Force the email channel: this is a security tripwire, not a
         // marketing notification, and a user who muted email entirely
@@ -442,17 +494,24 @@ export async function regenerateBackupCodes(
         forcedChannels: [{ channel: "email", to: "*" }],
       });
     } else {
+      // Lib-level / background callers without request context — keep
+      // the original generic copy so the email still ships, with an
+      // explicit "details unavailable" line so the recipient knows the
+      // forensic detail wasn't dropped, just unknown to the system.
+      const tz = await loadUserTimezone(userId);
+      const where = formatWhereThisHappenedSection(undefined, tz);
+      const intro =
+        "A fresh set of backup codes was generated for your account. " +
+        "Your previous codes no longer work. Save the new sheet somewhere " +
+        "safe — you'll need it if you ever lose access to your authenticator.";
+      const closing =
+        "If this wasn't you, change your password and contact support right away.";
       await enqueueNotification({
         userId,
         eventType: "mfa_backup_codes_regenerated",
         payload: {
           title: "Your MFA backup codes were just refreshed",
-          body:
-            "A fresh set of backup codes was generated for your account. " +
-            "Your previous codes no longer work. Save the new sheet somewhere " +
-            "safe — you'll need it if you ever lose access to your " +
-            "authenticator. If this wasn't you, change your password and " +
-            "contact support right away.",
+          body: `${intro}\n\n${where}\n\n${closing}`,
           url: "/account/security",
         },
       });

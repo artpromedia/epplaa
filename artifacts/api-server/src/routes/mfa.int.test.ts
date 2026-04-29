@@ -308,6 +308,66 @@ d("MFA router HTTP endpoints", () => {
       expect(status.recentlyAsserted).toBe(true);
     });
 
+    it("plumbs IP / user-agent into the activation confirmation email body", async () => {
+      // End-to-end proof that the route handler captures request-side
+      // forensic context and hands it to `verifyTotpAndActivate`. A
+      // regression that dropped the third arg, mistyped the header
+      // name, or stopped honouring `X-Forwarded-For` would slip past
+      // the lib unit test (which calls verifyTotpAndActivate directly)
+      // and only surface when a real seller couldn't see the location
+      // of the enrolment in their inbox. We assert on the outbox
+      // payload because that's the durable surface — by the time the
+      // user sees the email, the route handler has long since returned.
+      const userId = makeUserId();
+      const setup = await mfa.setupTotp(userId, `${userId}@example.com`);
+      authenticator.options = { window: 1, step: 30 };
+      const code = authenticator.generate(setup.secret);
+
+      const r = await request(buildApp())
+        .post("/api/mfa/totp/verify")
+        .set("x-test-user-id", userId)
+        // Real-world `X-Forwarded-For` has the original client first
+        // and the proxy hop second. The route helper must take the
+        // leftmost entry, not `req.socket.remoteAddress`.
+        .set("x-forwarded-for", "203.0.113.99, 10.0.0.1")
+        .set(
+          "user-agent",
+          "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) " +
+            "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 " +
+            "Mobile/15E148 Safari/604.1",
+        )
+        .send({ code });
+      expect(r.status).toBe(200);
+
+      // The route's call to `enqueueNotification` is awaited inline
+      // (no fire-and-forget here) so by the time the response is back
+      // the outbox row exists. No polling needed.
+      const rows = await db.execute<{
+        channel: string;
+        payload: Record<string, unknown>;
+      }>(sql`
+        SELECT channel, payload
+          FROM notifications_outbox
+         WHERE user_id = ${userId} AND event_type = 'mfa_activated';
+      `);
+      expect(rows.rows).toHaveLength(1);
+      expect(rows.rows[0]!.channel).toBe("email");
+      const payload = rows.rows[0]!.payload as Record<string, unknown>;
+      const body = String(payload.body);
+      expect(body).toContain("203.0.113.99");
+      expect(body).toContain("Browser: Safari");
+      expect(body).toContain("Device: iPhone");
+      // Structured payload keys carry the same context for the worker.
+      expect(payload.ipAddress).toBe("203.0.113.99");
+      expect(String(payload.userAgent)).toContain("iPhone");
+      // Geo is not resolved at the route layer yet (separate task) so
+      // the location lines degrade gracefully — no half-blank "city, "
+      // strings that would confuse a seller scanning the email.
+      expect(payload.geoCity).toBe("");
+      expect(payload.geoCountry).toBe("");
+      expect(body).toContain("Approximate location: unavailable");
+    });
+
     it("strips whitespace inside the code before validating (SPA may paste '123 456')", async () => {
       const userId = makeUserId();
       const setup = await mfa.setupTotp(userId, `${userId}@example.com`);

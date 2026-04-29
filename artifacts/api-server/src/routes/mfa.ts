@@ -159,10 +159,25 @@ router.post("/mfa/totp/verify", verifyMfaRateLimit, async (req: Request, res: Re
     res.status(400).json({ error: "invalid_code", detail: "Enter the 6-digit code from your app." });
     return;
   }
-  const ok =
-    body.mode === "assert"
-      ? await verifyTotpAssertion(userId, code)
-      : await verifyTotpAndActivate(userId, code);
+  let ok: boolean;
+  if (body.mode === "assert") {
+    ok = await verifyTotpAssertion(userId, code);
+  } else {
+    // Capture network context BEFORE activation so the lib can inline
+    // IP / browser / device into the activation confirmation email.
+    // A seller looking at "Two-factor sign-in is now on for your
+    // account" should be able to spot a takeover that enrolled an
+    // authenticator from a place they've never been (e.g. "I'm in
+    // Lagos but the email says enrolment happened from Nairobi").
+    // Geo lookup is intentionally NOT done here — when a geo-IP
+    // resolver is wired in (separate task) it can be plumbed via
+    // the same context object without touching the lib signature.
+    ok = await verifyTotpAndActivate(userId, code, {
+      ipAddress: clientIpFromRequest(req),
+      userAgent: (req.get("user-agent") ?? "").slice(0, 256),
+      occurredAt: new Date(),
+    });
+  }
   if (!ok) {
     res.status(401).json({ error: "code_rejected", detail: "Code did not match. Try again." });
     return;
