@@ -248,3 +248,128 @@ export function getProductionHostnamePatternStatus(
   if (raw && raw.trim() !== "") return "configured";
   return "missing";
 }
+
+/**
+ * Tri-state status of `HEALTHZ_REHEARSAL_ENABLED` configuration.
+ *
+ * The rehearsal injector (`/api/_rehearsal/*`) is staging-only — when
+ * `HEALTHZ_REHEARSAL_ENABLED=1` is observed alongside any production
+ * signal, the boot-time `assertRehearsalKillSwitchSafe` already
+ * crash-loops the deploy. This status surfaces the *configuration*
+ * itself on `/readyz` so an external probe can page on-call when the
+ * dangerous combination is observed even before the next restart
+ * (and so the post-deploy gate can verify "is this config sane?"
+ * without waiting for the boot guard to bite).
+ *
+ * Values:
+ *   - `"disabled"` — env var unset / not literal `"1"`. The injector
+ *     route returns 404 in this state (via the runtime gate in
+ *     `routes/healthzRehearsal.ts`); safe regardless of deploy shape.
+ *   - `"enabled_non_production"` — `=1` on a non-production deploy.
+ *     This is the intended state for staging — the rehearsal workflow
+ *     deliberately flips the flag on staging so the GitHub Action can
+ *     exercise the stuck-degraded probe end-to-end.
+ *   - `"enabled_in_production"` — `=1` AND a production signal is
+ *     lit. This is the dangerous combination; on-call must see this
+ *     even though the boot guard would have already failed the
+ *     deploy. A live read of /readyz catches the case where the env
+ *     var was rotated post-boot via the platform UI without a
+ *     restart.
+ *
+ * Pure function — takes `env` so the probe can be unit-tested
+ * without poisoning `process.env`.
+ */
+export type RehearsalInjectorEnabledStatus =
+  | "disabled"
+  | "enabled_non_production"
+  | "enabled_in_production";
+
+export function getRehearsalInjectorEnabledStatus(
+  env: NodeJS.ProcessEnv,
+): RehearsalInjectorEnabledStatus {
+  if (env.HEALTHZ_REHEARSAL_ENABLED !== "1") return "disabled";
+  const productionSignals = detectNonHostnameProductionSignals(env);
+  if (productionSignals.length === 0) return "enabled_non_production";
+  return "enabled_in_production";
+}
+
+/**
+ * Tri-state status of `STUB_FULFILLMENT` configuration.
+ *
+ * `STUB_FULFILLMENT=1` is the explicit escape hatch in
+ * `lib/fulfillment/{gig,shipbubble,okhi}.ts` that allows the carrier
+ * stub fallback to substitute synthetic quotes / labels / address
+ * verifications when the real provider call fails. On a production
+ * deploy with real credentials configured, that fallback would
+ * silently charge buyers against shipments that don't exist (GIG /
+ * Shipbubble) or pass an unverified address through the home-
+ * delivery confidence gate (OkHi).
+ *
+ * Task #83 hardened the carriers to refuse the stub fallback in
+ * production regardless of the env var, so the runtime impact is
+ * already mitigated. This status surfaces the *misconfiguration
+ * itself* — a staging→prod env-var copy-paste that left
+ * `STUB_FULFILLMENT=1` set — so on-call sees the warning quickly
+ * even though the runtime defence held.
+ *
+ * Values:
+ *   - `"disabled"` — env var unset / not literal `"1"`. Carriers use
+ *     the real provider path; safe regardless of deploy shape.
+ *   - `"enabled_non_production"` — `=1` on a non-production deploy.
+ *     This is the intended state for dev/CI where stub responses
+ *     keep tests offline.
+ *   - `"enabled_in_production"` — `=1` AND a production signal is
+ *     lit. The runtime guard refuses the fallback, but the env var
+ *     itself is wrong and should be unset on the next deploy. Page
+ *     on-call so the misconfiguration is investigated rather than
+ *     left as latent risk.
+ */
+export type StubFulfillmentEnabledStatus =
+  | "disabled"
+  | "enabled_non_production"
+  | "enabled_in_production";
+
+export function getStubFulfillmentEnabledStatus(
+  env: NodeJS.ProcessEnv,
+): StubFulfillmentEnabledStatus {
+  if (env.STUB_FULFILLMENT !== "1") return "disabled";
+  const productionSignals = detectNonHostnameProductionSignals(env);
+  if (productionSignals.length === 0) return "enabled_non_production";
+  return "enabled_in_production";
+}
+
+/**
+ * Tri-state status of `SENTRY_DSN` configuration.
+ *
+ * `lib/sentry.ts` `initSentryServer()` installs a no-op shim when
+ * `SENTRY_DSN` is unset — every `captureException` / `captureMessage`
+ * silently drops on the floor. On a production deploy that's the
+ * exact misconfiguration that turns "we paged on this last week"
+ * into "nobody knew it happened": the rate-limit Redis breach event
+ * (`rate_limit_redis_failure_threshold_breached`), the audit-chain
+ * verification failure event, and every other Sentry-routed alert
+ * silently no-ops. The other production-signal-aware checks already
+ * page on this state via `/readyz`; surfacing it here is consistent
+ * with the rest of the config block.
+ *
+ * Values:
+ *   - `"configured"` — `SENTRY_DSN` is set to a non-empty value.
+ *     Healthy regardless of deploy shape (dev / staging / production
+ *     all benefit from the alerting layer).
+ *   - `"not_required"` — env var unset on a non-production deploy.
+ *     Dev/CI/preview environments don't need Sentry wired up; the
+ *     `sentry_disabled_no_dsn` info-log on boot is the only signal
+ *     and that's intentional.
+ *   - `"missing"` — env var unset on a production-shaped deploy. The
+ *     observability layer is silently disabled — page on-call so the
+ *     deploy gets the DSN restored before the next real incident.
+ */
+export type SentryDsnStatus = "configured" | "not_required" | "missing";
+
+export function getSentryDsnStatus(env: NodeJS.ProcessEnv): SentryDsnStatus {
+  const raw = env.SENTRY_DSN;
+  if (raw && raw.trim() !== "") return "configured";
+  const productionSignals = detectNonHostnameProductionSignals(env);
+  if (productionSignals.length === 0) return "not_required";
+  return "missing";
+}

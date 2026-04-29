@@ -20,6 +20,7 @@ import {
   __test__,
   assertRateLimitStoreConfiguredForProduction,
   getRateLimitStoreKind,
+  getRateLimitStoreReadyzStatus,
   getRateLimitStoreStatus,
   pingRateLimitRedis,
 } from "./apiRateLimit";
@@ -1050,5 +1051,114 @@ describe("assertRateLimitStoreConfiguredForProduction — production rate-limit 
       const runtimePicksRedis = runtimeKind === "redis";
       expect(guardOk, `value=${JSON.stringify(value)}`).toBe(runtimePicksRedis);
     }
+  });
+});
+
+describe("getRateLimitStoreReadyzStatus — /readyz config block (Task #101)", () => {
+  // Helper companion to the boot-time guard
+  // `assertRateLimitStoreConfiguredForProduction`: this is the
+  // runtime equivalent surfaced on /readyz so an external probe
+  // (`scripts/checkReadyzConfig.ts`) can page on-call when the
+  // running replica's rate-limit store is in a dangerous state.
+  // The boot guard already crash-loops the dangerous combination on
+  // a clean restart, but a hot env-var rotation, a platform-side
+  // env-var change without restart, or an emergency rollback that
+  // skipped the boot guard can still leave a running replica with
+  // memory bucket on production. The helper closes that gap.
+  //
+  // The helper is pure: callers pass the runtime store kind (so
+  // tests don't need to spin up a singleton bucket store) plus an
+  // explicit env (so tests don't poison `process.env`).
+
+  it("returns 'redis' whenever the running store is redis, regardless of deploy shape", () => {
+    expect(getRateLimitStoreReadyzStatus("redis", {})).toBe("redis");
+    expect(
+      getRateLimitStoreReadyzStatus("redis", { NODE_ENV: "production" }),
+    ).toBe("redis");
+    expect(
+      getRateLimitStoreReadyzStatus("redis", {
+        NODE_ENV: "production",
+        RATE_LIMIT_STORE_ALLOW_MEMORY_IN_PRODUCTION: "1",
+      }),
+    ).toBe("redis");
+  });
+
+  it("returns 'memory_not_required' on a non-production deploy with memory bucket (the intended dev/staging state)", () => {
+    expect(getRateLimitStoreReadyzStatus("memory", {})).toBe(
+      "memory_not_required",
+    );
+    expect(
+      getRateLimitStoreReadyzStatus("memory", { NODE_ENV: "staging" }),
+    ).toBe("memory_not_required");
+  });
+
+  it("returns 'memory_misconfigured' for every non-hostname production signal — the page condition", () => {
+    // Each signal independently triggers the page state. This
+    // mirrors the boot guard's signal sensitivity so a probe that
+    // only checked NODE_ENV would NOT silently exempt a Replit-
+    // platform-marked production deploy whose NODE_ENV is unset.
+    for (const env of [
+      { NODE_ENV: "production" },
+      { REPLIT_DEPLOYMENT: "1" },
+      { DEPLOYMENT_ENVIRONMENT: "production" },
+    ]) {
+      expect(
+        getRateLimitStoreReadyzStatus("memory", env),
+        `env=${JSON.stringify(env)}`,
+      ).toBe("memory_misconfigured");
+    }
+  });
+
+  it("returns 'memory_opt_out_acknowledged' when the operator explicitly opts memory-in-production on", () => {
+    // Single-replica production canaries (internal tools, single-
+    // replica staging-mirroring-prod environments) opt into the in-
+    // process bucket via RATE_LIMIT_STORE_ALLOW_MEMORY_IN_PRODUCTION=1.
+    // The probe must distinguish this warn-level state from the
+    // page-on-call misconfigured state: opt-out is intentional and
+    // shouldn't fire the page. Mirrors the boot-guard's warn-vs-
+    // error distinction.
+    expect(
+      getRateLimitStoreReadyzStatus("memory", {
+        NODE_ENV: "production",
+        RATE_LIMIT_STORE_ALLOW_MEMORY_IN_PRODUCTION: "1",
+      }),
+    ).toBe("memory_opt_out_acknowledged");
+    expect(
+      getRateLimitStoreReadyzStatus("memory", {
+        REPLIT_DEPLOYMENT: "1",
+        RATE_LIMIT_STORE_ALLOW_MEMORY_IN_PRODUCTION: "1",
+      }),
+    ).toBe("memory_opt_out_acknowledged");
+  });
+
+  it("only treats a literal '1' as opt-out — typo'd values still page (matches boot-guard predicate)", () => {
+    // A typo'd opt-out value would silently leave the deploy in the
+    // misconfigured state at boot AND silently mask the page here.
+    // Match the strict-equality check the boot guard uses so the
+    // two layers stay in lockstep.
+    for (const v of ["true", "yes", "on", " 1", "1\n", ""]) {
+      expect(
+        getRateLimitStoreReadyzStatus("memory", {
+          NODE_ENV: "production",
+          RATE_LIMIT_STORE_ALLOW_MEMORY_IN_PRODUCTION: v,
+        }),
+        `value=${JSON.stringify(v)}`,
+      ).toBe("memory_misconfigured");
+    }
+  });
+
+  it("ignores the hostname production signal (intentional — the hostname signal is for the rehearsal-injector backstop, not for rate-limit store decisions)", () => {
+    // A staging deploy whose HOSTNAME happens to match the
+    // PRODUCTION_HOSTNAME_PATTERN should NOT be paged on for the
+    // rate-limit store decision — the hostname signal is scoped to
+    // the rehearsal-injector backstop. Matching the boot guard's
+    // signal selection keeps the runtime probe consistent with
+    // boot-time behaviour.
+    expect(
+      getRateLimitStoreReadyzStatus("memory", {
+        HOSTNAME: "api.epplaa.com",
+        PRODUCTION_HOSTNAME_PATTERN: "^api\\.epplaa\\.com$",
+      }),
+    ).toBe("memory_not_required");
   });
 });

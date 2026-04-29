@@ -4,13 +4,21 @@ import { db } from "../lib/db";
 import { logger } from "../lib/logger";
 import {
   getProductionHostnamePatternStatus,
+  getRehearsalInjectorEnabledStatus,
+  getSentryDsnStatus,
+  getStubFulfillmentEnabledStatus,
   type ProductionHostnamePatternStatus,
+  type RehearsalInjectorEnabledStatus,
+  type SentryDsnStatus,
+  type StubFulfillmentEnabledStatus,
 } from "../lib/productionSignals";
 import { dbHealthWatcher, type SubsystemSnapshot } from "../lib/subsystemHealth";
 import {
   getRateLimitStoreKind,
+  getRateLimitStoreReadyzStatus,
   getRateLimitStoreStatus,
   pingRateLimitRedis,
+  type RateLimitStoreReadyzStatus,
 } from "../middlewares/apiRateLimit";
 
 const router: IRouter = Router();
@@ -102,26 +110,60 @@ function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
  * warning rather than crash-loop.
  *
  * Instead, we surface the status here so an external probe (see
+ * `scripts/checkReadyzConfig.ts`, the generalised successor to
  * `scripts/checkProductionHostnamePattern.ts`) can poll the deploy
- * post-deploy / on a schedule and page on-call when the value is
- * `"missing"`. The probe runs out-of-band of normal request handling
- * so a paged warning never affects user traffic, while making the
- * misconfiguration visible within minutes of the next deploy.
+ * post-deploy / on a schedule and page on-call when any operator-
+ * configurable boot-time setting is in a dangerous state. The probe
+ * runs out-of-band of normal request handling so a paged warning
+ * never affects user traffic, while making misconfigurations visible
+ * within minutes of the next deploy.
+ *
+ * Task #101 generalised the block from a single `productionHostnamePattern`
+ * field to the full set of high-risk boot-time settings (rehearsal
+ * injector, stub fulfillment, rate-limit store, Sentry DSN). Most of
+ * these have a boot-time guard that already crash-loops on the
+ * dangerous combination — the readyz surface adds the runtime probe
+ * so a hot env-var rotation, a platform-side env-var change without
+ * restart, or a deploy that skipped the boot guard (e.g. emergency
+ * rollback via the platform UI) is still caught. See the runbook
+ * (`docs/runbooks/staging-only-endpoints.md`) for the per-setting
+ * status semantics + which paging vs. informational.
+ *
+ * Each field is a tri-state status — see the helper TS docs for the
+ * exact value semantics. Critically, every field defaults to a
+ * non-paging value on a clean dev/staging env so the probe stays
+ * silent unless something is actually wrong.
  *
  * Pure helper — reads `process.env` at call time (so a hot-reloaded
  * env var is picked up by the next probe) and returns a structured
  * shape rather than serialising directly so it can be unit-tested
- * without spinning up an Express app.
+ * without spinning up an Express app. The `currentRateLimitStoreKind`
+ * parameter is injected so tests can drive every branch of the
+ * rate-limit-store status without poisoning module state; in
+ * production it defaults to `getRateLimitStoreKind()` so callers don't
+ * have to thread the runtime kind through every probe.
  */
 export interface ReadyzConfigBlock {
   productionHostnamePattern: ProductionHostnamePatternStatus;
+  rehearsalInjectorEnabled: RehearsalInjectorEnabledStatus;
+  stubFulfillmentEnabled: StubFulfillmentEnabledStatus;
+  rateLimitStore: RateLimitStoreReadyzStatus;
+  sentryDsn: SentryDsnStatus;
 }
 
 export function getReadyzConfigBlock(
   env: NodeJS.ProcessEnv = process.env,
+  currentRateLimitStoreKind: "memory" | "redis" = getRateLimitStoreKind(),
 ): ReadyzConfigBlock {
   return {
     productionHostnamePattern: getProductionHostnamePatternStatus(env),
+    rehearsalInjectorEnabled: getRehearsalInjectorEnabledStatus(env),
+    stubFulfillmentEnabled: getStubFulfillmentEnabledStatus(env),
+    rateLimitStore: getRateLimitStoreReadyzStatus(
+      currentRateLimitStoreKind,
+      env,
+    ),
+    sentryDsn: getSentryDsnStatus(env),
   };
 }
 
@@ -140,10 +182,12 @@ export function getReadyzConfigBlock(
  *
  * The response body also carries a `config` block (see
  * `getReadyzConfigBlock`) that surfaces operator-set boot-time
- * configuration whose absence is dangerous on production but doesn't
- * justify failing readyz — currently `productionHostnamePattern`
- * (task #89). External probes consume this block to page on-call out
- * of band; readiness itself is unaffected.
+ * configuration whose dangerous combinations on production don't
+ * justify failing readyz — `productionHostnamePattern` (task #89),
+ * plus `rehearsalInjectorEnabled`, `stubFulfillmentEnabled`,
+ * `rateLimitStore`, and `sentryDsn` (task #101). External probes
+ * consume this block to page on-call out of band; readiness itself
+ * is unaffected.
  *
  * The DB check also feeds `dbHealthWatcher`: every probe records either
  * success or failure, which is what gives /healthz the

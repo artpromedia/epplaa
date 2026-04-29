@@ -609,6 +609,74 @@ function normaliseRateLimitStoreKind(raw: string | undefined): string {
   return trimmed.toLowerCase();
 }
 
+/**
+ * Tri-state status of `RATE_LIMIT_STORE` configuration surfaced on
+ * `/readyz` (see `getReadyzConfigBlock` in `routes/health.ts`).
+ *
+ * The boot-time `assertRateLimitStoreConfiguredForProduction` already
+ * crash-loops a production-shaped deploy that ships with the in-memory
+ * bucket and no opt-out, so the dangerous combination cannot reach
+ * steady state via a clean restart. This status is the *runtime*
+ * surface for the same check so an external probe (and on-call dashboard)
+ * can verify the configuration without shelling onto the host AND can
+ * page when a hot env-var rotation flipped the deploy into the
+ * dangerous combination without restarting.
+ *
+ * Inputs:
+ *   - `currentStoreKind` — the kind the bucket store is actually
+ *     using right now (from `getRateLimitStoreKind()`). Reflects the
+ *     `createBucketStore` decision at module load — this is what
+ *     matters for runtime behaviour, distinct from a hot-rotated env
+ *     value that won't take effect until the next restart.
+ *   - `env` — read at call time so a hot rotation of
+ *     `RATE_LIMIT_STORE_ALLOW_MEMORY_IN_PRODUCTION` (the opt-out
+ *     escape hatch) and the production-signal env vars is reflected
+ *     on the next probe.
+ *
+ * Values:
+ *   - `"redis"` — the running bucket store is Redis. Healthy
+ *     regardless of deploy shape.
+ *   - `"memory_not_required"` — running on the in-memory bucket on a
+ *     non-production deploy (dev / staging / preview). Intended state
+ *     for single-replica non-production environments.
+ *   - `"memory_opt_out_acknowledged"` — running on memory on a
+ *     production-shaped deploy with
+ *     `RATE_LIMIT_STORE_ALLOW_MEMORY_IN_PRODUCTION=1`. Boot-time
+ *     check downgraded to a `warn` rather than a hard fail; matches
+ *     the in-process bucket warn-log signal. Single-replica
+ *     production deploys (canary, internal-only tools) live here
+ *     intentionally — see `docs/runbooks/rate-limit-store-opt-outs.md`.
+ *   - `"memory_misconfigured"` — running on memory on a production-
+ *     shaped deploy with NO opt-out. The boot guard would have failed
+ *     this on a clean restart; the only way to land here at runtime
+ *     is a hot env-var rotation that flipped a production signal on
+ *     after boot. Page on-call so the deploy is restarted (which will
+ *     then crash-loop into a visible boot failure) or the env-var
+ *     change is reverted.
+ *
+ * Pure function — takes `currentStoreKind` and `env` so the readyz
+ * route handler and unit tests can drive every branch without
+ * poisoning module state.
+ */
+export type RateLimitStoreReadyzStatus =
+  | "redis"
+  | "memory_not_required"
+  | "memory_opt_out_acknowledged"
+  | "memory_misconfigured";
+
+export function getRateLimitStoreReadyzStatus(
+  currentStoreKind: "memory" | "redis",
+  env: NodeJS.ProcessEnv,
+): RateLimitStoreReadyzStatus {
+  if (currentStoreKind === "redis") return "redis";
+  const productionSignals = detectNonHostnameProductionSignals(env);
+  if (productionSignals.length === 0) return "memory_not_required";
+  if (env.RATE_LIMIT_STORE_ALLOW_MEMORY_IN_PRODUCTION === "1") {
+    return "memory_opt_out_acknowledged";
+  }
+  return "memory_misconfigured";
+}
+
 function createBucketStore(): BucketStore {
   const kind = normaliseRateLimitStoreKind(process.env.RATE_LIMIT_STORE);
   if (kind === "redis") {

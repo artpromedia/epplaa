@@ -3,6 +3,9 @@ import {
   detectProductionSignals,
   isProductionEnvironment,
   __resetProductionEnvCacheForTests,
+  getRehearsalInjectorEnabledStatus,
+  getStubFulfillmentEnabledStatus,
+  getSentryDsnStatus,
   type ProductionSignalLogSink,
 } from "./productionSignals";
 
@@ -316,5 +319,183 @@ describe("hostname-pattern compile cache (perf + log noise)", () => {
       log,
     );
     expect(after.map((s) => s.signal)).toEqual(["hostname"]);
+  });
+});
+
+// =====================================================================
+// Tri-state status helpers (task #101).
+//
+// Each helper is a pure function over the env, returning a closed
+// union the /readyz config block surfaces verbatim. The route-level
+// composition is tested in `routes/health.test.ts`; these tests pin
+// down the per-helper branch matrix so a future regression in the
+// non-hostname production-signal detection (e.g. adding a new signal
+// or relaxing one) is caught at the unit boundary.
+//
+// Critically, all three helpers MUST ignore the hostname-pattern
+// signal (they call `detectNonHostnameProductionSignals`) — the
+// hostname signal exists specifically to harden the rehearsal-
+// injector hostname backstop and is intentionally excluded from
+// these checks to avoid double-pinging when the operator forgot to
+// set BOTH the hostname pattern and unset the staging-only flag.
+// =====================================================================
+
+describe("getRehearsalInjectorEnabledStatus — tri-state /readyz status", () => {
+  it("returns 'disabled' when HEALTHZ_REHEARSAL_ENABLED is unset, regardless of deploy shape", () => {
+    expect(getRehearsalInjectorEnabledStatus({})).toBe("disabled");
+    expect(
+      getRehearsalInjectorEnabledStatus({ NODE_ENV: "production" }),
+    ).toBe("disabled");
+  });
+
+  it("returns 'disabled' when HEALTHZ_REHEARSAL_ENABLED is any value other than literal '1'", () => {
+    // Match the boot-time predicate: "true", "yes", "on", "1 " all
+    // mean *not* enabled. A typo'd flag should not arm the injector.
+    for (const v of ["", "0", "true", "yes", "on", " 1", "1\n"]) {
+      expect(
+        getRehearsalInjectorEnabledStatus({
+          HEALTHZ_REHEARSAL_ENABLED: v,
+        }),
+        `value=${JSON.stringify(v)}`,
+      ).toBe("disabled");
+    }
+  });
+
+  it("returns 'enabled_non_production' when the flag is set on a non-prod deploy (intended for staging rehearsals)", () => {
+    expect(
+      getRehearsalInjectorEnabledStatus({
+        HEALTHZ_REHEARSAL_ENABLED: "1",
+      }),
+    ).toBe("enabled_non_production");
+    expect(
+      getRehearsalInjectorEnabledStatus({
+        HEALTHZ_REHEARSAL_ENABLED: "1",
+        NODE_ENV: "staging",
+      }),
+    ).toBe("enabled_non_production");
+  });
+
+  it("returns 'enabled_in_production' for every non-hostname production signal", () => {
+    // Each non-hostname signal is independently sufficient — a probe
+    // that only checked NODE_ENV would silently exempt a Replit-
+    // platform-marked production deploy whose NODE_ENV is unset.
+    for (const env of [
+      { NODE_ENV: "production" },
+      { REPLIT_DEPLOYMENT: "1" },
+      { DEPLOYMENT_ENVIRONMENT: "production" },
+    ]) {
+      expect(
+        getRehearsalInjectorEnabledStatus({
+          HEALTHZ_REHEARSAL_ENABLED: "1",
+          ...env,
+        }),
+        `env=${JSON.stringify(env)}`,
+      ).toBe("enabled_in_production");
+    }
+  });
+
+  it("ignores the hostname production signal — that signal exists for the hostname backstop, not for arming the injector page", () => {
+    // A staging deploy whose HOSTNAME happens to match the
+    // PRODUCTION_HOSTNAME_PATTERN is the case the hostname-signal
+    // backstop guards (assertRehearsalKillSwitchSafe crash-loops on
+    // boot). We deliberately do not double-page from the readyz
+    // probe on the same case, so the helper should report
+    // 'enabled_non_production'.
+    expect(
+      getRehearsalInjectorEnabledStatus({
+        HEALTHZ_REHEARSAL_ENABLED: "1",
+        HOSTNAME: "api.epplaa.com",
+        PRODUCTION_HOSTNAME_PATTERN: "^api\\.epplaa\\.com$",
+      }),
+    ).toBe("enabled_non_production");
+  });
+});
+
+describe("getStubFulfillmentEnabledStatus — tri-state /readyz status", () => {
+  it("returns 'disabled' when STUB_FULFILLMENT is unset", () => {
+    expect(getStubFulfillmentEnabledStatus({})).toBe("disabled");
+    expect(
+      getStubFulfillmentEnabledStatus({ NODE_ENV: "production" }),
+    ).toBe("disabled");
+  });
+
+  it("returns 'disabled' when STUB_FULFILLMENT is any non-'1' value", () => {
+    for (const v of ["", "0", "true", "false", "yes"]) {
+      expect(
+        getStubFulfillmentEnabledStatus({ STUB_FULFILLMENT: v }),
+      ).toBe("disabled");
+    }
+  });
+
+  it("returns 'enabled_non_production' on a dev/CI env (the intended state — keeps tests offline)", () => {
+    expect(
+      getStubFulfillmentEnabledStatus({ STUB_FULFILLMENT: "1" }),
+    ).toBe("enabled_non_production");
+  });
+
+  it("returns 'enabled_in_production' for every non-hostname production signal — the carrier guard already blocks the fallback at runtime, but the env var itself is wrong (task #83)", () => {
+    for (const env of [
+      { NODE_ENV: "production" },
+      { REPLIT_DEPLOYMENT: "1" },
+      { DEPLOYMENT_ENVIRONMENT: "production" },
+    ]) {
+      expect(
+        getStubFulfillmentEnabledStatus({ STUB_FULFILLMENT: "1", ...env }),
+        `env=${JSON.stringify(env)}`,
+      ).toBe("enabled_in_production");
+    }
+  });
+});
+
+describe("getSentryDsnStatus — tri-state /readyz status", () => {
+  it("returns 'configured' whenever SENTRY_DSN is non-empty, regardless of deploy shape (dev observability is welcome)", () => {
+    expect(
+      getSentryDsnStatus({
+        SENTRY_DSN: "https://abc@o123.ingest.sentry.io/456",
+      }),
+    ).toBe("configured");
+    expect(
+      getSentryDsnStatus({
+        NODE_ENV: "production",
+        SENTRY_DSN: "https://abc@o123.ingest.sentry.io/456",
+      }),
+    ).toBe("configured");
+    expect(
+      getSentryDsnStatus({
+        NODE_ENV: "development",
+        SENTRY_DSN: "https://abc@o123.ingest.sentry.io/456",
+      }),
+    ).toBe("configured");
+  });
+
+  it("treats whitespace-only SENTRY_DSN as unset — initSentryServer's no-op shim activates on falsy too", () => {
+    // `lib/sentry.ts` checks for a truthy DSN; "   " would install the
+    // no-op shim and silently swallow alerts. The probe must surface
+    // that the same way as a missing var.
+    expect(
+      getSentryDsnStatus({
+        NODE_ENV: "production",
+        SENTRY_DSN: "   ",
+      }),
+    ).toBe("missing");
+  });
+
+  it("returns 'not_required' when DSN is unset on a non-production deploy (dev/CI/preview)", () => {
+    expect(getSentryDsnStatus({})).toBe("not_required");
+    expect(getSentryDsnStatus({ NODE_ENV: "staging" })).toBe(
+      "not_required",
+    );
+  });
+
+  it("returns 'missing' for every non-hostname production signal — the no-op Sentry shim silently drops every captureException", () => {
+    for (const env of [
+      { NODE_ENV: "production" },
+      { REPLIT_DEPLOYMENT: "1" },
+      { DEPLOYMENT_ENVIRONMENT: "production" },
+    ]) {
+      expect(getSentryDsnStatus(env), `env=${JSON.stringify(env)}`).toBe(
+        "missing",
+      );
+    }
   });
 });

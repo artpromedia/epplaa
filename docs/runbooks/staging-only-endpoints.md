@@ -53,6 +53,15 @@ path log-throttling for the compiled hostname-pattern cache).
 
 ### Post-deploy verifier: `PRODUCTION_HOSTNAME_PATTERN` (Task #89)
 
+> **Superseded for new deployments by the generalised verifier
+> (Task #101) below.** The hostname-only probe is intentionally left
+> in place because `.github/workflows/check-production-hostname-pattern.yml`
+> already wires it into a 15-minute schedule and removing it would
+> silently drop the existing alert until the new workflow lands. New
+> deploy / cron wiring should call `check-readyz-config` instead — it
+> covers `productionHostnamePattern` AND every other high-risk
+> setting in a single probe.
+
 - Surface: `getReadyzConfigBlock()` in `artifacts/api-server/src/routes/health.ts`
   surfaces the env-var status on `/readyz` as
   `config.productionHostnamePattern` ∈ `"not_required" | "configured"
@@ -118,6 +127,85 @@ path log-throttling for the compiled hostname-pattern cache).
   `lib/productionSignals.ts`'s helper unit tests, and
   `scripts/checkProductionHostnamePattern.test.ts` (decision matrix +
   CLI exit-code mapping + structured stdout/stderr lines).
+
+### Post-deploy verifier: full readyz config block (Task #101)
+
+The original hostname-only probe (Task #89) only paged on
+`PRODUCTION_HOSTNAME_PATTERN`. Task #101 generalised the `/readyz`
+config block to surface a tri-state status for EVERY high-risk
+operator-set boot-time setting, and added a generalised probe that
+pages on-call when ANY of them is in a dangerous combination — so
+on-call sees exactly which env var is wrong rather than just
+"something is wrong".
+
+- Surface: `getReadyzConfigBlock()` in `artifacts/api-server/src/routes/health.ts`
+  now returns FIVE fields (every status defaults to a non-paging
+  value on a clean dev/staging env so the probe stays silent unless
+  something is actually wrong):
+
+  | Field                         | Page on                       | Informational on                                                            |
+  | ----------------------------- | ----------------------------- | --------------------------------------------------------------------------- |
+  | `productionHostnamePattern`   | `missing`                     | `configured`, `not_required`                                                |
+  | `rehearsalInjectorEnabled`    | `enabled_in_production`       | `disabled`, `enabled_non_production`                                        |
+  | `stubFulfillmentEnabled`      | `enabled_in_production`       | `disabled`, `enabled_non_production`                                        |
+  | `rateLimitStore`              | `memory_misconfigured`        | `redis`, `memory_not_required`, `memory_opt_out_acknowledged` (single-replica canaries that explicitly set `RATE_LIMIT_STORE_ALLOW_MEMORY_IN_PRODUCTION=1` — intentional, not paged) |
+  | `sentryDsn`                   | `missing`                     | `configured`, `not_required`                                                |
+
+  Every boot-time guard already crash-loops the dangerous
+  combination on a clean restart — but a hot env-var rotation, a
+  platform-side env-var change without restart, or an emergency
+  rollback that skipped the boot guard can still leave a running
+  replica in the dangerous state. The probe catches that drift
+  within the next polling interval. As before, the block is
+  INFORMATIONAL and does NOT change the ready/not_ready decision.
+
+- Probe: `pnpm --filter @workspace/api-server run check-readyz-config`
+  (source: `src/scripts/checkReadyzConfig.ts`). Reads `READYZ_URL`,
+  polls `/readyz`, evaluates every field independently, folds the
+  outcomes into a worst-wins decision, and exits:
+  - `0` — every field is in a non-paging state (silent on healthy
+    prod and on non-prod deploys; the same workflow can fan out
+    across envs without flapping).
+  - `1` — probe error: network failure, non-JSON body, missing
+    `config` block, OR any field has an unrecognised value
+    (response-shape regression / version skew with an older replica
+    that hasn't deployed yet — escalate to a human rather than
+    silently treating the field as healthy).
+  - `2` — page on-call: at least ONE field is in a paging state.
+    The structured stdout JSON line lists every paging field with a
+    field-specific reason that names the offending env var AND
+    points at this runbook, so the page body is self-contained and
+    the on-call can fix every misconfigured setting in one
+    redeploy rather than one-at-a-time after re-running the probe
+    between each restart.
+
+  Accepts BOTH `200 ready` AND `503 not_ready` (the config block is
+  included on both paths) so a downstream outage can never silently
+  mask a config misconfiguration — the worst-possible time to lose
+  the page.
+
+- Scheduling: when the dedicated workflow lands it should mirror
+  `.github/workflows/check-production-hostname-pattern.yml`'s
+  schedule + Sentry pager + cron-monitor heartbeat pattern (15-minute
+  cadence, `workflow_dispatch` for ad-hoc, `workflow_call` so deploy
+  workflows can invoke it as the final post-deploy gate). Use a
+  separate `vars.READYZ_CONFIG_PROBE_ENABLED=1` toggle and a
+  separate `secrets.READYZ_CONFIG_SENTRY_DSN` so the two probes can
+  be enabled / disabled independently while the rollout is in
+  progress.
+
+- Tests: `routes/health.test.ts` (per-field route shape on both
+  the 200 ready and 503 not_ready paths, plus the all-safe
+  baseline and the page-everything composition),
+  `lib/productionSignals.test.ts` (per-helper branch matrix for
+  `getRehearsalInjectorEnabledStatus` /
+  `getStubFulfillmentEnabledStatus` / `getSentryDsnStatus`),
+  `middlewares/apiRateLimit.test.ts` (the
+  `getRateLimitStoreReadyzStatus` helper), and
+  `scripts/checkReadyzConfig.test.ts` (per-field rule matrix +
+  aggregate fold + worst-wins severity + CLI exit-code mapping +
+  structured stdout/stderr lines, including the version-skew
+  missing-field case).
 
 ### `lib/fulfillment/gig.ts` `allowStubFallback()`
 

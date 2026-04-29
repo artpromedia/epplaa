@@ -24,9 +24,37 @@ vi.mock("../lib/db", () => ({
   },
 }));
 
+// Use a mutable holder so individual tests can flip the running
+// rate-limit-store kind without re-resetting the whole module mock.
+// Mirrors how `storeStatusMock` is shared across tests above.
+let storeKindMock: "memory" | "redis" = "redis";
+
 vi.mock("../middlewares/apiRateLimit", () => ({
-  getRateLimitStoreKind: () => "redis",
+  getRateLimitStoreKind: () => storeKindMock,
   getRateLimitStoreStatus: () => storeStatusMock,
+  // Pure helper — re-implemented here in the mock rather than imported
+  // via `vi.importActual` because importing the real apiRateLimit
+  // module has init-time side effects (constructing the singleton
+  // bucket store, optionally connecting to Redis, scheduling a sweep
+  // interval) that this route-level test deliberately avoids. The
+  // helper's branch coverage lives in `apiRateLimit.test.ts`; here
+  // we only need it to behave consistently for the route's
+  // composition.
+  getRateLimitStoreReadyzStatus: (
+    currentStoreKind: "memory" | "redis",
+    env: NodeJS.ProcessEnv,
+  ): string => {
+    if (currentStoreKind === "redis") return "redis";
+    const productionShaped =
+      env.NODE_ENV === "production" ||
+      env.REPLIT_DEPLOYMENT === "1" ||
+      env.DEPLOYMENT_ENVIRONMENT === "production";
+    if (!productionShaped) return "memory_not_required";
+    if (env.RATE_LIMIT_STORE_ALLOW_MEMORY_IN_PRODUCTION === "1") {
+      return "memory_opt_out_acknowledged";
+    }
+    return "memory_misconfigured";
+  },
   pingRateLimitRedis: (...args: unknown[]) => pingRedisMock(...args),
 }));
 
@@ -56,7 +84,26 @@ const PRODUCTION_CONFIG_ENV_KEYS = [
   "DEPLOYMENT_ENVIRONMENT",
   "PRODUCTION_HOSTNAME_PATTERN",
   "HOSTNAME",
+  "HEALTHZ_REHEARSAL_ENABLED",
+  "STUB_FULFILLMENT",
+  "RATE_LIMIT_STORE_ALLOW_MEMORY_IN_PRODUCTION",
+  "SENTRY_DSN",
 ] as const;
+
+// Default config-block shape on a clean dev/staging env. Every new
+// test assertion either compares against this baseline or overrides
+// the specific fields it cares about — the goal is that adding a
+// new readyz config field doesn't require touching every test that
+// only cared about hostname pattern (etc.).
+const DEFAULT_CONFIG_BLOCK = {
+  productionHostnamePattern: "not_required",
+  rehearsalInjectorEnabled: "disabled",
+  stubFulfillmentEnabled: "disabled",
+  // The mocked `getRateLimitStoreKind` returns "redis" so the readyz
+  // status helper short-circuits to "redis" regardless of env shape.
+  rateLimitStore: "redis",
+  sentryDsn: "not_required",
+};
 
 function clearProductionConfigEnv(): void {
   for (const k of PRODUCTION_CONFIG_ENV_KEYS) {
@@ -74,6 +121,7 @@ beforeEach(() => {
     firstFailureAt: null,
     lastRecoveredAt: null,
   };
+  storeKindMock = "redis";
   dbHealthWatcher.__reset();
   clearProductionConfigEnv();
   __resetProductionEnvCacheForTests();
@@ -215,10 +263,10 @@ describe("GET /readyz (readiness)", () => {
     // staging boot like the default test env) so external probes can
     // assert its shape unconditionally — callers that only care about
     // production deploys filter on the value, not the field's
-    // presence.
-    expect(res.body.config).toEqual({
-      productionHostnamePattern: "not_required",
-    });
+    // presence. The block now surfaces every high-risk operator-set
+    // setting (task #101); on a clean dev env every status defaults
+    // to a non-paging value so the probe stays silent.
+    expect(res.body.config).toEqual(DEFAULT_CONFIG_BLOCK);
   });
 
   it("returns 200 ready and skips Redis when memory store is configured", async () => {
@@ -385,44 +433,222 @@ describe("GET /readyz (readiness)", () => {
     const res = await request(buildApp()).get("/readyz");
     expect(res.status).toBe(503);
     expect(res.body.config.productionHostnamePattern).toBe("missing");
+    // The other config fields must also be present on 503 — a probe
+    // that only inspected hostnamePattern would silently drop the
+    // newer status fields during a dependency outage. Asserting the
+    // full shape locks the contract in.
+    expect(res.body.config.rehearsalInjectorEnabled).toBe("disabled");
+    expect(res.body.config.stubFulfillmentEnabled).toBe("disabled");
+    expect(res.body.config.rateLimitStore).toBe("redis");
+    // SENTRY_DSN is unset on this prod-shaped test → "missing"; this
+    // is a paging state and exercises the worst-case "everything is
+    // wrong" combination the probe must surface in one response.
+    expect(res.body.config.sentryDsn).toBe("missing");
+  });
+
+  // -------------------------------------------------------------------
+  // New config fields (task #101): each high-risk operator-set boot-
+  // time setting now has a tri-state status on /readyz so the
+  // generalised post-deploy probe (`scripts/checkReadyzConfig.ts`)
+  // can page on-call when ANY of them is in a dangerous combination
+  // — not just hostname pattern. The boot-time guards already crash-
+  // loop most of these, but the readyz surface adds the runtime
+  // probe so a hot env-var rotation or post-boot platform-side
+  // change is still caught.
+  // -------------------------------------------------------------------
+
+  it("reports rehearsalInjectorEnabled='disabled' on a clean dev env", async () => {
+    dbExecuteMock.mockResolvedValueOnce({ rows: [] });
+    pingRedisMock.mockResolvedValueOnce({ ok: true });
+    const res = await request(buildApp()).get("/readyz");
+    expect(res.body.config.rehearsalInjectorEnabled).toBe("disabled");
+  });
+
+  it("reports rehearsalInjectorEnabled='enabled_non_production' when the staging rehearsal flag is set on a non-prod deploy", async () => {
+    // The intended state for staging — the rehearsal workflow
+    // exercises the stuck-degraded probe end-to-end. The probe must
+    // NOT page on this combination.
+    process.env.HEALTHZ_REHEARSAL_ENABLED = "1";
+    dbExecuteMock.mockResolvedValueOnce({ rows: [] });
+    pingRedisMock.mockResolvedValueOnce({ ok: true });
+    const res = await request(buildApp()).get("/readyz");
+    expect(res.body.config.rehearsalInjectorEnabled).toBe(
+      "enabled_non_production",
+    );
+  });
+
+  it("reports rehearsalInjectorEnabled='enabled_in_production' when the staging flag leaks into a prod-shaped deploy — the page condition", async () => {
+    // The boot guard would have already crash-looped this, but a hot
+    // env-var rotation that flipped a production signal post-boot
+    // can still land here. Page on-call so the deploy is restarted.
+    process.env.HEALTHZ_REHEARSAL_ENABLED = "1";
+    process.env.NODE_ENV = "production";
+    dbExecuteMock.mockResolvedValueOnce({ rows: [] });
+    pingRedisMock.mockResolvedValueOnce({ ok: true });
+    const res = await request(buildApp()).get("/readyz");
+    expect(res.body.status).toBe("ready");
+    expect(res.body.config.rehearsalInjectorEnabled).toBe(
+      "enabled_in_production",
+    );
+  });
+
+  it("reports stubFulfillmentEnabled='enabled_in_production' when STUB_FULFILLMENT=1 on a prod-shaped deploy", async () => {
+    process.env.STUB_FULFILLMENT = "1";
+    process.env.REPLIT_DEPLOYMENT = "1";
+    dbExecuteMock.mockResolvedValueOnce({ rows: [] });
+    pingRedisMock.mockResolvedValueOnce({ ok: true });
+    const res = await request(buildApp()).get("/readyz");
+    // Carriers refuse the stub fallback in production regardless of
+    // the env var (task #83), but the env var itself is wrong and
+    // the probe surfaces that.
+    expect(res.body.config.stubFulfillmentEnabled).toBe(
+      "enabled_in_production",
+    );
+  });
+
+  it("reports stubFulfillmentEnabled='enabled_non_production' when STUB_FULFILLMENT=1 on dev/CI (intended)", async () => {
+    process.env.STUB_FULFILLMENT = "1";
+    dbExecuteMock.mockResolvedValueOnce({ rows: [] });
+    pingRedisMock.mockResolvedValueOnce({ ok: true });
+    const res = await request(buildApp()).get("/readyz");
+    expect(res.body.config.stubFulfillmentEnabled).toBe(
+      "enabled_non_production",
+    );
+  });
+
+  it("reports rateLimitStore='memory_misconfigured' when running on memory bucket on a prod-shaped deploy with no opt-out — the page condition", async () => {
+    // The boot guard already crash-loops this combination on a clean
+    // restart, but we surface the runtime status so a probe can
+    // verify the deploy didn't reach steady-state via a hot env-var
+    // rotation that bypassed the boot check.
+    storeKindMock = "memory";
+    process.env.NODE_ENV = "production";
+    dbExecuteMock.mockResolvedValueOnce({ rows: [] });
+    pingRedisMock.mockResolvedValueOnce(null);
+    const res = await request(buildApp()).get("/readyz");
+    expect(res.body.config.rateLimitStore).toBe("memory_misconfigured");
+  });
+
+  it("reports rateLimitStore='memory_opt_out_acknowledged' when memory-on-prod is explicitly opted into", async () => {
+    // Single-replica production deploys (canary, internal-only
+    // tools) opt into the in-process bucket via
+    // RATE_LIMIT_STORE_ALLOW_MEMORY_IN_PRODUCTION=1. The probe must
+    // distinguish this warn-level state from the misconfigured page
+    // state — opt-out is intentional and shouldn't fire the page.
+    storeKindMock = "memory";
+    process.env.NODE_ENV = "production";
+    process.env.RATE_LIMIT_STORE_ALLOW_MEMORY_IN_PRODUCTION = "1";
+    dbExecuteMock.mockResolvedValueOnce({ rows: [] });
+    pingRedisMock.mockResolvedValueOnce(null);
+    const res = await request(buildApp()).get("/readyz");
+    expect(res.body.config.rateLimitStore).toBe(
+      "memory_opt_out_acknowledged",
+    );
+  });
+
+  it("reports rateLimitStore='memory_not_required' when running memory bucket on a non-prod deploy", async () => {
+    storeKindMock = "memory";
+    dbExecuteMock.mockResolvedValueOnce({ rows: [] });
+    pingRedisMock.mockResolvedValueOnce(null);
+    const res = await request(buildApp()).get("/readyz");
+    expect(res.body.config.rateLimitStore).toBe("memory_not_required");
+  });
+
+  it("reports rateLimitStore='redis' on any redis-backed deploy, even production-shaped", async () => {
+    storeKindMock = "redis";
+    process.env.NODE_ENV = "production";
+    dbExecuteMock.mockResolvedValueOnce({ rows: [] });
+    pingRedisMock.mockResolvedValueOnce({ ok: true });
+    const res = await request(buildApp()).get("/readyz");
+    expect(res.body.config.rateLimitStore).toBe("redis");
+  });
+
+  it("reports sentryDsn='missing' on a prod-shaped deploy with the DSN unset — the page condition", async () => {
+    process.env.DEPLOYMENT_ENVIRONMENT = "production";
+    dbExecuteMock.mockResolvedValueOnce({ rows: [] });
+    pingRedisMock.mockResolvedValueOnce({ ok: true });
+    const res = await request(buildApp()).get("/readyz");
+    expect(res.body.config.sentryDsn).toBe("missing");
+  });
+
+  it("reports sentryDsn='configured' whenever the DSN is set, regardless of deploy shape", async () => {
+    process.env.SENTRY_DSN =
+      "https://abc@o123.ingest.sentry.io/456";
+    dbExecuteMock.mockResolvedValueOnce({ rows: [] });
+    pingRedisMock.mockResolvedValueOnce({ ok: true });
+    const res = await request(buildApp()).get("/readyz");
+    expect(res.body.config.sentryDsn).toBe("configured");
+  });
+
+  it("reports sentryDsn='not_required' on a clean dev env (DSN unset, no production signal)", async () => {
+    dbExecuteMock.mockResolvedValueOnce({ rows: [] });
+    pingRedisMock.mockResolvedValueOnce({ ok: true });
+    const res = await request(buildApp()).get("/readyz");
+    expect(res.body.config.sentryDsn).toBe("not_required");
   });
 });
 
 describe("getReadyzConfigBlock — pure helper", () => {
   // The pure helper is the source of truth surfaced on /readyz. The
   // route-level tests above exercise the wire shape; these tests pin
-  // down each branch of the helper so a future addition (e.g. a new
-  // boot-time-config check) doesn't accidentally regress an existing
-  // status mapping.
+  // down the helper's per-field composition so a future addition
+  // doesn't accidentally regress an existing status mapping.
+  //
+  // Each test passes the rate-limit-store kind explicitly so the
+  // helper can be exercised without a singleton bucket store. The
+  // route default (`getRateLimitStoreKind()`) is verified at the
+  // route level via the existing readyz tests.
 
-  it("returns 'not_required' when no production signal is observed", () => {
-    expect(getReadyzConfigBlock({ NODE_ENV: "staging" })).toEqual({
+  it("returns the all-safe baseline on a clean env (every field at its non-paging value)", () => {
+    expect(getReadyzConfigBlock({}, "redis")).toEqual({
       productionHostnamePattern: "not_required",
-    });
-    expect(getReadyzConfigBlock({})).toEqual({
-      productionHostnamePattern: "not_required",
+      rehearsalInjectorEnabled: "disabled",
+      stubFulfillmentEnabled: "disabled",
+      rateLimitStore: "redis",
+      sentryDsn: "not_required",
     });
   });
 
-  it("returns 'configured' when production-shaped AND env var set", () => {
+  it("composes the production-shaped page-everything case in a single call", () => {
+    // A production-shaped deploy with every dangerous combination
+    // simultaneously lit. The helper must report the exact paging
+    // status for each field independently — the per-setting probe
+    // can then list every misconfiguration in one page body.
     expect(
-      getReadyzConfigBlock({
-        NODE_ENV: "production",
-        PRODUCTION_HOSTNAME_PATTERN: "^api\\.epplaa\\.com$",
-      }),
-    ).toEqual({ productionHostnamePattern: "configured" });
+      getReadyzConfigBlock(
+        {
+          NODE_ENV: "production",
+          HEALTHZ_REHEARSAL_ENABLED: "1",
+          STUB_FULFILLMENT: "1",
+        },
+        "memory",
+      ),
+    ).toEqual({
+      productionHostnamePattern: "missing",
+      rehearsalInjectorEnabled: "enabled_in_production",
+      stubFulfillmentEnabled: "enabled_in_production",
+      rateLimitStore: "memory_misconfigured",
+      sentryDsn: "missing",
+    });
   });
 
-  it("returns 'missing' when production-shaped AND env var unset/blank", () => {
+  it("composes the healthy-production case (every signal lit + every config configured)", () => {
     expect(
-      getReadyzConfigBlock({ NODE_ENV: "production" }),
-    ).toEqual({ productionHostnamePattern: "missing" });
-    expect(
-      getReadyzConfigBlock({
-        REPLIT_DEPLOYMENT: "1",
-        PRODUCTION_HOSTNAME_PATTERN: "",
-      }),
-    ).toEqual({ productionHostnamePattern: "missing" });
+      getReadyzConfigBlock(
+        {
+          NODE_ENV: "production",
+          PRODUCTION_HOSTNAME_PATTERN: "^api\\.epplaa\\.com$",
+          SENTRY_DSN: "https://abc@o123.ingest.sentry.io/456",
+        },
+        "redis",
+      ),
+    ).toEqual({
+      productionHostnamePattern: "configured",
+      rehearsalInjectorEnabled: "disabled",
+      stubFulfillmentEnabled: "disabled",
+      rateLimitStore: "redis",
+      sentryDsn: "configured",
+    });
   });
 
   it("treats a malformed-but-non-empty pattern as 'configured' (the malformed-regex error is logged elsewhere)", () => {
@@ -431,10 +657,30 @@ describe("getReadyzConfigBlock — pure helper", () => {
     // doesn't double-page on a misconfiguration the
     // `production_hostname_pattern_invalid` log already surfaces.
     expect(
-      getReadyzConfigBlock({
-        NODE_ENV: "production",
-        PRODUCTION_HOSTNAME_PATTERN: "[invalid(regex",
-      }),
-    ).toEqual({ productionHostnamePattern: "configured" });
+      getReadyzConfigBlock(
+        {
+          NODE_ENV: "production",
+          PRODUCTION_HOSTNAME_PATTERN: "[invalid(regex",
+        },
+        "redis",
+      ).productionHostnamePattern,
+    ).toBe("configured");
+  });
+
+  it("differentiates the rate-limit-store opt-out from the misconfigured page state", () => {
+    // The opt-out path is intentional (single-replica production
+    // canary / internal tools) and must NOT be lumped in with the
+    // page-on-call misconfigured state. Mirrors the boot-time
+    // `assertRateLimitStoreConfiguredForProduction` warn-vs-error
+    // distinction.
+    expect(
+      getReadyzConfigBlock(
+        {
+          NODE_ENV: "production",
+          RATE_LIMIT_STORE_ALLOW_MEMORY_IN_PRODUCTION: "1",
+        },
+        "memory",
+      ).rateLimitStore,
+    ).toBe("memory_opt_out_acknowledged");
   });
 });
