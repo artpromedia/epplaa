@@ -1331,6 +1331,144 @@ jobs:
           done
           echo "OK — both FIRING and RESOLVED chat posts landed at $NOTIFY_CHANNEL; the production probe's chat-firing block is healthy."
 
+      - name: Rehearse cross-run silence (a fresh all-green run after a paging run MUST stay silent in chat)
+        id: rehearse_cross_run_silence
+        # The previous step proves a single workflow run can FIRE +
+        # RESOLVE in chat. This step proves the *next* contract:
+        # the chat RESOLVED post is strictly per-run, never
+        # cross-run. The runbook's "Interpreting the chat heads-up"
+        # `:white_check_mark: page RESOLVED` row guarantees that
+        # cross-run recovery is intentionally silent — Sentry's
+        # auto-resolve on the issue is the source of truth across
+        # runs, and posting a RESOLVED on every all-green run after
+        # a real outage cleared would flood ${NOTIFY_CHANNEL} with
+        # one spurious recovery message every minute.
+        #
+        # That contract holds today only because
+        # healthz-probe-loop.sh starts each invocation with
+        # `notified_firing=0 / notified_resolved=0` and has NO state
+        # file, NO workflow cache, NO /tmp persistence layer for
+        # those flags. If anyone ever adds one — even with good
+        # intent ("dedup retries across runs") — the contract
+        # silently breaks and the next real outage's recovery
+        # produces a spurious post per probe iteration after the
+        # outage cleared. Catch that here, weekly, instead of
+        # mid-incident.
+        run: |
+          set -e
+          # ---- Run A: inject + page so notified_firing would
+          # leak into run B if any cross-run state existed.
+          # Single iteration is enough — we only need to set the
+          # in-process notified_firing flag once. The previous step
+          # already covered the FIRING+RESOLVED-in-one-run path; we
+          # don't want to re-cover that here, just the cross-run
+          # boundary. Truncate NOTIFY_LOG_FILE first so the
+          # assertions on each phase are scoped to that phase only.
+          echo "::group::cross-run silence: run A (inject -> 1 paging iteration)"
+          : > "$NOTIFY_LOG_FILE"
+          now_ms=$(($(date +%s%N) / 1000000))
+          first_failure_at=$((now_ms - INJECT_DURATION_MS))
+          inject_resp=$(curl -sS -w '\n%{http_code}' \
+            -X POST "$STAGING_BASE_URL/api/_rehearsal/inject-stuck-degraded" \
+            -H "Content-Type: application/json" \
+            -H "X-Rehearsal-Token: $HEALTHZ_REHEARSAL_TOKEN" \
+            --data "{\"subsystem\":\"$SUBSYSTEM\",\"firstFailureAt\":$first_failure_at,\"failureCount\":3}")
+          inject_body=$(printf '%s' "$inject_resp" | head -n -1)
+          inject_code=$(printf '%s' "$inject_resp" | tail -n 1)
+          echo "run A inject response (HTTP $inject_code): $inject_body"
+          if [ "$inject_code" != "200" ]; then
+            echo "::error::run A inject endpoint returned HTTP $inject_code — cross-run silence rehearsal can't proceed without a synthetic streak (the run B silence assertion is meaningless if run A didn't actually page)"
+            exit 1
+          fi
+          # Override the job-level REHEARSAL_CLEAR_* env so the
+          # script does NOT auto-clear after iteration 1. We clear
+          # explicitly between runs A and B below — that's the
+          # boundary we're rehearsing. PROBE_LOOP_ITERATIONS=1
+          # because one paging iteration is sufficient to set
+          # notified_firing=1 in this shell process.
+          set +e
+          PROBE_LOOP_ITERATIONS=1 \
+          PROBE_LOOP_SLEEP_SECONDS=0 \
+          REHEARSAL_CLEAR_AFTER_ITERATION='' \
+          REHEARSAL_CLEAR_URL='' \
+          REHEARSAL_CLEAR_TOKEN='' \
+          REHEARSAL_CLEAR_SUBSYSTEM='' \
+            bash "$GITHUB_WORKSPACE/.github/scripts/healthz-probe-loop.sh"
+          set -e
+          echo "--- run A notify log ---"
+          cat "$NOTIFY_LOG_FILE"
+          echo "------------------------"
+          # Sanity: run A must have posted FIRING. If it didn't,
+          # the run B silence assertion below would falsely PASS
+          # (zero entries because nothing tried to page, not
+          # because cross-run dedup state held).
+          if ! grep -E -x 'firing (200|204)' "$NOTIFY_LOG_FILE" > /dev/null; then
+            echo "::error::run A did not post a successful FIRING line (notify log: $(tr '\n' ';' < "$NOTIFY_LOG_FILE")). Without a real page in run A, the run B silence assertion is meaningless — there's no notified_firing state for run B to inherit. Likely cause: the previous step's regression (rehearse_chat passed but the probe's exit code or webhook regressed in this re-invocation), or the synthetic streak didn't reach the probe."
+            exit 1
+          fi
+          echo "::endgroup::"
+
+          # ---- Between runs: clear the synthetic streak so run B
+          # observes a healthy subsystem from iteration 1. This
+          # mirrors what happens in production: a real outage
+          # clears, a *new* per-minute workflow run starts a fresh
+          # bash process, and the probe sees green from iteration 1.
+          echo "::group::cross-run silence: clear streak between runs A and B"
+          clear_resp=$(curl -sS -w '\n%{http_code}' \
+            -X POST "$STAGING_BASE_URL/api/_rehearsal/clear-stuck-degraded" \
+            -H "Content-Type: application/json" \
+            -H "X-Rehearsal-Token: $HEALTHZ_REHEARSAL_TOKEN" \
+            --data "{\"subsystem\":\"$SUBSYSTEM\"}")
+          clear_body=$(printf '%s' "$clear_resp" | head -n -1)
+          clear_code=$(printf '%s' "$clear_resp" | tail -n 1)
+          echo "between-runs clear response (HTTP $clear_code): $clear_body"
+          if [ "$clear_code" != "200" ]; then
+            echo "::error::between-runs clear endpoint returned HTTP $clear_code — run B would still observe the synthetic streak and the cross-run silence assertion can't be trusted (a green run B is a precondition: only an exit-0 iteration can hit the resolved branch where any leaked notified_firing state would surface)."
+            exit 1
+          fi
+          echo "::endgroup::"
+
+          # ---- Run B: a FRESH bash process invokes the same
+          # script. No inject. No mid-loop clear. notified_firing
+          # / notified_resolved initialise to 0 in this shell —
+          # that's the contract. If anyone ever adds a
+          # cross-process state file / workflow cache / /tmp
+          # persistence to those flags, run B's first healthy
+          # iteration would post a spurious RESOLVED. We assert
+          # the notify log stays empty.
+          echo "::group::cross-run silence: run B (no inject, MUST be silent)"
+          : > "$NOTIFY_LOG_FILE"
+          set +e
+          PROBE_LOOP_ITERATIONS=1 \
+          PROBE_LOOP_SLEEP_SECONDS=0 \
+          REHEARSAL_CLEAR_AFTER_ITERATION='' \
+          REHEARSAL_CLEAR_URL='' \
+          REHEARSAL_CLEAR_TOKEN='' \
+          REHEARSAL_CLEAR_SUBSYSTEM='' \
+            bash "$GITHUB_WORKSPACE/.github/scripts/healthz-probe-loop.sh"
+          loop_code=$?
+          set -e
+          echo "--- run B notify log ---"
+          cat "$NOTIFY_LOG_FILE"
+          echo "------------------------"
+          # Run B must have exited 0 — every iteration green —
+          # otherwise the assertion below tests the wrong thing
+          # (an exit-2 iteration would legitimately post FIRING
+          # and the empty-log check would just be detecting a
+          # different failure mode).
+          if [ "$loop_code" -ne 0 ]; then
+            echo "::error::run B's probe loop exited $loop_code, expected 0 (all-green). Either the between-runs clear above didn't take, the staging api-server restarted between phases (the watcher is in-process), or staging /healthz is genuinely degraded right now. The cross-run silence assertion isn't meaningful while the subsystem is still degraded."
+            exit 1
+          fi
+          line_count=$(wc -l < "$NOTIFY_LOG_FILE" | awk '{print $1}')
+          if [ "$line_count" -ne 0 ]; then
+            echo "::error::run B posted $line_count chat line(s) on an all-green run (notify log: $(tr '\n' ';' < "$NOTIFY_LOG_FILE")). The production probe's chat dedup state is leaking across workflow runs. The runbook's _Interpreting the chat heads-up_ table guarantees cross-run recovery is silent (Sentry's auto-resolve owns it across runs); a regression here means the next real outage's #ops channel will get one spurious RESOLVED post per minute after the outage clears, until someone notices and reverts. Most likely cause: a recent change to .github/scripts/healthz-probe-loop.sh added a state file, a workflow cache, or a /tmp persistence layer to the notified_firing / notified_resolved flags."
+            exit 1
+          fi
+          echo "run B OK — zero notify entries; the chat dedup state is correctly fresh-per-process."
+          echo "::endgroup::"
+          echo "OK — cross-run silence holds: a fresh all-green run after a previous paging run stays silent in chat (Sentry's auto-resolve owns cross-run recovery)."
+
       - name: Clear synthetic streak (always run as backstop)
         if: ${{ always() }}
         run: |
@@ -1367,6 +1505,7 @@ jobs:
             echo "- Verify config status: ${{ steps.verify_config.outcome }}"
             echo "- Inject status: ${{ steps.inject.outcome }}"
             echo "- Rehearse chat status: ${{ steps.rehearse_chat.outcome }}"
+            echo "- Rehearse cross-run silence status: ${{ steps.rehearse_cross_run_silence.outcome }}"
             echo ""
             if [ -f "$NOTIFY_LOG_FILE" ]; then
               echo "Notify log (\`<kind> <http_code>\`):"
