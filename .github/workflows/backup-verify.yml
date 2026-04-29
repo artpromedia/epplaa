@@ -34,6 +34,25 @@ name: Backup verify (weekly full)
 #   secrets.RESTORE_DATABASE_URL      — sandbox DB URL (NEVER prod).
 #   secrets.BACKUP_FETCH_CMD          — shell snippet that downloads the
 #                                        latest dump into ./backups/<date>.dump
+#                                        AND its sidecar SHA-256 manifest
+#                                        into ./backups/<date>.dump.sha256
+#                                        (so the verifier can fail-fast on a
+#                                        truncated transfer before invoking
+#                                        pg_restore — exit 16). The sidecar
+#                                        contract is `sha256sum`-compatible:
+#                                        `<64-hex>  <basename>` per line, or
+#                                        a single bare hex digest. Same
+#                                        snippet on both backup-verify
+#                                        workflows — keep them in lockstep.
+#   vars.BACKUP_CHECKSUM_REQUIRED     — optional. "1" makes a missing sidecar
+#                                        SHA-256 manifest a hard failure
+#                                        (exit 16). Default behaviour is to
+#                                        log a notice and continue, which
+#                                        lets the rollout land before the
+#                                        platform pipeline starts emitting
+#                                        sidecars. A *malformed* sidecar is
+#                                        always exit 16 regardless of this
+#                                        flag.
 #   secrets.BACKUP_VERIFY_SENTRY_DSN  — DSN used by `sentry-cli monitors run`
 #                                        to post Sentry Cron monitor
 #                                        check-ins (see "Heartbeat" note
@@ -174,6 +193,13 @@ jobs:
           BACKUP_FETCH_CMD: ${{ secrets.BACKUP_FETCH_CMD }}
           BACKUP_DIR: ${{ github.workspace }}/backups
           RESTORE_DATABASE_URL: ${{ secrets.RESTORE_DATABASE_URL }}
+          # Make a missing sidecar SHA-256 manifest a hard failure
+          # (verifyBackup.ts exit 16) once the producer pipeline reliably
+          # writes them. Default empty -> "missing sidecar" logs a notice
+          # and continues, so this rolls out without breaking existing
+          # operators that haven't wired the producer side in yet. Same
+          # var on both workflows — keep them in lockstep.
+          BACKUP_CHECKSUM_REQUIRED: ${{ vars.BACKUP_CHECKSUM_REQUIRED }}
           # Used by `sentry-cli monitors run` (below) to post the
           # cron-monitor check-ins. SENTRY_ORG / SENTRY_PROJECT are not
           # strictly required for DSN-based ingestion but are passed

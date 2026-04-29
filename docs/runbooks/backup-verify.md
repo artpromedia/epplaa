@@ -42,9 +42,10 @@ The verify pass exits non-zero and pages on:
 | 13   | Unknown `--mode` value (operator typo / workflow misconfig). | both | Repo owner (workflow YAML) |
 | 14   | Restored row counts are stale or incomplete vs the live source / manifest — the dump is restorable but its data lags production. **Distinct from exit 6** (which is "the dump *file* is older than `MAX_DUMP_AGE_HOURS`"): this code fires when the file mtime is fresh but its contents lag, which the file-mtime check cannot see. Names every offending table and the absolute / percentage delta in the failure line so on-call doesn't have to dig through logs. Skipped (with a `[verifyBackup]` notice and exit 0) when neither `LIVE_COUNTS_URL` nor `LIVE_COUNTS_MANIFEST` is set. | both | Platform team + DB owner |
 | 15   | Restored row counts dropped sharply vs the most recent prior verify run (the per-run history file under `WEEK_OVER_WEEK_HISTORY`, default `${BACKUP_DIR}/verify-row-counts-history.json`). One or more tables in `WEEK_OVER_WEEK_TABLES` (default `audit_events,payment_intents,orders`) shrunk by more than `WEEK_OVER_WEEK_MAX_DROP_RATIO` (default 20%) since last week. **Distinct from exit 14**: exit 14 compares restored vs *current* live, so it can't see the case where the producer regenerated the manifest off the same partial dump (manifest agrees with restored, but both regressed). Exit 15 compares restored vs *the prior verify's* restored, so it catches that case. Names every offending table + the prior count + the drop percentage. Recording a baseline (no prior history) does NOT page; only a real drop after a baseline exists does. | both | Platform team + DB owner |
+| 16   | Dump SHA-256 does not match the sidecar manifest, OR the manifest itself is malformed/unreadable, OR the sidecar is missing while `BACKUP_CHECKSUM_REQUIRED=1`. **Fires before `pg_restore` runs**, so on-call knows the file we downloaded does not match what the producer wrote — almost always a transport corruption (truncated transfer, silent S3 partial-read, on-disk bit flip on the runner) rather than a dump-internal problem. Distinct from exit 4 (`pg_restore` failed) by the time-to-failure (~seconds vs. several minutes) and by who to page first. Skipped with a `[verifyBackup]` notice when no sidecar is present and `BACKUP_CHECKSUM_REQUIRED` is unset (the rollout default). | both | Platform team (transport / backup share) |
 
 > **On-call routing tip:** the grouping above is the page-routing contract.
-> Codes 2/3/6/9/13 are about the transport / freshness / sandbox config /
+> Codes 2/3/6/9/13/16 are about the transport / freshness / sandbox config /
 > workflow misconfig and belong to the platform team (or the repo owner
 > for code 13). Codes 4/5/7/10/11/12/14/15 are about the dump's internal
 > consistency / completeness and need both platform + the DB owner. Code
@@ -307,6 +308,7 @@ Variables (`vars.*`):
 | Name | Production value | Purpose |
 | --- | --- | --- |
 | `BACKUP_VERIFY_ENABLED` | `1` | Kill switch — gates **both** the nightly and weekly workflows (they share the same variable on purpose, so flipping it off silences the entire backup-verify safety net deliberately rather than leaving one cadence quietly running). Set to anything else to silence both workflows without removing the files. **Note**: while disabled, *both* Sentry Cron monitors (`backup-verify-nightly` and `backup-verify`) will start paging on missed check-ins — that is intentional. If you need to disable for a known reason (e.g. backup share migration), also temporarily mute both Sentry monitors and set a calendar reminder to re-enable everything. |
+| `BACKUP_CHECKSUM_REQUIRED` | *(unset / `0`)* | Rollout knob for the SHA-256 sidecar check (exit 16). When set to `1`, a missing sidecar manifest is a hard failure; otherwise the verifier logs a `[verifyBackup]` notice and continues. Default is unset so the change rolls out without breaking existing operators that haven't yet wired the producer-side sidecar in. **Promote to `1` once the platform team confirms every fresh dump lands with its `<dump>.sha256` companion** — leaving it unset indefinitely defeats the purpose of the check. A *malformed* sidecar is exit 16 regardless of this flag, by design. Same var on both workflows. |
 | `SENTRY_ORG`, `SENTRY_PROJECT` | (same as the release / healthz workflows) | Reused so events land in the same Sentry project as the api-server's runtime events. |
 
 Secrets (`secrets.*`):
@@ -314,7 +316,7 @@ Secrets (`secrets.*`):
 | Name | Purpose |
 | --- | --- |
 | `RESTORE_DATABASE_URL` | Sandbox DB URL the dump is restored into. **Must never** point at the live DB — `verifyBackup.ts` pg_restore's with `--clean --if-exists`, which would wipe whatever it points at. |
-| `BACKUP_FETCH_CMD` | Shell snippet that downloads the latest dump into `./backups/<date>.dump`. Owned by the platform team because it embeds the backup-share credentials. |
+| `BACKUP_FETCH_CMD` | Shell snippet that downloads the latest dump into `./backups/<date>.dump` **and its sidecar SHA-256 manifest into `./backups/<date>.dump.sha256`** (so the verifier can fail-fast on a truncated transfer before invoking `pg_restore` — exit 16). Owned by the platform team because it embeds the backup-share credentials. The sidecar contract is `sha256sum`-compatible: one or more lines of `<64-hex>  <basename>` (binary-mode `<hex> *<name>` is also accepted), or a single bare 64-hex digest line. The verifier looks for `<dump>.sha256` next to the dump by default; override with `BACKUP_CHECKSUM_MANIFEST` if the producer writes a single per-day manifest covering all dumps to a different path. **During rollout** the snippet may not yet pull the sidecar — that's fine; the verifier logs a notice and skips the check. Once the snippet is updated, set `vars.BACKUP_CHECKSUM_REQUIRED=1` to make a missing sidecar a hard failure. |
 | `BACKUP_VERIFY_SENTRY_DSN` | DSN that `sentry-cli monitors run` uses to post the cron-monitor check-ins **for both workflows** (the nightly `backup-verify-nightly` slug and the weekly `backup-verify` slug). Usually the same DSN as the api-server's `SENTRY_DSN` so check-ins land in the same project; kept as a separate repo secret so it can be rotated independently of the runtime DSN. **Without this secret the heartbeat is silently disabled** — each workflow logs a `::warning::` and runs the verifier directly. Configure it to get coverage for "the job stopped running at all." |
 | `LIVE_COUNTS_URL` | *(optional)* Read-only Postgres connection string the verifier `psql`-queries to fetch expected row counts for the live-vs-restored comparison (exit 14). Use the cheapest read-only role you have on production. **Mutually exclusive** with `LIVE_COUNTS_MANIFEST_URL` (the verifier rejects the run if both are set). When neither is configured the comparison is skipped with a `[verifyBackup]` notice and a stale-but-restorable dump can pass undetected. **Same secret on both workflows** — keep them in lockstep so both cadences agree on what "fresh" means. |
 | `LIVE_COUNTS_MANIFEST_URL` | *(optional)* HTTP(S) URL to a small JSON snapshot the platform's `pg_dump` cron writes alongside the dump, mapping table name → live row count. Use this when the GH Actions runner cannot reach the production DB directly. The workflow `curl -fsSL`s it into `./backups/live-counts.json` *before* invoking the verifier and exports `LIVE_COUNTS_MANIFEST=$BACKUP_DIR/live-counts.json` for the verifier to read. **Mutually exclusive** with `LIVE_COUNTS_URL`. Manifest format: `{"audit_events": 1234567, "payment_intents": 89012, "orders": 4567}`. **Operational note:** if the `curl` itself fails (manifest URL 404, DNS broken, etc.) the workflow step exits non-zero *before* `verifyBackup.ts` even runs, so the GH Actions failure surfaces with the curl exit status — not exit code 14. Triage that as a manifest-transport problem (check the URL + the producer cron) rather than a stale-dump problem. |
@@ -332,6 +334,8 @@ secrets — they're not sensitive):
 | `WEEK_OVER_WEEK_TABLES` | `audit_events,payment_intents,orders` | Comma-separated list of tables the verifier counts and tracks across runs for the week-over-week comparison (exit 15). Same identifier rules as `LIVE_COUNTS_TABLES`. Default is the same three smoke / money-flow / audit-chain tables — keep the list small because each entry is one extra `count(*)` against the restored sandbox per run. Setting this to an empty value is a hard error (use `WEEK_OVER_WEEK_MAX_DROP_RATIO=1` to disable instead). **Caveat when shrinking the list**: the comparison iterates every table in the prior history entry, so removing a table from this list does NOT stop comparing it until the prior history entry rolls off (or you delete the history file to reset the baseline). Adding a table is safe — the new table is recorded on the next run and starts participating in comparisons one run later. |
 | `WEEK_OVER_WEEK_MAX_DROP_RATIO` | `0.2` | Maximum drop (as a fraction in `[0, 1]`) tolerated on any tracked table between two consecutive verify runs before exit 15 fires. `0.2` (the default) means a 20% drop pages — generous enough to absorb a one-off purge / archival pass without paging, tight enough to catch the motivating regression of a partial pg_dump (`orders` 1.2M -> 5). **Do not** lower below ~0.05 without DB owner sign-off (legitimate purges trip false positives) and **do not** raise above ~0.5 (real partial-table-skips hide inside the threshold). Set to exactly `1` to disable the check entirely without removing the env var. |
 | `WEEK_OVER_WEEK_MAX_HISTORY` | `12` | Number of history entries to retain in `WEEK_OVER_WEEK_HISTORY`. ~3 months of weekly entries by default; older entries are dropped FIFO. Only the most recent entry is consulted for comparison — the older entries exist for human triage when a page fires. Must be a positive integer. |
+| `BACKUP_CHECKSUM_MANIFEST` | *(unset → `<dump>.sha256` next to the dump)* | Override for the SHA-256 sidecar's path. Set when the producer writes a single per-day manifest covering every dump (e.g. `manifest-2026-04-29.sha256` listing both `2026-04-29.dump` and earlier-day dumps) instead of one sidecar per dump. The verifier looks for an entry whose name column matches the dump's basename; failing that, a single bare 64-hex digest line is accepted. Mismatch → exit 16. Leave unset for the convention-over-configuration default. |
+| `BACKUP_CHECKSUM_REQUIRED` | *(unset / `0`)* | Same value as `vars.BACKUP_CHECKSUM_REQUIRED` (the workflows pass it through automatically). Set this on the workflow `env:` only when reproducing a strict run locally — in production it should always be configured at the repo-vars level so both nightly and weekly workflows agree. |
 
 ## Backup verification failed
 
@@ -521,6 +525,56 @@ itself is the problem — the scheduler is fine.
     either the data is restored OR the operator clears the history
     file to accept the new baseline. Do not silence the workflow as
     the recovery path.
+16. **Exit 16 (checksum mismatch / malformed sidecar / missing sidecar
+    while required, both modes)** — the dump SHA-256 does not match
+    the sidecar manifest, OR the manifest itself is malformed, OR the
+    sidecar is missing while `BACKUP_CHECKSUM_REQUIRED=1`. Fires
+    *before* `pg_restore` runs — the file we downloaded does not match
+    what the producer wrote. The `fail()` line names which of the
+    three sub-cases tripped (mismatch / malformed / missing-required),
+    the manifest path, and the expected vs. computed digests on a
+    real mismatch. Triage:
+    - **Digest mismatch** — almost always a transport corruption
+      (truncated transfer, silent S3 partial-read, on-disk bit flip
+      on the runner). **First action: re-fetch the dump** and re-run
+      the workflow. If the second fetch produces a fresh dump whose
+      digest matches, log it and move on (one bad fetch, not a
+      systemic problem). If the mismatch persists across re-fetches,
+      page the platform team — it usually indicates backup-share
+      corruption (the producer's pg_dump wrote a bad file, or the
+      object-store copy that fronts the share is serving stale
+      bytes) rather than dump corruption per se. Preserve both the
+      bad dump file and the sidecar manifest so the platform team
+      can compare against the producer's source-of-truth digest.
+    - **Malformed sidecar** (`checksum manifest is empty`,
+      `checksum manifest contains no entry for <name>`,
+      `checksum manifest digest is not a 64-char hex SHA-256`) —
+      the producer wrote a sidecar but its contents don't parse.
+      Page the platform team to fix the producer-side
+      `sha256sum`/manifest-write step; do **not** silence by
+      dropping `BACKUP_CHECKSUM_REQUIRED` — a malformed sidecar
+      is exit 15 regardless of that flag, by design (silently
+      treating a broken manifest as "no manifest" would let a
+      corrupt dump through).
+    - **Missing sidecar while `BACKUP_CHECKSUM_REQUIRED=1`**
+      (`cannot read checksum manifest at … ENOENT`) — either the
+      producer regressed and stopped writing sidecars, or the
+      `BACKUP_FETCH_CMD` snippet stopped pulling them down
+      alongside the dump. Check the producer's most recent run
+      logs and the fetch snippet's most recent change. Until
+      sidecars resume, you can temporarily flip
+      `BACKUP_CHECKSUM_REQUIRED` to anything other than `1` to
+      restore visibility into the rest of the verify pipeline,
+      but file a ticket against the platform team to fix the
+      sidecar emission in days, not weeks — the checksum step is
+      the only thing that catches a class of failures pg_restore
+      cannot diagnose well.
+    - **Sidecar simply not configured yet** (the rollout state):
+      the verifier logs `[verifyBackup] checksum manifest not
+      found at … — skipping pre-restore SHA-256 check` and
+      continues. Not exit 15. Once the producer pipeline reliably
+      writes sidecars, set `vars.BACKUP_CHECKSUM_REQUIRED=1` to
+      promote a missing sidecar to a hard failure.
 
 In all cases, **do not silence the workflow** as the recovery path —
 the page is telling you the dump is bad, and silencing it will mask the
@@ -667,6 +721,7 @@ RESTORE_DATABASE_URL='postgres://verify:verify@localhost:5432/sandbox' \
 MAX_DUMP_AGE_HOURS=36 \
 REQUIRED_EXTENSIONS=pgcrypto,pg_trgm \
 LIVE_COUNTS_MANIFEST=/tmp/backups/live-counts.json \
+BACKUP_CHECKSUM_REQUIRED=1 \
   pnpm --filter @workspace/scripts exec tsx src/verifyBackup.ts --mode=smoke
 
 # Full (matches the weekly workflow — adds FK integrity + VACUUM
@@ -676,12 +731,18 @@ RESTORE_DATABASE_URL='postgres://verify:verify@localhost:5432/sandbox' \
 MAX_DUMP_AGE_HOURS=36 \
 REQUIRED_EXTENSIONS=pgcrypto,pg_trgm \
 LIVE_COUNTS_MANIFEST=/tmp/backups/live-counts.json \
+BACKUP_CHECKSUM_REQUIRED=1 \
   pnpm --filter @workspace/scripts exec tsx src/verifyBackup.ts --mode=full
 ```
 
 Drop `LIVE_COUNTS_MANIFEST` (and don't set `LIVE_COUNTS_URL`) to skip
 the live-vs-restored comparison locally — the verifier prints a
-`[verifyBackup]` skip notice and still runs every other check.
+`[verifyBackup]` skip notice and still runs every other check. Drop
+`BACKUP_CHECKSUM_REQUIRED` (or set it to `0`) to mirror the rollout
+default where a missing `<dump>.sha256` sidecar is logged-and-skipped
+rather than exit 16. Generate a sidecar locally with
+`sha256sum /tmp/backups/<date>.dump > /tmp/backups/<date>.dump.sha256`
+to make the strict run pass against a real dump.
 
 Same exit codes as the workflows. The script logs each check's verdict
 on its own `[verifyBackup]` line so you can see at a glance which step
@@ -691,6 +752,24 @@ To rehearse each new failure mode against a local sandbox:
 
 - **Exit 6 (stale dump):** `touch -d '3 days ago' /tmp/backups/old.dump`
   with no fresher file, then rerun.
+- **Exit 16 (checksum mismatch):** after a successful run, write a
+  bogus sidecar next to the dump and re-run with the rollout knob
+  flipped on so the run cannot silently skip the check:
+  ```sh
+  DUMP=$(ls -t /tmp/backups/*.dump | head -1)
+  printf '%s  %s\n' "$(printf '0%.0s' {1..64})" "$(basename "$DUMP")" \
+    > "${DUMP}.sha256"
+  BACKUP_CHECKSUM_REQUIRED=1 \
+  BACKUP_DIR=/tmp/backups \
+  RESTORE_DATABASE_URL='postgres://verify:verify@localhost:5432/sandbox' \
+    pnpm --filter @workspace/scripts exec tsx src/verifyBackup.ts \
+      --mode=smoke
+  ```
+  The verifier should exit 16 with a `dump SHA-256 mismatch …`
+  line that names the expected vs. computed digest. To rehearse the
+  *missing-sidecar* sub-case, `rm "${DUMP}.sha256"` and re-run with
+  `BACKUP_CHECKSUM_REQUIRED=1`. Replace the sidecar with the real
+  digest (`sha256sum "$DUMP" > "${DUMP}.sha256"`) to clear.
 - **Exit 7 (FK integrity, full mode only):** after a successful run,
   `psql $RESTORE_DATABASE_URL -c "INSERT INTO payment_intents (id,
   user_id, purpose, gateway, reference, amount_minor, currency_code,

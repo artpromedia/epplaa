@@ -18,6 +18,19 @@
  *        $MAX_DUMP_AGE_HOURS, default 36h). Catches the "last week's dump
  *        was restored because the new one never landed" failure mode that
  *        pure mtime ordering hides.
+ *     2a. Verify the dump matches the SHA-256 checksum recorded in the
+ *        sidecar manifest the platform's pg_dump cron writes alongside
+ *        each dump (file `<dump>.sha256`, in `sha256sum` format). Done
+ *        before pg_restore so a truncated / silently-corrupt transfer
+ *        fails in seconds with a dedicated exit code (16) instead of
+ *        manifesting as a confusing pg_restore error several minutes
+ *        in. The sidecar's path can be overridden via
+ *        $BACKUP_CHECKSUM_MANIFEST. Missing-manifest behaviour is
+ *        opt-in: by default the step logs a notice and continues (so
+ *        existing operators that haven't wired sidecars in yet don't
+ *        suddenly start failing); set $BACKUP_CHECKSUM_REQUIRED=1 to
+ *        flip it to a hard error once the platform pipeline is
+ *        producing sidecars reliably.
  *     3. Restore into $RESTORE_DATABASE_URL — a throwaway DB. Fails loudly
  *        if the env var is unset; we never restore over the live DB.
  *     4. Smoke row-count check on `audit_events`, `payment_intents`,
@@ -107,9 +120,16 @@
  *       published over the good one). Distinct from exit 14 because
  *       exit 14 compares restored vs *current* live; exit 15 compares
  *       restored vs *the prior verify's* restored.
+ *   16  dump SHA-256 does not match the sidecar manifest, OR the
+ *       manifest itself is malformed / unreadable, OR the sidecar is
+ *       missing while $BACKUP_CHECKSUM_REQUIRED=1. Distinct from exit 4
+ *       (`pg_restore` failed): exit 16 fires *before* pg_restore runs,
+ *       so on-call knows the file we downloaded does not match what
+ *       the producer wrote — almost always a transport corruption /
+ *       silent S3 partial-read rather than a dump-internal problem.
  *
  * Ownership grouping (matches the runbook's page-routing contract):
- *   transport / freshness / sandbox config -> platform team (2, 3, 6, 9)
+ *   transport / freshness / sandbox config -> platform team (2, 3, 6, 9, 16)
  *   dump-internal corruption                -> platform team + DB owner
  *                                              (4, 5, 7, 10, 11, 12, 14,
  *                                              15)
@@ -119,7 +139,14 @@
  */
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
+import {
+  createReadStream,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import path from "node:path";
 
 type Mode = "smoke" | "full";
@@ -131,6 +158,26 @@ const REQUIRED_EXTENSIONS = (process.env.REQUIRED_EXTENSIONS ?? "")
   .split(",")
   .map((s) => s.trim())
   .filter(Boolean);
+
+/**
+ * Checksum-verification knobs for step 2a (see header). The default
+ * sidecar location is `<dump>.sha256` next to the dump (mirrors the
+ * convention `sha256sum dump > dump.sha256` produces). Override only
+ * when the platform pipeline writes a single per-day signed manifest
+ * to a different path.
+ *
+ * `BACKUP_CHECKSUM_REQUIRED` is the rollout knob: when "1" the verify
+ * step fails with exit 15 if the sidecar is missing; otherwise it
+ * logs a one-line notice and continues. Default is "0" (opt-in) so
+ * existing operators that haven't wired the producer-side sidecar in
+ * yet do not start failing on the first run after this rolls out —
+ * flip it to "1" once the platform team confirms every fresh dump
+ * lands with its `<dump>.sha256` companion. A *malformed* manifest is
+ * always exit 15 regardless of this flag (we'd rather page than
+ * silently treat a broken manifest as "no manifest").
+ */
+const BACKUP_CHECKSUM_MANIFEST = process.env.BACKUP_CHECKSUM_MANIFEST;
+const BACKUP_CHECKSUM_REQUIRED = process.env.BACKUP_CHECKSUM_REQUIRED === "1";
 
 /**
  * Live-counts comparison knobs. The check itself is opt-in: when both
@@ -251,6 +298,7 @@ const EXIT = {
   UNKNOWN_MODE: 13,
   STALE_DATA: 14,
   WEEK_OVER_WEEK_DROP: 15,
+  CHECKSUM_MISMATCH: 16,
 } as const;
 
 function fail(msg: string, code: number = EXIT.GENERIC): never {
@@ -319,6 +367,193 @@ function checkFreshness(dump: DumpInfo): void {
   }
   console.log(
     `[verifyBackup] freshness OK: dump age ${dump.ageHours.toFixed(1)}h <= ${MAX_DUMP_AGE_HOURS}h`,
+  );
+}
+
+/**
+ * Pure helper: parse a SHA-256 manifest file's contents and return
+ * the expected hex digest for `dumpBasename`. Exported for tests.
+ *
+ * Two on-disk formats are tolerated, in order:
+ *  1. `sha256sum` output — one or more lines of `<64-hex>  <name>` (the
+ *     two-space separator GNU sha256sum writes; binary mode uses `*`
+ *     between digest and name, also accepted). Whitespace at the
+ *     start/end of the line is trimmed. Lines that don't match are
+ *     ignored, so a manifest can carry blank lines or `# comment`
+ *     lines without breaking the parse.
+ *  2. A bare 64-character hex digest (no filename) — convenient when
+ *     the producer writes one sidecar per dump and doesn't bother
+ *     with the filename column.
+ *
+ * Throws (with a message safe to surface to the operator) on:
+ *  - empty / whitespace-only manifest content;
+ *  - no usable digest found for `dumpBasename` AND no bare-digest
+ *    fallback line present;
+ *  - a digest that's not 64 lowercased-hex characters (catches
+ *    operator typos like accidentally storing the base64 SHA, or a
+ *    truncated digest line).
+ *
+ * The digest is normalized to lowercase before being returned, so
+ * the caller can compare directly against
+ * `createHash("sha256").digest("hex")` (which always emits
+ * lowercase).
+ */
+export function parseSha256Manifest(content: string, dumpBasename: string): string {
+  const lines = content
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0 && !l.startsWith("#"));
+  if (lines.length === 0) {
+    throw new Error("checksum manifest is empty (no digest lines found)");
+  }
+  // Pass 1: look for a `<hex>  <name>` line whose name matches the dump.
+  // GNU sha256sum writes two spaces in text mode and ` *` in binary mode;
+  // be liberal about whitespace between the digest and the filename.
+  let bareDigest: string | null = null;
+  for (const line of lines) {
+    const twoCol = /^([0-9a-fA-F]+)\s+\*?(\S.*)$/.exec(line);
+    if (twoCol) {
+      const [, digest, name] = twoCol;
+      // path.basename strips any directory prefix the manifest happens
+      // to carry (some producers write `./<name>` or absolute paths).
+      if (path.basename(name!) === dumpBasename) {
+        return assertHex64(digest!);
+      }
+      continue;
+    }
+    if (/^[0-9a-fA-F]+$/.test(line)) {
+      // Stash the bare digest as a fallback — only used if no name-
+      // matching line was found.
+      bareDigest = line;
+    }
+  }
+  if (bareDigest !== null) return assertHex64(bareDigest);
+  throw new Error(
+    `checksum manifest contains no entry for ${dumpBasename} ` +
+      `(and no single bare-digest fallback line)`,
+  );
+}
+
+function assertHex64(digest: string): string {
+  const lower = digest.toLowerCase();
+  if (!/^[0-9a-f]{64}$/.test(lower)) {
+    throw new Error(
+      `checksum manifest digest is not a 64-char hex SHA-256 ` +
+        `(got ${digest.length}-char value '${digest.slice(0, 16)}…')`,
+    );
+  }
+  return lower;
+}
+
+async function sha256OfFile(p: string): Promise<string> {
+  // Stream the file rather than `readFileSync` — production dumps run
+  // to many GB and we'd rather not double-allocate them in heap just
+  // to compute one hash.
+  const hash = createHash("sha256");
+  await new Promise<void>((resolve, reject) => {
+    const stream = createReadStream(p);
+    stream.on("data", (chunk) => hash.update(chunk));
+    stream.on("end", () => resolve());
+    stream.on("error", reject);
+  });
+  return hash.digest("hex");
+}
+
+/**
+ * Verify the dump matches the SHA-256 digest recorded in the sidecar
+ * manifest. Runs *before* pg_restore so a truncated / silently-corrupt
+ * transfer (the classic S3 partial-read failure) fails in seconds with
+ * a dedicated exit code (16) instead of manifesting as a confusing
+ * pg_restore error several minutes into the workflow.
+ *
+ * Sidecar discovery:
+ *  - $BACKUP_CHECKSUM_MANIFEST overrides the path entirely (use this
+ *    when the producer writes a single per-day manifest covering all
+ *    dumps). The manifest is parsed for an entry matching the dump's
+ *    basename; failing that, a single bare-digest line is accepted.
+ *  - Otherwise the verifier looks for `<dump>.sha256` next to the
+ *    dump (the convention `sha256sum dump > dump.sha256` produces).
+ *
+ * Missing-manifest behaviour:
+ *  - When $BACKUP_CHECKSUM_REQUIRED=1 the verifier fails with exit
+ *    16. Use this once the platform pipeline reliably emits sidecars.
+ *  - Otherwise the verifier logs a one-line `[verifyBackup]` notice
+ *    and continues. Default during rollout so existing operators
+ *    that haven't wired the producer-side sidecar in yet do not
+ *    start failing on day 1.
+ *
+ * A *malformed* manifest (unreadable, empty, no matching entry, bad
+ * digest format) always exits 16 regardless of the required flag —
+ * silently treating a broken manifest as "no manifest" would let a
+ * corrupt dump through, which is exactly what this step exists to
+ * prevent.
+ */
+async function checkChecksum(dump: DumpInfo): Promise<void> {
+  const explicit = BACKUP_CHECKSUM_MANIFEST !== undefined && BACKUP_CHECKSUM_MANIFEST.length > 0;
+  const manifestPath = explicit ? BACKUP_CHECKSUM_MANIFEST! : `${dump.path}.sha256`;
+
+  let raw: string;
+  try {
+    raw = readFileSync(manifestPath, "utf8");
+  } catch (err) {
+    const e = err as NodeJS.ErrnoException;
+    if (e.code === "ENOENT" && !BACKUP_CHECKSUM_REQUIRED) {
+      console.log(
+        `[verifyBackup] checksum manifest not found at ${manifestPath} — ` +
+          `skipping pre-restore SHA-256 check (set BACKUP_CHECKSUM_REQUIRED=1 to ` +
+          `make this a hard failure once the producer emits sidecars). pg_restore ` +
+          `will still surface fully-corrupt dumps, just slower and with a less ` +
+          `actionable error.`,
+      );
+      return;
+    }
+    fail(
+      `cannot read checksum manifest at ${manifestPath}: ${e.message}. ` +
+        `Either the producer didn't emit a sidecar (page the platform team — the ` +
+        `pg_dump cron should write \`<dump>.sha256\` next to every dump), or the ` +
+        `BACKUP_FETCH_CMD snippet didn't pull it down alongside the dump.`,
+      EXIT.CHECKSUM_MISMATCH,
+    );
+  }
+
+  let expected: string;
+  try {
+    expected = parseSha256Manifest(raw, path.basename(dump.path));
+  } catch (err) {
+    fail(
+      `${(err as Error).message} (manifest path: ${manifestPath}). ` +
+        `Refusing to proceed — a malformed manifest cannot prove the dump is intact, ` +
+        `and silently skipping would let a corrupt dump through pg_restore.`,
+      EXIT.CHECKSUM_MISMATCH,
+    );
+  }
+
+  let actual: string;
+  try {
+    actual = await sha256OfFile(dump.path);
+  } catch (err) {
+    fail(
+      `failed to read dump file ${dump.path} while computing SHA-256: ${(err as Error).message}`,
+      EXIT.CHECKSUM_MISMATCH,
+    );
+  }
+
+  if (actual !== expected) {
+    fail(
+      `dump SHA-256 mismatch for ${path.basename(dump.path)}: ` +
+        `expected ${expected} (from ${manifestPath}), got ${actual}. ` +
+        `The file we downloaded does not match what the producer wrote — ` +
+        `almost always a transport corruption (truncated transfer, silent S3 ` +
+        `partial-read, on-disk bit flip on the runner). Re-fetch the dump and ` +
+        `re-run; if the mismatch persists, page the platform team — it usually ` +
+        `indicates backup-share corruption rather than dump corruption.`,
+      EXIT.CHECKSUM_MISMATCH,
+    );
+  }
+
+  console.log(
+    `[verifyBackup] checksum OK: ${path.basename(dump.path)} sha256=${actual.slice(0, 16)}… ` +
+      `matches ${manifestPath}`,
   );
 }
 
@@ -1129,7 +1364,7 @@ function runAmcheck(): void {
   psqlInherit(sql, EXIT.AMCHECK_FAILED, "amcheck");
 }
 
-function main(): void {
+async function main(): Promise<void> {
   const mode = parseMode(process.argv.slice(2));
   if (!RESTORE_DATABASE_URL) {
     fail(
@@ -1151,6 +1386,17 @@ function main(): void {
   // modes: nightly stalls of the producer must page within ~36h, not
   // wait for the weekly fuller pass.
   checkFreshness(dump);
+
+  // Checksum check next, *before* pg_restore. The whole point of this
+  // step is to fail in seconds when the file we downloaded does not
+  // match what the producer wrote (truncated transfer, silent S3
+  // partial-read, on-disk bit flip on the runner) — pg_restore would
+  // eventually surface a corrupt-dump error several minutes in, but
+  // with a much less actionable message that on-call cannot
+  // distinguish from a genuine schema-internal corruption. Skipped
+  // with a notice when no sidecar manifest is present and
+  // BACKUP_CHECKSUM_REQUIRED is not "1" (rollout default).
+  await checkChecksum(dump);
 
   console.log(
     `[verifyBackup] mode=${mode} restoring ${dump.path} -> ${redactUrl(RESTORE_DATABASE_URL)}`,
@@ -1254,5 +1500,10 @@ const isDirectInvocation =
   /verifyBackup(\.[mc]?[jt]s)?$/.test(process.argv[1]);
 
 if (isDirectInvocation) {
-  main();
+  // main() is async because checkChecksum streams the dump file. Catch
+  // any unexpected rejection so the process exits non-zero with the
+  // generic code rather than silently swallowing the error.
+  main().catch((err: unknown) => {
+    fail(`unexpected error: ${(err as Error).message ?? String(err)}`, EXIT.GENERIC);
+  });
 }
