@@ -73,24 +73,53 @@ export class FcmChannel implements NotificationChannel {
     return Boolean(process.env.FCM_SERVICE_ACCOUNT_JSON);
   }
 
-  private serviceAccount() {
+  /**
+   * Parse the configured service account JSON. Returns:
+   *   - the parsed SA when the env is set and valid
+   *   - "invalid" when the env is set but cannot be parsed or is missing
+   *     required fields (caller must surface this as a delivery failure so
+   *     the outbox retries instead of silently marking rows delivered)
+   *   - null when the env is not set at all (dev mode)
+   */
+  private serviceAccount():
+    | { client_email: string; private_key: string; project_id: string }
+    | "invalid"
+    | null {
     if (this.cachedSa) return this.cachedSa;
     const raw = process.env.FCM_SERVICE_ACCOUNT_JSON ?? "";
     if (!raw) return null;
+    let decoded: string;
     try {
-      const decoded = raw.startsWith("{") ? raw : Buffer.from(raw, "base64").toString("utf-8");
-      const sa = JSON.parse(decoded) as { client_email: string; private_key: string; project_id: string };
-      this.cachedSa = sa;
-      return sa;
+      decoded = raw.startsWith("{") ? raw : Buffer.from(raw, "base64").toString("utf-8");
     } catch (err) {
       logger.error({ err: (err as Error).message }, "fcm_service_account_invalid");
-      return null;
+      return "invalid";
     }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(decoded);
+    } catch (err) {
+      logger.error({ err: (err as Error).message }, "fcm_service_account_invalid");
+      return "invalid";
+    }
+    const sa = parsed as Partial<{ client_email: string; private_key: string; project_id: string }>;
+    if (
+      !sa ||
+      typeof sa.client_email !== "string" ||
+      typeof sa.private_key !== "string" ||
+      typeof sa.project_id !== "string"
+    ) {
+      logger.error("fcm_service_account_invalid");
+      return "invalid";
+    }
+    const valid = { client_email: sa.client_email, private_key: sa.private_key, project_id: sa.project_id };
+    this.cachedSa = valid;
+    return valid;
   }
 
   private async accessToken(): Promise<string | null> {
     const sa = this.serviceAccount();
-    if (!sa) return null;
+    if (!sa || sa === "invalid") return null;
     if (this.cachedToken && this.cachedToken.expiresAt > Date.now() + 60_000) {
       return this.cachedToken.token;
     }
@@ -125,9 +154,17 @@ export class FcmChannel implements NotificationChannel {
 
   async send(msg: NotificationMessage): Promise<SendResult> {
     const sa = this.serviceAccount();
-    if (!sa) {
+    if (sa === null) {
+      // Env not set at all — keep the dev-mode shortcut so local stacks
+      // don't need real Google credentials to exercise the outbox.
       logger.info({ kind: this.kind, to: msg.to, title: msg.title }, "fcm_dev_send");
       return { ok: true, providerMessageId: `fcm_dev_${Date.now()}` };
+    }
+    if (sa === "invalid") {
+      // Env IS set but the JSON is unparseable / missing required fields.
+      // Fail closed so the outbox retries with backoff and operators see
+      // real delivery counts instead of a silent green dashboard.
+      return { ok: false, errorMessage: "fcm_invalid_credentials" };
     }
     const token = await this.accessToken();
     if (!token) return { ok: false, errorMessage: "fcm_token_failed" };
