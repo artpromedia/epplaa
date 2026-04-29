@@ -108,6 +108,14 @@ export interface ReadyzConfigBlockShape {
   stubFulfillmentEnabled?: unknown;
   rateLimitStore?: unknown;
   sentryDsn?: unknown;
+  // Task #103 — generalised post-deploy gate now also covers every
+  // remaining operator-set boot-time secret / provider whose
+  // missing-on-production state is page-worthy.
+  mfaEncryptionKey?: unknown;
+  clerkSecretKey?: unknown;
+  termiiApiKey?: unknown;
+  moderationProvider?: unknown;
+  sanctionsProvider?: unknown;
   [k: string]: unknown;
 }
 export interface ReadyzBody {
@@ -145,7 +153,12 @@ export type FieldName =
   | "rehearsalInjectorEnabled"
   | "stubFulfillmentEnabled"
   | "rateLimitStore"
-  | "sentryDsn";
+  | "sentryDsn"
+  | "mfaEncryptionKey"
+  | "clerkSecretKey"
+  | "termiiApiKey"
+  | "moderationProvider"
+  | "sanctionsProvider";
 
 export interface FieldEvaluation {
   field: FieldName;
@@ -219,6 +232,48 @@ const FIELD_RULES: Readonly<Record<FieldName, FieldRule>> = {
     pageValues: {
       missing:
         "SENTRY_DSN is unset on this production deploy — every captureException / captureMessage silently drops, including the rate-limit Redis breach event, audit-chain verification failures, and every other Sentry-routed alert. Set SENTRY_DSN on the production deploy and restart. See docs/runbooks/staging-only-endpoints.md.",
+    },
+  },
+  // Task #103 — five additional fields covering the remaining
+  // operator-set boot-time secrets / providers whose missing-on-
+  // production state is page-worthy. Each rule mirrors the matching
+  // `assertXxxConfiguredForProduction` helper's failure mode: the
+  // page text names the env var the operator must set AND points
+  // back at the runbook so the on-call sees exactly what to fix
+  // without diffing /readyz manually.
+  mfaEncryptionKey: {
+    okValues: ["configured", "not_required"],
+    pageValues: {
+      missing:
+        "MFA_ENCRYPTION_KEY is unset on this production deploy — TOTP secrets are encrypted under a SESSION_SECRET-derived fallback key (only enforced when NODE_ENV=production; other production-shape signals would silently use the fallback). Set MFA_ENCRYPTION_KEY (32+ random bytes, base64 / hex) on the production deploy and restart. See docs/runbooks/staging-only-endpoints.md.",
+    },
+  },
+  clerkSecretKey: {
+    okValues: ["configured", "not_required"],
+    pageValues: {
+      missing:
+        "CLERK_SECRET_KEY is unset on this production deploy — the Clerk Frontend API proxy passes through unauthenticated, /auth/otp/verify returns the noClerk:true stub, and Socket.IO connections silently join as anonymous viewers. Set CLERK_SECRET_KEY on the production deploy and restart. See docs/runbooks/staging-only-endpoints.md.",
+    },
+  },
+  termiiApiKey: {
+    okValues: ["configured", "not_required"],
+    pageValues: {
+      missing:
+        "TERMII_API_KEY is unset on this production deploy — the Termii adapter logs and returns success without sending the SMS, AND the OTP issuer flips into devEcho mode (the OTP code is returned in the API response, trivially bypassing phone verification). Set TERMII_API_KEY on the production deploy and restart. See docs/runbooks/staging-only-endpoints.md.",
+    },
+  },
+  moderationProvider: {
+    okValues: ["configured", "not_required"],
+    pageValues: {
+      missing:
+        "MODERATION_PROVIDER is unset / stub / set-but-deps-missing / set-to-unknown-value on this production deploy — every uploaded image / stream poster / chat message silently bypasses real moderation. Set MODERATION_PROVIDER=hive (with HIVE_API_KEY) or MODERATION_PROVIDER=sightengine (with SIGHTENGINE_API_USER, SIGHTENGINE_API_SECRET, and PHOTODNA_API_KEY for NCMEC-grade CSAM hash matching) on the production deploy and restart. See docs/runbooks/staging-only-endpoints.md.",
+    },
+  },
+  sanctionsProvider: {
+    okValues: ["configured", "not_required"],
+    pageValues: {
+      missing:
+        "SANCTIONS_PROVIDER is unset or set to stub on this production deploy — screenSubject() fail-closes every screen to status=blocked, halting every payout until a real provider is wired. Set SANCTIONS_PROVIDER to a real provider value on the production deploy (and ensure the matching dispatch in screenSubject() is wired) and restart. See docs/runbooks/staging-only-endpoints.md.",
     },
   },
 };

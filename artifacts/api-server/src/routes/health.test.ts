@@ -102,6 +102,19 @@ const PRODUCTION_CONFIG_ENV_KEYS = [
   "STUB_FULFILLMENT",
   "RATE_LIMIT_STORE_ALLOW_MEMORY_IN_PRODUCTION",
   "SENTRY_DSN",
+  // Task #103 — env vars feeding the additional readyz config
+  // fields. Cleared between tests so the helpers default to
+  // "not_required" / "missing" deterministically depending on the
+  // production-shape env state set by each test.
+  "MFA_ENCRYPTION_KEY",
+  "CLERK_SECRET_KEY",
+  "TERMII_API_KEY",
+  "MODERATION_PROVIDER",
+  "HIVE_API_KEY",
+  "SIGHTENGINE_API_USER",
+  "SIGHTENGINE_API_SECRET",
+  "PHOTODNA_API_KEY",
+  "SANCTIONS_PROVIDER",
   // Dependency-probe env vars — cleared so the probes default to
   // disabled in every test that doesn't explicitly opt them in.
   "READYZ_PROBE_CLERK",
@@ -144,6 +157,16 @@ const DEFAULT_CONFIG_BLOCK = {
   // status helper short-circuits to "redis" regardless of env shape.
   rateLimitStore: "redis",
   sentryDsn: "not_required",
+  // Task #103 — five additional tri-state status fields. On a clean
+  // dev/staging env every secret-style helper defaults to
+  // "not_required" and the moderation/sanctions provider helpers
+  // also default to "not_required" (the stub providers are the
+  // intended dev/CI behaviour).
+  mfaEncryptionKey: "not_required",
+  clerkSecretKey: "not_required",
+  termiiApiKey: "not_required",
+  moderationProvider: "not_required",
+  sanctionsProvider: "not_required",
   dependencyProbes: DEFAULT_PROBES_CONFIG,
 };
 
@@ -971,6 +994,136 @@ describe("GET /readyz (readiness)", () => {
     const res = await request(buildApp()).get("/readyz");
     expect(res.body.config.sentryDsn).toBe("not_required");
   });
+
+  // -------------------------------------------------------------------
+  // Task #103 — five additional tri-state config fields. Each field
+  // mirrors the same shape as the sentryDsn tests above so a future
+  // operator reading this block can cross-reference the per-field
+  // contract without re-deriving it. The helpers themselves are
+  // unit-tested in `lib/productionSignals.test.ts`; here we only pin
+  // down that the route plumbs each helper into `res.body.config.*`
+  // without dropping or renaming a field.
+  // -------------------------------------------------------------------
+
+  it("reports mfaEncryptionKey='missing' on a prod-shaped deploy with the key unset — the page condition", async () => {
+    process.env.NODE_ENV = "production";
+    dbExecuteMock.mockResolvedValueOnce({ rows: [] });
+    pingRedisMock.mockResolvedValueOnce({ ok: true });
+    const res = await request(buildApp()).get("/readyz");
+    expect(res.body.config.mfaEncryptionKey).toBe("missing");
+  });
+
+  it("reports mfaEncryptionKey='configured' whenever the key is set, regardless of deploy shape", async () => {
+    process.env.NODE_ENV = "production";
+    process.env.MFA_ENCRYPTION_KEY = "0".repeat(64);
+    dbExecuteMock.mockResolvedValueOnce({ rows: [] });
+    pingRedisMock.mockResolvedValueOnce({ ok: true });
+    const res = await request(buildApp()).get("/readyz");
+    expect(res.body.config.mfaEncryptionKey).toBe("configured");
+  });
+
+  it("reports clerkSecretKey='missing' on a prod-shaped deploy with the key unset", async () => {
+    process.env.NODE_ENV = "production";
+    dbExecuteMock.mockResolvedValueOnce({ rows: [] });
+    pingRedisMock.mockResolvedValueOnce({ ok: true });
+    const res = await request(buildApp()).get("/readyz");
+    expect(res.body.config.clerkSecretKey).toBe("missing");
+  });
+
+  it("reports clerkSecretKey='configured' whenever the key is set", async () => {
+    process.env.NODE_ENV = "production";
+    process.env.CLERK_SECRET_KEY = "sk_live_dummy";
+    dbExecuteMock.mockResolvedValueOnce({ rows: [] });
+    pingRedisMock.mockResolvedValueOnce({ ok: true });
+    const res = await request(buildApp()).get("/readyz");
+    expect(res.body.config.clerkSecretKey).toBe("configured");
+  });
+
+  it("reports termiiApiKey='missing' on a prod-shaped deploy with the key unset — devEcho would silently mint OTPs", async () => {
+    process.env.NODE_ENV = "production";
+    dbExecuteMock.mockResolvedValueOnce({ rows: [] });
+    pingRedisMock.mockResolvedValueOnce({ ok: true });
+    const res = await request(buildApp()).get("/readyz");
+    expect(res.body.config.termiiApiKey).toBe("missing");
+  });
+
+  it("reports termiiApiKey='configured' whenever the key is set", async () => {
+    process.env.NODE_ENV = "production";
+    process.env.TERMII_API_KEY = "termii-key";
+    dbExecuteMock.mockResolvedValueOnce({ rows: [] });
+    pingRedisMock.mockResolvedValueOnce({ ok: true });
+    const res = await request(buildApp()).get("/readyz");
+    expect(res.body.config.termiiApiKey).toBe("configured");
+  });
+
+  it("reports moderationProvider='missing' on a prod-shaped deploy with the provider unset — the stub silently passes uploads", async () => {
+    process.env.NODE_ENV = "production";
+    dbExecuteMock.mockResolvedValueOnce({ rows: [] });
+    pingRedisMock.mockResolvedValueOnce({ ok: true });
+    const res = await request(buildApp()).get("/readyz");
+    expect(res.body.config.moderationProvider).toBe("missing");
+  });
+
+  it("reports moderationProvider='missing' on a prod-shaped deploy with sightengine missing PHOTODNA_API_KEY — CSAM gate left open", async () => {
+    process.env.NODE_ENV = "production";
+    process.env.MODERATION_PROVIDER = "sightengine";
+    process.env.SIGHTENGINE_API_USER = "user";
+    process.env.SIGHTENGINE_API_SECRET = "secret";
+    dbExecuteMock.mockResolvedValueOnce({ rows: [] });
+    pingRedisMock.mockResolvedValueOnce({ ok: true });
+    const res = await request(buildApp()).get("/readyz");
+    expect(res.body.config.moderationProvider).toBe("missing");
+  });
+
+  it("reports moderationProvider='configured' on a prod-shaped deploy with hive + HIVE_API_KEY", async () => {
+    process.env.NODE_ENV = "production";
+    process.env.MODERATION_PROVIDER = "hive";
+    process.env.HIVE_API_KEY = "hive-key";
+    dbExecuteMock.mockResolvedValueOnce({ rows: [] });
+    pingRedisMock.mockResolvedValueOnce({ ok: true });
+    const res = await request(buildApp()).get("/readyz");
+    expect(res.body.config.moderationProvider).toBe("configured");
+  });
+
+  it("reports moderationProvider='not_required' on a clean dev env (the stub is the intended dev/CI behaviour)", async () => {
+    dbExecuteMock.mockResolvedValueOnce({ rows: [] });
+    pingRedisMock.mockResolvedValueOnce({ ok: true });
+    const res = await request(buildApp()).get("/readyz");
+    expect(res.body.config.moderationProvider).toBe("not_required");
+  });
+
+  it("reports sanctionsProvider='missing' on a prod-shaped deploy with the provider unset — every payout would fail-closed", async () => {
+    process.env.NODE_ENV = "production";
+    dbExecuteMock.mockResolvedValueOnce({ rows: [] });
+    pingRedisMock.mockResolvedValueOnce({ ok: true });
+    const res = await request(buildApp()).get("/readyz");
+    expect(res.body.config.sanctionsProvider).toBe("missing");
+  });
+
+  it("reports sanctionsProvider='missing' when explicitly set to 'stub' on a prod-shaped deploy", async () => {
+    process.env.NODE_ENV = "production";
+    process.env.SANCTIONS_PROVIDER = "stub";
+    dbExecuteMock.mockResolvedValueOnce({ rows: [] });
+    pingRedisMock.mockResolvedValueOnce({ ok: true });
+    const res = await request(buildApp()).get("/readyz");
+    expect(res.body.config.sanctionsProvider).toBe("missing");
+  });
+
+  it("reports sanctionsProvider='configured' on a prod-shaped deploy with a real provider name set", async () => {
+    process.env.NODE_ENV = "production";
+    process.env.SANCTIONS_PROVIDER = "complyadvantage";
+    dbExecuteMock.mockResolvedValueOnce({ rows: [] });
+    pingRedisMock.mockResolvedValueOnce({ ok: true });
+    const res = await request(buildApp()).get("/readyz");
+    expect(res.body.config.sanctionsProvider).toBe("configured");
+  });
+
+  it("reports sanctionsProvider='not_required' on a clean dev env (stub fail-open synthetic hits are intended)", async () => {
+    dbExecuteMock.mockResolvedValueOnce({ rows: [] });
+    pingRedisMock.mockResolvedValueOnce({ ok: true });
+    const res = await request(buildApp()).get("/readyz");
+    expect(res.body.config.sanctionsProvider).toBe("not_required");
+  });
 });
 
 describe("GET /readyz — optional dependency probes (Clerk / payment gateways)", () => {
@@ -1181,6 +1334,11 @@ describe("getReadyzConfigBlock — pure helper", () => {
       stubFulfillmentEnabled: "disabled",
       rateLimitStore: "redis",
       sentryDsn: "not_required",
+      mfaEncryptionKey: "not_required",
+      clerkSecretKey: "not_required",
+      termiiApiKey: "not_required",
+      moderationProvider: "not_required",
+      sanctionsProvider: "not_required",
       dependencyProbes: DEFAULT_PROBES_CONFIG,
     });
   });
@@ -1205,6 +1363,15 @@ describe("getReadyzConfigBlock — pure helper", () => {
       stubFulfillmentEnabled: "enabled_in_production",
       rateLimitStore: "memory_misconfigured",
       sentryDsn: "missing",
+      // Task #103 — every secret/provider helper folds an unset env
+      // var on a production-shaped deploy into "missing". A single
+      // misconfigured deploy thus produces a 10-field paging surface
+      // and the on-call sees every wrong knob in one page body.
+      mfaEncryptionKey: "missing",
+      clerkSecretKey: "missing",
+      termiiApiKey: "missing",
+      moderationProvider: "missing",
+      sanctionsProvider: "missing",
       dependencyProbes: DEFAULT_PROBES_CONFIG,
     });
   });
@@ -1216,6 +1383,17 @@ describe("getReadyzConfigBlock — pure helper", () => {
           NODE_ENV: "production",
           PRODUCTION_HOSTNAME_PATTERN: "^api\\.epplaa\\.com$",
           SENTRY_DSN: "https://abc@o123.ingest.sentry.io/456",
+          // Task #103 — every secret/provider configured. We pick
+          // the `hive` moderation provider because it has the
+          // simplest configured-state (just HIVE_API_KEY); the
+          // sightengine + photodna combination is exercised in the
+          // per-helper tests in `lib/productionSignals.test.ts`.
+          MFA_ENCRYPTION_KEY: "0".repeat(64),
+          CLERK_SECRET_KEY: "sk_live_dummy",
+          TERMII_API_KEY: "termii-key",
+          MODERATION_PROVIDER: "hive",
+          HIVE_API_KEY: "hive-key",
+          SANCTIONS_PROVIDER: "complyadvantage",
         },
         "redis",
       ),
@@ -1225,6 +1403,11 @@ describe("getReadyzConfigBlock — pure helper", () => {
       stubFulfillmentEnabled: "disabled",
       rateLimitStore: "redis",
       sentryDsn: "configured",
+      mfaEncryptionKey: "configured",
+      clerkSecretKey: "configured",
+      termiiApiKey: "configured",
+      moderationProvider: "configured",
+      sanctionsProvider: "configured",
       dependencyProbes: DEFAULT_PROBES_CONFIG,
     });
   });

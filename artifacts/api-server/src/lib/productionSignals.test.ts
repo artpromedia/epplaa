@@ -6,6 +6,11 @@ import {
   getRehearsalInjectorEnabledStatus,
   getStubFulfillmentEnabledStatus,
   getSentryDsnStatus,
+  getMfaEncryptionKeyStatus,
+  getClerkSecretKeyStatus,
+  getTermiiApiKeyStatus,
+  getModerationProviderStatus,
+  getSanctionsProviderStatus,
   type ProductionSignalLogSink,
 } from "./productionSignals";
 
@@ -496,6 +501,287 @@ describe("getSentryDsnStatus — tri-state /readyz status", () => {
       expect(getSentryDsnStatus(env), `env=${JSON.stringify(env)}`).toBe(
         "missing",
       );
+    }
+  });
+});
+
+// =====================================================================
+// Task #103 — five additional tri-state status helpers covering the
+// secrets and providers /readyz already inspects via the same
+// non-hostname production-signal predicate. Each helper's branch
+// matrix is pinned here so a future tweak to the boot-time guards
+// can be cross-checked against the operator-facing readyz contract.
+// =====================================================================
+
+describe("getMfaEncryptionKeyStatus — tri-state /readyz status", () => {
+  it("returns 'configured' whenever MFA_ENCRYPTION_KEY is non-empty, regardless of deploy shape", () => {
+    expect(
+      getMfaEncryptionKeyStatus({ MFA_ENCRYPTION_KEY: "0".repeat(64) }),
+    ).toBe("configured");
+    expect(
+      getMfaEncryptionKeyStatus({
+        NODE_ENV: "production",
+        MFA_ENCRYPTION_KEY: "0".repeat(64),
+      }),
+    ).toBe("configured");
+  });
+
+  it("treats whitespace-only MFA_ENCRYPTION_KEY as unset — the boot helper falls back to a no-op cipher on falsy too", () => {
+    expect(
+      getMfaEncryptionKeyStatus({
+        NODE_ENV: "production",
+        MFA_ENCRYPTION_KEY: "   ",
+      }),
+    ).toBe("missing");
+  });
+
+  it("returns 'not_required' on a clean dev/staging env", () => {
+    expect(getMfaEncryptionKeyStatus({})).toBe("not_required");
+    expect(getMfaEncryptionKeyStatus({ NODE_ENV: "staging" })).toBe(
+      "not_required",
+    );
+  });
+
+  it("returns 'missing' for every non-hostname production signal — every TOTP secret would otherwise persist as plaintext", () => {
+    for (const env of [
+      { NODE_ENV: "production" },
+      { REPLIT_DEPLOYMENT: "1" },
+      { DEPLOYMENT_ENVIRONMENT: "production" },
+    ]) {
+      expect(
+        getMfaEncryptionKeyStatus(env),
+        `env=${JSON.stringify(env)}`,
+      ).toBe("missing");
+    }
+  });
+});
+
+describe("getClerkSecretKeyStatus — tri-state /readyz status", () => {
+  it("returns 'configured' whenever CLERK_SECRET_KEY is non-empty, regardless of deploy shape", () => {
+    expect(
+      getClerkSecretKeyStatus({ CLERK_SECRET_KEY: "sk_live_dummy" }),
+    ).toBe("configured");
+  });
+
+  it("treats whitespace-only CLERK_SECRET_KEY as unset", () => {
+    expect(
+      getClerkSecretKeyStatus({
+        NODE_ENV: "production",
+        CLERK_SECRET_KEY: "   ",
+      }),
+    ).toBe("missing");
+  });
+
+  it("returns 'not_required' on a clean dev/staging env (OTP-only / anonymous-socket fallbacks are legitimate there)", () => {
+    expect(getClerkSecretKeyStatus({})).toBe("not_required");
+    expect(getClerkSecretKeyStatus({ NODE_ENV: "staging" })).toBe(
+      "not_required",
+    );
+  });
+
+  it("returns 'missing' for every non-hostname production signal", () => {
+    for (const env of [
+      { NODE_ENV: "production" },
+      { REPLIT_DEPLOYMENT: "1" },
+      { DEPLOYMENT_ENVIRONMENT: "production" },
+    ]) {
+      expect(getClerkSecretKeyStatus(env), `env=${JSON.stringify(env)}`).toBe(
+        "missing",
+      );
+    }
+  });
+});
+
+describe("getTermiiApiKeyStatus — tri-state /readyz status", () => {
+  it("returns 'configured' whenever TERMII_API_KEY is non-empty, regardless of deploy shape", () => {
+    expect(getTermiiApiKeyStatus({ TERMII_API_KEY: "termii-key" })).toBe(
+      "configured",
+    );
+  });
+
+  it("treats whitespace-only TERMII_API_KEY as unset — devEcho fallback would silently mint OTP codes", () => {
+    expect(
+      getTermiiApiKeyStatus({
+        NODE_ENV: "production",
+        TERMII_API_KEY: "   ",
+      }),
+    ).toBe("missing");
+  });
+
+  it("returns 'not_required' on a clean dev/staging env (devEcho is the intended dev workflow)", () => {
+    expect(getTermiiApiKeyStatus({})).toBe("not_required");
+    expect(getTermiiApiKeyStatus({ NODE_ENV: "staging" })).toBe(
+      "not_required",
+    );
+  });
+
+  it("returns 'missing' for every non-hostname production signal", () => {
+    for (const env of [
+      { NODE_ENV: "production" },
+      { REPLIT_DEPLOYMENT: "1" },
+      { DEPLOYMENT_ENVIRONMENT: "production" },
+    ]) {
+      expect(getTermiiApiKeyStatus(env), `env=${JSON.stringify(env)}`).toBe(
+        "missing",
+      );
+    }
+  });
+});
+
+describe("getModerationProviderStatus — tri-state /readyz status", () => {
+  it("returns 'not_required' on a clean dev/staging env (the substring stub is the intended behaviour)", () => {
+    expect(getModerationProviderStatus({})).toBe("not_required");
+    expect(getModerationProviderStatus({ NODE_ENV: "staging" })).toBe(
+      "not_required",
+    );
+    // Even an explicitly-stub provider on dev is "not_required" so a
+    // local override doesn't fire a probe page operators can't act on.
+    expect(
+      getModerationProviderStatus({ MODERATION_PROVIDER: "stub" }),
+    ).toBe("not_required");
+  });
+
+  it("returns 'missing' on a prod-shaped deploy when the provider is unset / 'stub'", () => {
+    expect(getModerationProviderStatus({ NODE_ENV: "production" })).toBe(
+      "missing",
+    );
+    expect(
+      getModerationProviderStatus({
+        NODE_ENV: "production",
+        MODERATION_PROVIDER: "stub",
+      }),
+    ).toBe("missing");
+  });
+
+  it("returns 'configured' on a prod-shaped deploy with hive + HIVE_API_KEY", () => {
+    expect(
+      getModerationProviderStatus({
+        NODE_ENV: "production",
+        MODERATION_PROVIDER: "hive",
+        HIVE_API_KEY: "hive-key",
+      }),
+    ).toBe("configured");
+  });
+
+  it("returns 'missing' on a prod-shaped deploy with hive but HIVE_API_KEY unset", () => {
+    expect(
+      getModerationProviderStatus({
+        NODE_ENV: "production",
+        MODERATION_PROVIDER: "hive",
+      }),
+    ).toBe("missing");
+  });
+
+  it("returns 'configured' on a prod-shaped deploy with sightengine + creds + PHOTODNA_API_KEY", () => {
+    expect(
+      getModerationProviderStatus({
+        NODE_ENV: "production",
+        MODERATION_PROVIDER: "sightengine",
+        SIGHTENGINE_API_USER: "user",
+        SIGHTENGINE_API_SECRET: "secret",
+        PHOTODNA_API_KEY: "photodna-key",
+      }),
+    ).toBe("configured");
+  });
+
+  it("returns 'missing' on a prod-shaped deploy with sightengine but missing creds", () => {
+    expect(
+      getModerationProviderStatus({
+        NODE_ENV: "production",
+        MODERATION_PROVIDER: "sightengine",
+        SIGHTENGINE_API_SECRET: "secret",
+      }),
+    ).toBe("missing");
+  });
+
+  it("returns 'missing' on a prod-shaped deploy with sightengine + creds but PHOTODNA_API_KEY unset — the CSAM regulatory gate", () => {
+    // Sightengine carries general moderation but has no NCMEC hash
+    // list. PhotoDNA is the ONLY CSAM-grade signal in this combo and
+    // the boot guard's matching `assert` helper is the one that
+    // crash-loops on the same case. The probe folds it into "missing"
+    // so the page body names the gap.
+    expect(
+      getModerationProviderStatus({
+        NODE_ENV: "production",
+        MODERATION_PROVIDER: "sightengine",
+        SIGHTENGINE_API_USER: "user",
+        SIGHTENGINE_API_SECRET: "secret",
+      }),
+    ).toBe("missing");
+  });
+
+  it("returns 'missing' on a prod-shaped deploy with an unknown provider value (typo / future provider not yet wired)", () => {
+    expect(
+      getModerationProviderStatus({
+        NODE_ENV: "production",
+        MODERATION_PROVIDER: "complyadvantage",
+      }),
+    ).toBe("missing");
+  });
+
+  it("ignores the hostname production signal — same exclusion as the other helpers (no double-page with the hostname backstop)", () => {
+    expect(
+      getModerationProviderStatus({
+        HOSTNAME: "api.epplaa.com",
+        PRODUCTION_HOSTNAME_PATTERN: "^api\\.epplaa\\.com$",
+      }),
+    ).toBe("not_required");
+  });
+});
+
+describe("getSanctionsProviderStatus — tri-state /readyz status", () => {
+  it("returns 'not_required' on a clean dev/staging env (synthetic stub hits are the intended dev/CI workflow)", () => {
+    expect(getSanctionsProviderStatus({})).toBe("not_required");
+    expect(getSanctionsProviderStatus({ NODE_ENV: "staging" })).toBe(
+      "not_required",
+    );
+    // Even an explicit stub on dev is "not_required" — the same
+    // shape as the moderation helper above.
+    expect(
+      getSanctionsProviderStatus({ SANCTIONS_PROVIDER: "stub" }),
+    ).toBe("not_required");
+  });
+
+  it("returns 'missing' on a prod-shaped deploy when the provider is unset — every payout fail-closes", () => {
+    expect(getSanctionsProviderStatus({ NODE_ENV: "production" })).toBe(
+      "missing",
+    );
+  });
+
+  it("returns 'missing' on a prod-shaped deploy when the provider is explicitly 'stub' (case-insensitive)", () => {
+    for (const v of ["stub", "STUB", "Stub", " stub "]) {
+      expect(
+        getSanctionsProviderStatus({
+          NODE_ENV: "production",
+          SANCTIONS_PROVIDER: v,
+        }),
+        `value=${JSON.stringify(v)}`,
+      ).toBe("missing");
+    }
+  });
+
+  it("returns 'configured' on a prod-shaped deploy when the env var names a real provider", () => {
+    // The helper does NOT validate that the integration actually
+    // exists — that lives in the integration task. A non-stub value
+    // being set is necessary even if not yet sufficient.
+    expect(
+      getSanctionsProviderStatus({
+        NODE_ENV: "production",
+        SANCTIONS_PROVIDER: "complyadvantage",
+      }),
+    ).toBe("configured");
+  });
+
+  it("returns 'missing' for every non-hostname production signal (mirrors the rest of the helper family)", () => {
+    for (const env of [
+      { NODE_ENV: "production" },
+      { REPLIT_DEPLOYMENT: "1" },
+      { DEPLOYMENT_ENVIRONMENT: "production" },
+    ]) {
+      expect(
+        getSanctionsProviderStatus(env),
+        `env=${JSON.stringify(env)}`,
+      ).toBe("missing");
     }
   });
 });

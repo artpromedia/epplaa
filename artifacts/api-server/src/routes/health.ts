@@ -3,14 +3,24 @@ import { sql } from "drizzle-orm";
 import { db } from "../lib/db";
 import { logger } from "../lib/logger";
 import {
+  getClerkSecretKeyStatus,
+  getMfaEncryptionKeyStatus,
+  getModerationProviderStatus,
   getProductionHostnamePatternStatus,
   getRehearsalInjectorEnabledStatus,
+  getSanctionsProviderStatus,
   getSentryDsnStatus,
   getStubFulfillmentEnabledStatus,
+  getTermiiApiKeyStatus,
+  type ClerkSecretKeyStatus,
+  type MfaEncryptionKeyStatus,
+  type ModerationProviderStatus,
   type ProductionHostnamePatternStatus,
   type RehearsalInjectorEnabledStatus,
+  type SanctionsProviderStatus,
   type SentryDsnStatus,
   type StubFulfillmentEnabledStatus,
+  type TermiiApiKeyStatus,
 } from "../lib/productionSignals";
 import {
   auditHealthWatcher,
@@ -249,6 +259,24 @@ export interface ReadyzConfigBlock {
   rateLimitStore: RateLimitStoreReadyzStatus;
   sentryDsn: SentryDsnStatus;
   /**
+   * Task #103: extend the readyz `config` block from 5 fields to 10
+   * by surfacing the tri-state status of every other operator-set
+   * boot-time secret / provider whose missing-on-production state is
+   * a paging condition. Each helper has a corresponding
+   * `assertXxxConfiguredForProduction` boot-time guard that already
+   * warn-logs the misconfiguration; the readyz fields here let the
+   * post-deploy probe page on-call when a hot env-var rotation, a
+   * platform-side env-var change without restart, or a deploy that
+   * skipped the boot guard leaves a running replica in the dangerous
+   * state. See the runbook (`docs/runbooks/staging-only-endpoints.md`)
+   * for the per-field paging table.
+   */
+  mfaEncryptionKey: MfaEncryptionKeyStatus;
+  clerkSecretKey: ClerkSecretKeyStatus;
+  termiiApiKey: TermiiApiKeyStatus;
+  moderationProvider: ModerationProviderStatus;
+  sanctionsProvider: SanctionsProviderStatus;
+  /**
    * Per-dependency probe configuration (Clerk, Paystack, Flutterwave).
    * Each entry surfaces `{ enabled, url, timeoutMs }` so an external
    * dashboard can confirm at a glance which optional probes are wired
@@ -274,6 +302,11 @@ export function getReadyzConfigBlock(
       env,
     ),
     sentryDsn: getSentryDsnStatus(env),
+    mfaEncryptionKey: getMfaEncryptionKeyStatus(env),
+    clerkSecretKey: getClerkSecretKeyStatus(env),
+    termiiApiKey: getTermiiApiKeyStatus(env),
+    moderationProvider: getModerationProviderStatus(env),
+    sanctionsProvider: getSanctionsProviderStatus(env),
     dependencyProbes: getDependencyProbeConfigBlock(env),
   };
 }

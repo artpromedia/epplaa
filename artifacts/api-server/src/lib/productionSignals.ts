@@ -373,3 +373,237 @@ export function getSentryDsnStatus(env: NodeJS.ProcessEnv): SentryDsnStatus {
   if (productionSignals.length === 0) return "not_required";
   return "missing";
 }
+
+/**
+ * Tri-state status of `MFA_ENCRYPTION_KEY` configuration.
+ *
+ * `lib/mfa.ts encryptionKey()` lazily throws "MFA_ENCRYPTION_KEY is
+ * required in production" on the first MFA enrollment / verification
+ * when `NODE_ENV=production` and the env var is unset. Two failure
+ * modes that the readyz status surfaces to the post-deploy probe:
+ *
+ *   1. The lazy-throw is gated on `NODE_ENV === "production"` ONLY.
+ *      A deploy that uses `REPLIT_DEPLOYMENT=1` /
+ *      `DEPLOYMENT_ENVIRONMENT=production` (other production-shape
+ *      signals) without `NODE_ENV=production` would silently encrypt
+ *      TOTP secrets under a SESSION_SECRET-derived key — MFA secrets
+ *      then become only as strong as SESSION_SECRET.
+ *   2. Even on a `NODE_ENV=production` deploy, the failure mode is
+ *      lazy: boot looks healthy and the next user attempting to
+ *      enroll MFA gets a 5xx.
+ *
+ * The matching boot-time helper (`assertMfaEncryptionKeyConfiguredForProduction`)
+ * already emits a warn log on this combination — this status helper
+ * exposes the same detection for the readyz probe so the cron + post-
+ * deploy gates page on the misconfiguration even when a hot env-var
+ * rotation skips the boot guard.
+ *
+ * Values mirror the other tri-state helpers:
+ *   - `"configured"` — env var set to a non-empty value.
+ *   - `"not_required"` — env var unset on a non-production deploy
+ *     (the dev fallback derived from SESSION_SECRET is intentional).
+ *   - `"missing"` — env var unset on a production-shaped deploy.
+ *     Page on-call.
+ */
+export type MfaEncryptionKeyStatus =
+  | "configured"
+  | "not_required"
+  | "missing";
+
+export function getMfaEncryptionKeyStatus(
+  env: NodeJS.ProcessEnv,
+): MfaEncryptionKeyStatus {
+  const raw = env.MFA_ENCRYPTION_KEY;
+  if (raw && raw.trim() !== "") return "configured";
+  const productionSignals = detectNonHostnameProductionSignals(env);
+  if (productionSignals.length === 0) return "not_required";
+  return "missing";
+}
+
+/**
+ * Tri-state status of `CLERK_SECRET_KEY` configuration.
+ *
+ * `CLERK_SECRET_KEY` is read in three places that all silently fall
+ * back to a less-secure path when it's missing — Clerk Frontend API
+ * proxy passthrough, `/auth/otp/verify` returning the `noClerk: true`
+ * stub, and Socket.IO connections joining as anonymous viewers. See
+ * the matching `assertClerkSecretKeyConfiguredForProduction` helper
+ * for the full derivation.
+ *
+ * Values:
+ *   - `"configured"` — env var set to a non-empty value.
+ *   - `"not_required"` — env var unset on a non-production deploy
+ *     (the OTP-only / anonymous-socket fallbacks are legitimate on
+ *     staging / dev / preview).
+ *   - `"missing"` — env var unset on a production-shaped deploy.
+ *     Page on-call.
+ *
+ * Like the boot-time helper, this status DOES NOT validate the key
+ * shape (e.g. `sk_test_*` vs `sk_live_*`) — Clerk's SDK surfaces that
+ * on the first authenticated request and re-implementing the prefix
+ * check would drift from the SDK's actual validation rules.
+ */
+export type ClerkSecretKeyStatus =
+  | "configured"
+  | "not_required"
+  | "missing";
+
+export function getClerkSecretKeyStatus(
+  env: NodeJS.ProcessEnv,
+): ClerkSecretKeyStatus {
+  const raw = env.CLERK_SECRET_KEY;
+  if (raw && raw.trim() !== "") return "configured";
+  const productionSignals = detectNonHostnameProductionSignals(env);
+  if (productionSignals.length === 0) return "not_required";
+  return "missing";
+}
+
+/**
+ * Tri-state status of `TERMII_API_KEY` configuration.
+ *
+ * Without the API key the Termii adapter (`TermiiChannel.send`)
+ * silently logs a `termii_dev_send` info-log and returns success
+ * without sending the SMS. The same `!process.env.TERMII_API_KEY`
+ * check in `lib/otp.ts` flips the OTP issuer into `devEcho` mode,
+ * where the OTP code is returned in the API response so dev callers
+ * can read it without a real SMS. On a production deploy that means
+ * every phone OTP is trivially bypassable — a buyer can claim any
+ * phone number without proving control of it.
+ *
+ * Values:
+ *   - `"configured"` — env var set to a non-empty value.
+ *   - `"not_required"` — env var unset on a non-production deploy
+ *     (devEcho is the intended dev/CI workflow).
+ *   - `"missing"` — env var unset on a production-shaped deploy.
+ *     Page on-call.
+ */
+export type TermiiApiKeyStatus =
+  | "configured"
+  | "not_required"
+  | "missing";
+
+export function getTermiiApiKeyStatus(
+  env: NodeJS.ProcessEnv,
+): TermiiApiKeyStatus {
+  const raw = env.TERMII_API_KEY;
+  if (raw && raw.trim() !== "") return "configured";
+  const productionSignals = detectNonHostnameProductionSignals(env);
+  if (productionSignals.length === 0) return "not_required";
+  return "missing";
+}
+
+/**
+ * Tri-state status of `MODERATION_PROVIDER` configuration.
+ *
+ * Mirrors `assertModerationProviderConfiguredForProduction` —
+ * `selectProvider()` falls back to the substring-matching stub when
+ * the provider is unset / `stub`, when it's set to `hive` without
+ * `HIVE_API_KEY`, when it's set to `sightengine` without
+ * `SIGHTENGINE_API_USER` + `SIGHTENGINE_API_SECRET`, when
+ * `sightengine` is configured but `PHOTODNA_API_KEY` is unset (the
+ * NCMEC-grade CSAM hash check then quietly skips), or when the
+ * provider is set to an unknown value. Each of those is a paging
+ * misconfiguration on a production deploy because every uploaded
+ * image / stream poster / chat message would silently bypass real
+ * moderation — the largest live-commerce trust gap and a regulatory
+ * non-starter for the Nigerian / South African market (Films &
+ * Publications Act mandatory CSAM reporting).
+ *
+ * The page-text in `checkReadyzConfig.ts` points at the runbook
+ * section that lists every combination plus the env vars to set; the
+ * status itself folds them into a single `missing` value so the probe
+ * stays the same shape as the other tri-state helpers.
+ *
+ * Values:
+ *   - `"configured"` — provider is `hive` with `HIVE_API_KEY`, OR
+ *     `sightengine` with `SIGHTENGINE_API_USER` +
+ *     `SIGHTENGINE_API_SECRET` + `PHOTODNA_API_KEY`.
+ *   - `"not_required"` — non-production deploy. The stub provider is
+ *     the intended behaviour for dev / CI / preview where real-call
+ *     uploads would burn third-party quota for no operational gain.
+ *   - `"missing"` — production-shaped deploy with the provider unset
+ *     / `stub` / set-but-deps-missing / set-to-unknown-value. Page
+ *     on-call.
+ */
+export type ModerationProviderStatus =
+  | "configured"
+  | "not_required"
+  | "missing";
+
+export function getModerationProviderStatus(
+  env: NodeJS.ProcessEnv,
+): ModerationProviderStatus {
+  const productionSignals = detectNonHostnameProductionSignals(env);
+  const requested = (env.MODERATION_PROVIDER ?? "").trim().toLowerCase();
+  if (productionSignals.length === 0) {
+    // On dev / staging / preview the stub is the intended behaviour
+    // and any operator-set value is "configured" enough that the
+    // probe doesn't page (the boot guard would still warn loudly if
+    // a value were obviously wrong).
+    return "not_required";
+  }
+  if (!requested || requested === "stub") return "missing";
+  if (requested === "hive") {
+    const apiKey = (env.HIVE_API_KEY ?? "").trim();
+    return apiKey ? "configured" : "missing";
+  }
+  if (requested === "sightengine") {
+    const apiUser = (env.SIGHTENGINE_API_USER ?? "").trim();
+    const apiSecret = (env.SIGHTENGINE_API_SECRET ?? "").trim();
+    const photoDnaKey = (env.PHOTODNA_API_KEY ?? "").trim();
+    if (!apiUser || !apiSecret) return "missing";
+    // Sightengine has no NCMEC hash list; PhotoDNA is the ONLY
+    // CSAM-grade signal when this provider is chosen. A production
+    // deploy without PhotoDNA leaves the regulatorily-required CSAM
+    // gate open even though general moderation looks healthy. The
+    // boot helper warns distinctly; the probe folds it into
+    // `missing` so on-call pages.
+    return photoDnaKey ? "configured" : "missing";
+  }
+  // Any other value (typo, future provider not yet wired) ->
+  // selectProvider() falls back to the stub. Page.
+  return "missing";
+}
+
+/**
+ * Tri-state status of `SANCTIONS_PROVIDER` configuration.
+ *
+ * `lib/sanctions.ts` `selectProvider()` returns `"stub"` when the
+ * env var is unset or literally `"stub"`. `screenSubject()` then
+ * fail-closes in production — every screen returns `status="blocked"`
+ * so payouts halt rather than letting an un-vetted recipient through.
+ * The fail-closed behaviour is the right default but it makes EVERY
+ * production payout fail until a real provider is wired, which is
+ * exactly the page-worthy state.
+ *
+ * `selectProvider()` also throws on a production deploy with an
+ * unknown provider (e.g. `complyadvantage` before that integration
+ * lands), which would crash the screening path entirely. The status
+ * folds both cases into `missing` so the probe pages on either.
+ *
+ * Values:
+ *   - `"configured"` — env var set to a non-empty, non-`stub` value
+ *     (the dispatch in `screenSubject()` must also be extended for
+ *     the value to actually drive a real screen, which is owned by
+ *     the provider integration task — but a real value being set is
+ *     necessary even if not yet sufficient).
+ *   - `"not_required"` — non-production deploy. The stub returning
+ *     synthetic sample-list hits is the intended dev/CI behaviour.
+ *   - `"missing"` — production-shaped deploy with the env var unset
+ *     or set to `stub`. Page on-call: every payout is fail-closed
+ *     until a real provider is configured.
+ */
+export type SanctionsProviderStatus =
+  | "configured"
+  | "not_required"
+  | "missing";
+
+export function getSanctionsProviderStatus(
+  env: NodeJS.ProcessEnv,
+): SanctionsProviderStatus {
+  const productionSignals = detectNonHostnameProductionSignals(env);
+  if (productionSignals.length === 0) return "not_required";
+  const requested = (env.SANCTIONS_PROVIDER ?? "").trim().toLowerCase();
+  if (!requested || requested === "stub") return "missing";
+  return "configured";
+}

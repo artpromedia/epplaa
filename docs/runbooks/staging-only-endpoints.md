@@ -218,9 +218,18 @@ on-call sees exactly which env var is wrong rather than just
 "something is wrong".
 
 - Surface: `getReadyzConfigBlock()` in `artifacts/api-server/src/routes/health.ts`
-  now returns FIVE fields (every status defaults to a non-paging
+  now returns TEN fields (every status defaults to a non-paging
   value on a clean dev/staging env so the probe stays silent unless
-  something is actually wrong):
+  something is actually wrong). The first five came in with Task
+  #101; the last five (`mfaEncryptionKey`, `clerkSecretKey`,
+  `termiiApiKey`, `moderationProvider`, `sanctionsProvider`) were
+  added in Task #103 to extend the same tri-state contract across
+  every secret/provider whose absence silently activates a less-
+  secure runtime fallback. Each new helper is paired with a boot-
+  time `assertXxxConfiguredForProduction` guard that crash-loops on
+  the same case at startup; the readyz probe catches drift between
+  restarts (hot env-var rotation, platform-side env-var change,
+  emergency rollback that skipped the boot guard).
 
   | Field                         | Page on                       | Informational on                                                            |
   | ----------------------------- | ----------------------------- | --------------------------------------------------------------------------- |
@@ -229,6 +238,11 @@ on-call sees exactly which env var is wrong rather than just
   | `stubFulfillmentEnabled`      | `enabled_in_production`       | `disabled`, `enabled_non_production`                                        |
   | `rateLimitStore`              | `memory_misconfigured`        | `redis`, `memory_not_required`, `memory_opt_out_acknowledged` (single-replica canaries that explicitly set `RATE_LIMIT_STORE_ALLOW_MEMORY_IN_PRODUCTION=1` — intentional, not paged) |
   | `sentryDsn`                   | `missing`                     | `configured`, `not_required`                                                |
+  | `mfaEncryptionKey`            | `missing` (set `MFA_ENCRYPTION_KEY`)            | `configured`, `not_required`                                                |
+  | `clerkSecretKey`              | `missing` (set `CLERK_SECRET_KEY`)              | `configured`, `not_required`                                                |
+  | `termiiApiKey`                | `missing` (set `TERMII_API_KEY`)                | `configured`, `not_required`                                                |
+  | `moderationProvider`          | `missing` (set `MODERATION_PROVIDER` to a real provider AND its credentials — see `assertModerationProviderConfiguredForProduction` for the per-provider key list, including the `PHOTODNA_API_KEY` requirement when `MODERATION_PROVIDER=sightengine`) | `configured`, `not_required` |
+  | `sanctionsProvider`           | `missing` (set `SANCTIONS_PROVIDER` to a real, non-`stub` provider — every payout fail-closes until then) | `configured`, `not_required`                                                |
 
   Every boot-time guard already crash-loops the dangerous
   combination on a clean restart — but a hot env-var rotation, a
@@ -293,7 +307,7 @@ on-call sees exactly which env var is wrong rather than just
   Once the new workflow has run cleanly for a week and is confirmed
   paging on every misconfiguration the old hostname-only workflow
   caught (the generalised probe is a strict superset —
-  `productionHostnamePattern` is one of its five fields), the old
+  `productionHostnamePattern` is one of its ten fields), the old
   `.github/workflows/check-production-hostname-pattern.yml` workflow
   + the matching `check-production-hostname-pattern` npm script in
   `artifacts/api-server/package.json` + the
@@ -301,17 +315,42 @@ on-call sees exactly which env var is wrong rather than just
   source can be retired.
 
 - Tests: `routes/health.test.ts` (per-field route shape on both
-  the 200 ready and 503 not_ready paths, plus the all-safe
-  baseline and the page-everything composition),
+  the 200 ready and 503 not_ready paths for all ten fields, plus
+  the all-safe baseline and the page-everything composition),
   `lib/productionSignals.test.ts` (per-helper branch matrix for
   `getRehearsalInjectorEnabledStatus` /
-  `getStubFulfillmentEnabledStatus` / `getSentryDsnStatus`),
+  `getStubFulfillmentEnabledStatus` / `getSentryDsnStatus` /
+  `getMfaEncryptionKeyStatus` / `getClerkSecretKeyStatus` /
+  `getTermiiApiKeyStatus` / `getModerationProviderStatus` /
+  `getSanctionsProviderStatus`),
   `middlewares/apiRateLimit.test.ts` (the
   `getRateLimitStoreReadyzStatus` helper), and
   `scripts/checkReadyzConfig.test.ts` (per-field rule matrix +
   aggregate fold + worst-wins severity + CLI exit-code mapping +
   structured stdout/stderr lines, including the version-skew
   missing-field case).
+
+#### Post-deploy dual-gate wiring (Task #103)
+
+Task #103 generalised the readyz config block from five fields to
+ten and wired the generalised `check-readyz-config` workflow into
+`.github/workflows/release.yml` as a SECOND post-deploy job
+(`post-deploy-readyz-config-check`) running alongside the existing
+hostname-only `post-deploy-config-check` job. Both jobs use
+`needs: sentry-release` + `if: always()` + `secrets: inherit`, so a
+non-zero exit from either fails the release run synchronously
+instead of waiting for the cron tick.
+
+Running both gates in parallel during the runbook-documented one-
+week soak period intentionally trades a small amount of CI time for
+a smaller rollback surface: if the generalised check has a false-
+positive bug in production, on-call still has the narrower
+hostname-only check protecting that one field, and the legacy job's
+history shows whether the regression is in the new check or in the
+shared `/readyz` surface itself. Once the soak is done and the
+hostname-only job has been retired per the plan above, the
+`post-deploy-config-check` job in `release.yml` is removed in the
+same change as the workflow file + npm script + script source.
 
 ### `lib/fulfillment/gig.ts` `allowStubFallback()`
 

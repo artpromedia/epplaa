@@ -157,6 +157,97 @@ describe("evaluateField — per-field rule matrix", () => {
     });
   });
 
+  // -------------------------------------------------------------------
+  // Task #103 — five additional secret/provider rules. Each follows
+  // the same shape as `sentryDsn` above (configured/not_required = ok,
+  // missing = page) so adding a sixth secret in the future is a
+  // mechanical extension, not a contract change.
+  // -------------------------------------------------------------------
+
+  describe("mfaEncryptionKey", () => {
+    it("treats 'configured' and 'not_required' as ok", () => {
+      expect(evaluateField("mfaEncryptionKey", "configured").outcome).toBe(
+        "ok",
+      );
+      expect(evaluateField("mfaEncryptionKey", "not_required").outcome).toBe(
+        "ok",
+      );
+    });
+
+    it("pages on 'missing' and names the env var + runbook", () => {
+      const r = evaluateField("mfaEncryptionKey", "missing");
+      expect(r.outcome).toBe("page");
+      expect(r.reason).toContain("MFA_ENCRYPTION_KEY");
+      expect(r.reason).toContain("staging-only-endpoints.md");
+    });
+  });
+
+  describe("clerkSecretKey", () => {
+    it("treats 'configured' and 'not_required' as ok", () => {
+      expect(evaluateField("clerkSecretKey", "configured").outcome).toBe("ok");
+      expect(evaluateField("clerkSecretKey", "not_required").outcome).toBe(
+        "ok",
+      );
+    });
+
+    it("pages on 'missing' and names the env var + runbook", () => {
+      const r = evaluateField("clerkSecretKey", "missing");
+      expect(r.outcome).toBe("page");
+      expect(r.reason).toContain("CLERK_SECRET_KEY");
+      expect(r.reason).toContain("staging-only-endpoints.md");
+    });
+  });
+
+  describe("termiiApiKey", () => {
+    it("treats 'configured' and 'not_required' as ok", () => {
+      expect(evaluateField("termiiApiKey", "configured").outcome).toBe("ok");
+      expect(evaluateField("termiiApiKey", "not_required").outcome).toBe("ok");
+    });
+
+    it("pages on 'missing' and names the env var + runbook", () => {
+      const r = evaluateField("termiiApiKey", "missing");
+      expect(r.outcome).toBe("page");
+      expect(r.reason).toContain("TERMII_API_KEY");
+      expect(r.reason).toContain("staging-only-endpoints.md");
+    });
+  });
+
+  describe("moderationProvider", () => {
+    it("treats 'configured' and 'not_required' as ok", () => {
+      expect(evaluateField("moderationProvider", "configured").outcome).toBe(
+        "ok",
+      );
+      expect(
+        evaluateField("moderationProvider", "not_required").outcome,
+      ).toBe("ok");
+    });
+
+    it("pages on 'missing' and names the env var + runbook", () => {
+      const r = evaluateField("moderationProvider", "missing");
+      expect(r.outcome).toBe("page");
+      expect(r.reason).toContain("MODERATION_PROVIDER");
+      expect(r.reason).toContain("staging-only-endpoints.md");
+    });
+  });
+
+  describe("sanctionsProvider", () => {
+    it("treats 'configured' and 'not_required' as ok", () => {
+      expect(evaluateField("sanctionsProvider", "configured").outcome).toBe(
+        "ok",
+      );
+      expect(evaluateField("sanctionsProvider", "not_required").outcome).toBe(
+        "ok",
+      );
+    });
+
+    it("pages on 'missing' and names the env var + runbook", () => {
+      const r = evaluateField("sanctionsProvider", "missing");
+      expect(r.outcome).toBe("page");
+      expect(r.reason).toContain("SANCTIONS_PROVIDER");
+      expect(r.reason).toContain("staging-only-endpoints.md");
+    });
+  });
+
   it("returns 'probe_error' for a string value the rule doesn't recognise (response-shape regression)", () => {
     // An unrecognised value is more dangerous than a known-bad value:
     // the probe can't decide whether it should page, so escalate.
@@ -191,19 +282,21 @@ describe("evaluateReadyz — aggregate fold across all fields", () => {
       stubFulfillmentEnabled: "disabled",
       rateLimitStore: "redis",
       sentryDsn: "not_required",
+      // Task #103 — five additional secret/provider fields. On a
+      // dev/staging deploy each helper returns "not_required".
+      mfaEncryptionKey: "not_required",
+      clerkSecretKey: "not_required",
+      termiiApiKey: "not_required",
+      moderationProvider: "not_required",
+      sanctionsProvider: "not_required",
     },
   };
 
   it("returns 'ok' when every field is in a non-paging state", () => {
     const r = evaluateReadyz(HEALTHY_BODY);
     expect(r.worstOutcome).toBe("ok");
-    expect(r.fields.map((f) => f.outcome)).toEqual([
-      "ok",
-      "ok",
-      "ok",
-      "ok",
-      "ok",
-    ]);
+    expect(r.fields).toHaveLength(10);
+    expect(r.fields.every((f) => f.outcome === "ok")).toBe(true);
   });
 
   it("pages when ONE field is in a paging state — the rest stay ok in the per-field breakdown", () => {
@@ -221,7 +314,8 @@ describe("evaluateReadyz — aggregate fold across all fields", () => {
     const otherOutcomes = r.fields
       .filter((f) => f.field !== "sentryDsn")
       .map((f) => f.outcome);
-    expect(otherOutcomes).toEqual(["ok", "ok", "ok", "ok"]);
+    expect(otherOutcomes).toHaveLength(9);
+    expect(otherOutcomes.every((o) => o === "ok")).toBe(true);
   });
 
   it("pages with EVERY paging reason populated when the deploy is misconfigured across the board", () => {
@@ -235,9 +329,15 @@ describe("evaluateReadyz — aggregate fold across all fields", () => {
         stubFulfillmentEnabled: "enabled_in_production",
         rateLimitStore: "memory_misconfigured",
         sentryDsn: "missing",
+        mfaEncryptionKey: "missing",
+        clerkSecretKey: "missing",
+        termiiApiKey: "missing",
+        moderationProvider: "missing",
+        sanctionsProvider: "missing",
       },
     });
     expect(r.worstOutcome).toBe("page");
+    expect(r.fields).toHaveLength(10);
     expect(r.fields.every((f) => f.outcome === "page")).toBe(true);
     // Each reason must name its env var so the on-call doesn't have
     // to cross-reference field names to env-var names.
@@ -247,6 +347,11 @@ describe("evaluateReadyz — aggregate fold across all fields", () => {
     expect(reasons).toContain("STUB_FULFILLMENT");
     expect(reasons).toContain("RATE_LIMIT_STORE");
     expect(reasons).toContain("SENTRY_DSN");
+    expect(reasons).toContain("MFA_ENCRYPTION_KEY");
+    expect(reasons).toContain("CLERK_SECRET_KEY");
+    expect(reasons).toContain("TERMII_API_KEY");
+    expect(reasons).toContain("MODERATION_PROVIDER");
+    expect(reasons).toContain("SANCTIONS_PROVIDER");
   });
 
   it("escalates to 'probe_error' when ANY field has an unrecognised value (worst-wins severity)", () => {
@@ -268,7 +373,7 @@ describe("evaluateReadyz — aggregate fold across all fields", () => {
   it("returns 'probe_error' for every field when the config block is missing entirely", () => {
     const r = evaluateReadyz({});
     expect(r.worstOutcome).toBe("probe_error");
-    expect(r.fields).toHaveLength(5);
+    expect(r.fields).toHaveLength(10);
     expect(r.fields.every((f) => f.outcome === "probe_error")).toBe(true);
     expect(r.fields[0]!.reason).toContain("missing the `config` block");
   });
@@ -288,19 +393,29 @@ describe("evaluateReadyz — aggregate fold across all fields", () => {
     // status field would have `undefined` at that field; the probe
     // must escalate rather than pretend the field is "ok". This
     // forces the operator to confirm the deploy actually finished
-    // rolling out before trusting subsequent probe runs.
+    // rolling out before trusting subsequent probe runs. We omit one
+    // of the new task #103 fields here — the version-skew scenario
+    // most likely to bite right after this rollout — to pin down the
+    // contract that ALL fields, not just the original 5, escalate.
     const r = evaluateReadyz({
       config: {
         productionHostnamePattern: "not_required",
         rehearsalInjectorEnabled: "disabled",
-        // stubFulfillmentEnabled missing
+        stubFulfillmentEnabled: "disabled",
         rateLimitStore: "redis",
         sentryDsn: "not_required",
+        mfaEncryptionKey: "not_required",
+        clerkSecretKey: "not_required",
+        termiiApiKey: "not_required",
+        // moderationProvider intentionally omitted (older replica)
+        sanctionsProvider: "not_required",
       },
     });
     expect(r.worstOutcome).toBe("probe_error");
-    const stub = r.fields.find((f) => f.field === "stubFulfillmentEnabled")!;
-    expect(stub.outcome).toBe("probe_error");
+    const moderation = r.fields.find(
+      (f) => f.field === "moderationProvider",
+    )!;
+    expect(moderation.outcome).toBe("probe_error");
   });
 });
 
@@ -356,6 +471,11 @@ describe("main — CLI wiring (env validation, exit code, structured output)", (
             stubFulfillmentEnabled: "disabled",
             rateLimitStore: "redis",
             sentryDsn: "configured",
+            mfaEncryptionKey: "configured",
+            clerkSecretKey: "configured",
+            termiiApiKey: "configured",
+            moderationProvider: "configured",
+            sanctionsProvider: "configured",
           },
         },
         httpStatus: 200,
@@ -371,7 +491,7 @@ describe("main — CLI wiring (env validation, exit code, structured output)", (
     };
     expect(line.outcome).toBe("ok");
     expect(line.httpStatus).toBe(200);
-    expect(line.fields).toHaveLength(5);
+    expect(line.fields).toHaveLength(10);
     expect(line.fields.every((f) => f.outcome === "ok")).toBe(true);
   });
 
@@ -388,6 +508,14 @@ describe("main — CLI wiring (env validation, exit code, structured output)", (
             stubFulfillmentEnabled: "disabled",
             rateLimitStore: "redis",
             sentryDsn: "missing",
+            // Healthy on the new task #103 fields so we can pin down
+            // that the paging set is exactly the three legacy
+            // misconfigurations — not bleed-over from the new ones.
+            mfaEncryptionKey: "configured",
+            clerkSecretKey: "configured",
+            termiiApiKey: "configured",
+            moderationProvider: "configured",
+            sanctionsProvider: "configured",
           },
         },
         httpStatus: 200,
@@ -431,6 +559,11 @@ describe("main — CLI wiring (env validation, exit code, structured output)", (
             stubFulfillmentEnabled: "disabled",
             rateLimitStore: "redis",
             sentryDsn: "configured",
+            mfaEncryptionKey: "configured",
+            clerkSecretKey: "configured",
+            termiiApiKey: "configured",
+            moderationProvider: "configured",
+            sanctionsProvider: "configured",
           },
         },
         httpStatus: 503,

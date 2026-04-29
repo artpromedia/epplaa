@@ -128,3 +128,33 @@ jobs:
     if: always()
     uses: ./.github/workflows/check-production-hostname-pattern.yml
     secrets: inherit
+
+  # Generalised post-deploy configuration gate (Task #103, building on
+  # Task #101). The hostname-only check above is a strict subset of
+  # this generalised check — the readyz config block now surfaces a
+  # tri-state status for ALL ten high-risk operator-set boot-time
+  # settings (`PRODUCTION_HOSTNAME_PATTERN`, the rehearsal injector
+  # kill switch, the stub-fulfillment kill switch, the rate-limit
+  # store, the Sentry DSN, `MFA_ENCRYPTION_KEY`, `CLERK_SECRET_KEY`,
+  # `TERMII_API_KEY`, `MODERATION_PROVIDER`, and `SANCTIONS_PROVIDER`).
+  # Wiring it as a sibling job (rather than replacing the hostname-
+  # only gate) keeps the rollback surface minimal during the runbook-
+  # documented one-week soak before the legacy gate is retired: if the
+  # generalised check has a false-positive bug, on-call still has the
+  # narrower hostname-only check protecting that one field, and the
+  # legacy job's history shows whether the regression is in the new
+  # check or in the surface itself.
+  #
+  # Both jobs depend on `sentry-release` and use `if: always()` for
+  # the same reasons documented on the hostname-only job above. The
+  # called workflow is independently gated by
+  # `vars.READYZ_CONFIG_PROBE_ENABLED == '1'` so this job no-ops
+  # cleanly until an operator opts in via repo variables (see
+  # `docs/runbooks/staging-only-endpoints.md` for the full required-
+  # vars/secrets list and the retirement plan for the legacy job).
+  post-deploy-readyz-config-check:
+    name: Post-deploy config check (full readyz config block)
+    needs: sentry-release
+    if: always()
+    uses: ./.github/workflows/check-readyz-config.yml
+    secrets: inherit
