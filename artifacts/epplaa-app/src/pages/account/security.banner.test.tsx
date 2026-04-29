@@ -60,18 +60,58 @@ vi.mock("@/hooks/use-toast", () => ({
 // loading spinner instead of a stale enrolment.
 const statusHook = vi.fn();
 
+// Per-mutation overrides so a test can swap in a stub that exposes a
+// rate-limited `error` shape. Defaults to "no error" so the existing
+// banner / regenerate-form tests behave as before.
+const mutationStub = (): {
+  mutate: ReturnType<typeof vi.fn>;
+  isPending: boolean;
+  error: unknown;
+} => ({ mutate: vi.fn(), isPending: false, error: null });
+const setupMutHook = vi.fn(mutationStub);
+const verifyMutHook = vi.fn(mutationStub);
+const disableMutHook = vi.fn(mutationStub);
+const regenMutHook = vi.fn(mutationStub);
+
 vi.mock("@workspace/api-client-react", () => ({
   useGetMfaStatus: () => statusHook(),
   // Mutation hooks are inert stubs — the recovery flow's success/error
   // branches are covered by the integration test in
   // `artifacts/api-server/src/routes/mfa.regenerate.int.test.ts`. Here
   // we only need them to not throw when the page wires up its
-  // onSuccess/onError handlers.
-  useSetupMfaTotp: () => ({ mutate: vi.fn(), isPending: false }),
-  useVerifyMfaTotp: () => ({ mutate: vi.fn(), isPending: false }),
-  useDisableMfaTotp: () => ({ mutate: vi.fn(), isPending: false }),
-  useRegenerateMfaBackupCodes: () => ({ mutate: vi.fn(), isPending: false }),
+  // onSuccess/onError handlers, plus expose the per-mutation `error`
+  // hook so the rate-limit inline-alert tests can drive that branch.
+  useSetupMfaTotp: () => setupMutHook(),
+  useVerifyMfaTotp: () => verifyMutHook(),
+  useDisableMfaTotp: () => disableMutHook(),
+  useRegenerateMfaBackupCodes: () => regenMutHook(),
+  parseRateLimitedError: parseRateLimitedErrorMock,
+  // The component uses the memoized hook variant in render. Under
+  // test it's safe to delegate straight to the same parser — the
+  // memoization is exercised by the dedicated unit test in
+  // `lib/api-client-react/src/hooks/use-rate-limited-error.test.ts`.
+  useRateLimitedError: (err: unknown) => parseRateLimitedErrorMock(err),
+  formatRetryAtClockTime: (d: Date) =>
+    d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" }),
 }));
+
+// Mirror the real helper: only treats well-known 429 shapes as
+// rate-limited. Tests pass `{ rateLimited: true, retryAt }`
+// payloads through the mutation `error` slot so we don't have to
+// synthesise a real ApiError + Headers in the test environment.
+function parseRateLimitedErrorMock(
+  err: unknown,
+): { retryAt: Date; retryAfterSeconds: number } | null {
+  if (
+    err &&
+    typeof err === "object" &&
+    (err as { rateLimited?: boolean }).rateLimited === true
+  ) {
+    const retryAt = (err as { retryAt?: Date }).retryAt ?? new Date();
+    return { retryAt, retryAfterSeconds: 60 };
+  }
+  return null;
+}
 
 // Import AFTER the mocks so the SUT picks up the stubs.
 const { default: Security } = await import("./security");
@@ -214,5 +254,98 @@ describe("Security page — regenerate-backup-codes form is surfaced", () => {
     expect(screen.queryByTestId("button-mfa-regenerate")).toBeNull();
     // The unenrolled enrolment-start card is what the user sees instead.
     expect(screen.getByTestId("mfa-enrol-card")).toBeTruthy();
+  });
+});
+
+describe("Security page — MFA rate-limit inline alerts", () => {
+  // The MFA mutation routes return 429 with a Retry-After header
+  // when a user trips the per-hour cap on the server. Each affected
+  // section (start setup, verify, disable, regenerate) should
+  // surface a friendly inline alert that names the action and shows
+  // the local "try again at" time, instead of the generic toast.
+
+  function rateLimitedError(retryAt: Date): { rateLimited: true; retryAt: Date } {
+    return { rateLimited: true, retryAt };
+  }
+
+  function resetMutations(): void {
+    setupMutHook.mockReset().mockImplementation(mutationStub);
+    verifyMutHook.mockReset().mockImplementation(mutationStub);
+    disableMutHook.mockReset().mockImplementation(mutationStub);
+    regenMutHook.mockReset().mockImplementation(mutationStub);
+  }
+
+  beforeEach(() => {
+    statusHook.mockReset();
+    resetMutations();
+  });
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("does NOT show any rate-limit alert in the steady state (no mutation errors)", () => {
+    // Sanity check — the inline alerts are gated on a real
+    // rate-limit error, not always-on. Without one, none of the
+    // four data-testids should be in the DOM.
+    setStatus(enrolledStatus(5));
+    render(<Security />);
+    expect(screen.queryByTestId("mfa-rate-limit-setup")).toBeNull();
+    expect(screen.queryByTestId("mfa-rate-limit-verify")).toBeNull();
+    expect(screen.queryByTestId("mfa-rate-limit-disable")).toBeNull();
+    expect(screen.queryByTestId("mfa-rate-limit-regenerate")).toBeNull();
+  });
+
+  it("renders the setup rate-limit alert when start-setup hits 429", () => {
+    setStatus(unenrolledStatus());
+    const retryAt = new Date(Date.now() + 60 * 60 * 1000);
+    setupMutHook.mockReturnValue({
+      mutate: vi.fn(),
+      isPending: false,
+      error: rateLimitedError(retryAt),
+    });
+    render(<Security />);
+    const alert = screen.getByTestId("mfa-rate-limit-setup");
+    // Action-specific copy — the user needs to know *which* action
+    // is paused, not just that something failed.
+    expect(alert.textContent).toContain("setup");
+    // The "try again at" clock time is rendered from the Retry-After
+    // delta. We don't assert the exact string (locale-dependent) —
+    // just that the dedicated time slot mounted with non-empty text.
+    const time = screen.getByTestId("mfa-rate-limit-setup-time");
+    expect(time.textContent?.trim().length ?? 0).toBeGreaterThan(0);
+  });
+
+  it("renders the disable rate-limit alert when the destructive disable call hits 429", () => {
+    setStatus(enrolledStatus(5));
+    const retryAt = new Date(Date.now() + 30 * 60 * 1000);
+    disableMutHook.mockReturnValue({
+      mutate: vi.fn(),
+      isPending: false,
+      error: rateLimitedError(retryAt),
+    });
+    render(<Security />);
+    const alert = screen.getByTestId("mfa-rate-limit-disable");
+    expect(alert.textContent).toContain("disable");
+    expect(screen.getByTestId("mfa-rate-limit-disable-time")).toBeTruthy();
+    // And the regenerate alert is silent — disable + regenerate
+    // have independent server-side buckets, so a regression that
+    // collapsed both into the same alert would surface here.
+    expect(screen.queryByTestId("mfa-rate-limit-regenerate")).toBeNull();
+  });
+
+  it("renders the regenerate alert when the destructive regenerate call hits 429 (form expanded)", () => {
+    setStatus(enrolledStatus(2));
+    const retryAt = new Date(Date.now() + 45 * 60 * 1000);
+    regenMutHook.mockReturnValue({
+      mutate: vi.fn(),
+      isPending: false,
+      error: rateLimitedError(retryAt),
+    });
+    render(<Security />);
+    // The regen alert lives inside the regenerate form, so the
+    // user has to expand it before the alert is in the DOM.
+    fireEvent.click(screen.getByTestId("button-mfa-regenerate-open"));
+    const alert = screen.getByTestId("mfa-rate-limit-regenerate");
+    expect(alert.textContent).toContain("regeneration");
   });
 });

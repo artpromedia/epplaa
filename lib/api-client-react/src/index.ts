@@ -19,3 +19,9 @@ export type {
   UseRateLimitStoreBannerOptions,
   RateLimitStoreBannerState,
 } from "./hooks/use-rate-limit-store-banner";
+export {
+  parseRateLimitedError,
+  useRateLimitedError,
+  formatRetryAtClockTime,
+} from "./hooks/use-rate-limited-error";
+export type { RateLimitedErrorInfo } from "./hooks/use-rate-limited-error";

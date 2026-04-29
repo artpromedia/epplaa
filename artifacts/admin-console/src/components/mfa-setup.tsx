@@ -13,6 +13,9 @@ import { useUser } from "@clerk/clerk-react";
 import {
   type MfaSetupResult,
   type MfaStatus,
+  formatRetryAtClockTime,
+  parseRateLimitedError,
+  useRateLimitedError,
   useGetMfaStatus,
   useSetupMfaTotp,
   useVerifyMfaTotp,
@@ -79,13 +82,23 @@ export function MfaSetup() {
 
   const invalidate = () => qc.invalidateQueries({ queryKey: MFA_STATUS_KEY });
 
+  // The MFA mutation routes return 429 with a Retry-After header when
+  // an operator trips the per-user hourly cap (see
+  // middlewares/apiRateLimit). For those responses we surface a
+  // friendly inline alert with an action-specific message and the
+  // local "try again at" clock time, instead of the generic toast —
+  // operators need to know which action was paused and when they can
+  // try again, not just that "something failed". Each onError below
+  // suppresses its toast on a rate-limit response so only the inline
+  // alert (rendered from the mutation's `error` further down) shows.
   const setupMut = useSetupMfaTotp({
     mutation: {
       onSuccess: (data) => {
         setSetupResult(data);
         setActivateCode("");
       },
-      onError: () => {
+      onError: (err) => {
+        if (parseRateLimitedError(err)) return;
         toast({
           title: "Could not start MFA setup",
           description: "Try again in a moment.",
@@ -105,7 +118,8 @@ export function MfaSetup() {
           description: "Your authenticator is now active.",
         });
       },
-      onError: () => {
+      onError: (err) => {
+        if (parseRateLimitedError(err)) return;
         toast({
           title: "Code rejected",
           description: "Double-check the 6-digit code on your authenticator.",
@@ -124,7 +138,8 @@ export function MfaSetup() {
           description: "TOTP has been removed from this account.",
         });
       },
-      onError: () => {
+      onError: (err) => {
+        if (parseRateLimitedError(err)) return;
         toast({
           title: "Could not disable MFA",
           description: "Verify a fresh code first, then try again.",
@@ -138,7 +153,8 @@ export function MfaSetup() {
       onSuccess: () => {
         disableMut.mutate();
       },
-      onError: () => {
+      onError: (err) => {
+        if (parseRateLimitedError(err)) return;
         toast({
           title: "Code rejected",
           description: "That code didn't match — try a fresh one.",
@@ -159,7 +175,8 @@ export function MfaSetup() {
           description: "Save them now — your old codes no longer work.",
         });
       },
-      onError: () => {
+      onError: (err) => {
+        if (parseRateLimitedError(err)) return;
         toast({
           title: "Couldn't regenerate codes",
           description: "Verify a fresh authenticator code first.",
@@ -173,7 +190,8 @@ export function MfaSetup() {
       onSuccess: () => {
         regenMut.mutate();
       },
-      onError: () => {
+      onError: (err) => {
+        if (parseRateLimitedError(err)) return;
         toast({
           title: "Code rejected",
           description: "That code didn't match — try a fresh one.",
@@ -181,6 +199,27 @@ export function MfaSetup() {
       },
     },
   });
+
+  // Per-section rate-limit info derived from the relevant mutation's
+  // current error. Disable + regenerate are paired flows (verify
+  // first, then the destructive call) and the two routes have
+  // independent server-side buckets, so we check both — whichever
+  // tripped first is the one we surface. The inline alerts re-render
+  // automatically when the mutation state changes; clearing the
+  // error on a fresh `mutate()` clears the alert.
+  // Use the memoized hook variants here so the displayed "try again
+  // at" clock time stays pinned to the moment the error first
+  // appeared and doesn't drift forward on every re-render. The
+  // imperative `parseRateLimitedError` calls in the onError handlers
+  // above are fine: those run once per error.
+  const setupRateLimited = useRateLimitedError(setupMut.error);
+  const verifyRateLimited = useRateLimitedError(verifyMut.error);
+  const disableMutRateLimited = useRateLimitedError(disableMut.error);
+  const reAssertRateLimited = useRateLimitedError(reAssertMut.error);
+  const regenMutRateLimited = useRateLimitedError(regenMut.error);
+  const regenAssertRateLimited = useRateLimitedError(regenAssertMut.error);
+  const disableRateLimited = disableMutRateLimited ?? reAssertRateLimited;
+  const regenRateLimited = regenMutRateLimited ?? regenAssertRateLimited;
 
   if (statusQuery.isLoading) {
     return (
@@ -234,6 +273,13 @@ export function MfaSetup() {
               )}
               Start setup
             </Button>
+            {setupRateLimited && (
+              <RateLimitInline
+                action="setup"
+                retryAt={setupRateLimited.retryAt}
+                testId="mfa-rate-limit-setup"
+              />
+            )}
           </CardContent>
         </Card>
       )}
@@ -330,6 +376,13 @@ export function MfaSetup() {
                   Verify and enable
                 </Button>
               </form>
+              {verifyRateLimited && (
+                <RateLimitInline
+                  action="verification"
+                  retryAt={verifyRateLimited.retryAt}
+                  testId="mfa-rate-limit-verify"
+                />
+              )}
             </div>
 
             <BackupCodeSheet codes={setupResult.backupCodes} />
@@ -456,6 +509,13 @@ export function MfaSetup() {
                         Cancel
                       </Button>
                     </form>
+                    {regenRateLimited && (
+                      <RateLimitInline
+                        action="backup-code regeneration"
+                        retryAt={regenRateLimited.retryAt}
+                        testId="mfa-rate-limit-regenerate"
+                      />
+                    )}
                   </>
                 )}
               </div>
@@ -507,11 +567,52 @@ export function MfaSetup() {
                   Disable MFA
                 </Button>
               </form>
+              {disableRateLimited && (
+                <RateLimitInline
+                  action="disable"
+                  retryAt={disableRateLimited.retryAt}
+                  testId="mfa-rate-limit-disable"
+                />
+              )}
             </div>
           </CardContent>
         </Card>
       )}
     </div>
+  );
+}
+
+/**
+ * Inline alert shown beneath an MFA control when the API has paused
+ * that action under the per-user hourly cap. Uses the same `Alert`
+ * primitive as the existing MFA status banners so it slots into the
+ * card naturally instead of looking like a generic error toast or a
+ * destructive-state alert.
+ */
+function RateLimitInline({
+  action,
+  retryAt,
+  testId,
+}: {
+  action: string;
+  retryAt: Date;
+  testId: string;
+}) {
+  return (
+    <Alert
+      className="border-amber-500/50 [&>svg]:text-amber-500"
+      data-testid={testId}
+    >
+      <ShieldAlert className="h-4 w-4" />
+      <AlertTitle>Too many {action} attempts</AlertTitle>
+      <AlertDescription>
+        For your account's safety we've paused this action. Try again at{" "}
+        <span className="font-mono" data-testid={`${testId}-time`}>
+          {formatRetryAtClockTime(retryAt)}
+        </span>
+        .
+      </AlertDescription>
+    </Alert>
   );
 }
 
