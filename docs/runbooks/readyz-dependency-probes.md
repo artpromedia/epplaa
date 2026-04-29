@@ -180,6 +180,71 @@ returns `<name>: "skipped"` AND
 authoritative read of "is the flag actually wired" since the env var
 might have been set on the wrong replica.
 
+## On-call paging on a stuck probe
+
+A repeated probe failure pages on-call out-of-band so operators don't
+have to be tailing logs to notice. The notifier
+(`lib/alerts/dependencyProbeAlerts.ts`) tracks consecutive failures
+per probe and fires a Slack and/or PagerDuty alert once the threshold
+is crossed; recovery (a single `ok` result, OR the operator flipping
+the env-flag escape hatch above) emits the matching resolve so the
+PagerDuty incident closes automatically.
+
+The alert payload includes:
+
+- The probe name (`clerk` / `paystack` / `flutterwave`) and a stable
+  `dependency-probe:<name>` subsystem id so PagerDuty groups
+  re-trips under the same incident.
+- The freshest failure marker (e.g. `http_probe_timeout_after_2000ms`,
+  `getaddrinfo ENOTFOUND api.clerk.com`) — the same string that
+  appears under `failures.<name>` on `/readyz`.
+- A direct link back to the [in-incident escape hatch](#in-incident-escape-hatch-the-circuit-breaker)
+  section above so on-call can disable the probe without a deploy if
+  the probe itself is the problem.
+
+### Configuration
+
+| Env var | Default | Notes |
+| --- | --- | --- |
+| `DEPENDENCY_PROBE_ALERT_THRESHOLD` | `3` | N consecutive failures before paging. Sanitised to >= 1 — `0` / negative / non-numeric values fall back to the default to prevent paging on every transient blip. |
+| `DEPENDENCY_PROBE_ALERT_COOLDOWN_MS` | `60000` | Per-probe cooldown after a degraded → recovered transition. A flapping probe inside this window does NOT re-page. `0` is accepted as "no debounce". |
+| `DEPENDENCY_PROBE_ALERT_RUNBOOK_URL` | this runbook anchor | Override to point at an internal wiki copy if you mirror runbooks. |
+| `SUBSYSTEM_ALERT_SLACK_WEBHOOK_URL` | unset | Slack incoming webhook. Falls back to `RATE_LIMIT_INCIDENT_SLACK_WEBHOOK_URL` so an existing rate-limit channel automatically receives probe alerts. |
+| `SUBSYSTEM_ALERT_PAGERDUTY_ROUTING_KEY` | unset | PagerDuty Events API v2 routing key. Falls back to `RATE_LIMIT_INCIDENT_PAGERDUTY_ROUTING_KEY`. |
+
+When neither Slack nor PagerDuty is configured, the alerting is a
+graceful no-op — dev / preview / CI deploys never try to page anyone.
+
+### Debounce semantics
+
+- A single 503 does NOT page. The threshold (default 3) exists to
+  swallow single transient blips (TLS renegotiation, brief packet
+  loss).
+- We page exactly once per healthy → degraded transition. Subsequent
+  failures within the same streak update the freshest failure marker
+  but do not re-page.
+- Recovery is paired with the trigger via PagerDuty's `dedup_key`, so
+  a single `ok` result (or the operator disabling the probe via the
+  env-flag escape hatch) auto-closes the incident.
+- The cooldown gate prevents a flapping probe from re-paging within
+  the cooldown window after a recovery — operator notes recovery,
+  probe re-fails 5s later, the second trip is suppressed and a
+  warning is logged (`dependency_probe_alert_degraded_suppressed_by_cooldown`).
+
+### Tuning
+
+If the threshold paging frequency is too noisy for your platform LB
+cadence (e.g. a 1s cadence with the default threshold pages within
+3s of a real outage), raise the threshold rather than disabling the
+probe — the goal is "page on a real outage", not "page on the first
+TCP handshake hiccup". Conversely, if you're missing legitimate
+short-lived dependency outages, lower the threshold.
+
+If you find yourself wanting to lower the threshold to `1`, double-
+check that the probe URL itself isn't the problem (a flaky probe
+endpoint will spam on-call if every blip pages). Disable the probe
+via its env flag instead.
+
 ## Related runbooks
 
 - [`rate-limit-store.md`](./rate-limit-store.md) — the always-on Redis

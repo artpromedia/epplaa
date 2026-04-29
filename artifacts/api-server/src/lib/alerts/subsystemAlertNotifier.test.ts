@@ -321,3 +321,91 @@ describe("payload builders — pure functions", () => {
     );
   });
 });
+
+describe("payload builders — optional runbookUrl field (task #121)", () => {
+  // The dependency-probe alert monitor (lib/alerts/dependencyProbeAlerts.ts)
+  // attaches a runbook link to every page so on-call sees the
+  // "in-incident escape hatch" section without grepping. Existing
+  // callers (rate-limit, gateway) MUST keep their current behaviour
+  // when they don't pass the field — no Runbook field, no PagerDuty
+  // `links` entry.
+
+  it("Slack: omits the Runbook field when runbookUrl is undefined", () => {
+    const body = JSON.parse(
+      buildSlackDegradedPayload(SAMPLE_DEGRADED, "src"),
+    ) as { attachments: Array<{ fields: Array<{ title: string }> }> };
+    const titles = body.attachments[0]!.fields.map((f) => f.title);
+    expect(titles).not.toContain("Runbook");
+  });
+
+  it("Slack: includes the Runbook field when runbookUrl is set", () => {
+    const body = JSON.parse(
+      buildSlackDegradedPayload(
+        { ...SAMPLE_DEGRADED, runbookUrl: "https://docs.example/runbook" },
+        "src",
+      ),
+    ) as {
+      attachments: Array<{ fields: Array<{ title: string; value: string }> }>;
+    };
+    const fieldMap = Object.fromEntries(
+      body.attachments[0]!.fields.map((f) => [f.title, f.value]),
+    );
+    expect(fieldMap.Runbook).toBe("https://docs.example/runbook");
+  });
+
+  it("Slack: trims whitespace-only runbookUrl as 'unset'", () => {
+    const body = JSON.parse(
+      buildSlackDegradedPayload(
+        { ...SAMPLE_DEGRADED, runbookUrl: "   " },
+        "src",
+      ),
+    ) as { attachments: Array<{ fields: Array<{ title: string }> }> };
+    expect(
+      body.attachments[0]!.fields.map((f) => f.title),
+    ).not.toContain("Runbook");
+  });
+
+  it("Slack recovery payload: mirrors the Runbook field on resolve", () => {
+    const body = JSON.parse(
+      buildSlackRecoveredPayload(
+        { ...SAMPLE_RECOVERED, runbookUrl: "https://docs.example/runbook" },
+        "src",
+      ),
+    ) as {
+      attachments: Array<{ fields: Array<{ title: string; value: string }> }>;
+    };
+    const fieldMap = Object.fromEntries(
+      body.attachments[0]!.fields.map((f) => [f.title, f.value]),
+    );
+    expect(fieldMap.Runbook).toBe("https://docs.example/runbook");
+  });
+
+  it("PagerDuty: omits the top-level `links` array when runbookUrl is undefined", () => {
+    const body = JSON.parse(
+      buildPagerDutyDegradedPayload(SAMPLE_DEGRADED, "src", "pd-key"),
+    ) as { links?: unknown };
+    expect(body.links).toBeUndefined();
+  });
+
+  it("PagerDuty: emits both `links` and custom_details.runbookUrl when set", () => {
+    const body = JSON.parse(
+      buildPagerDutyDegradedPayload(
+        { ...SAMPLE_DEGRADED, runbookUrl: "https://docs.example/runbook" },
+        "src",
+        "pd-key",
+      ),
+    ) as {
+      links: Array<{ href: string; text: string }>;
+      payload: { custom_details: Record<string, unknown> };
+    };
+    expect(body.links).toEqual([
+      { href: "https://docs.example/runbook", text: "Runbook" },
+    ]);
+    // The mirror under custom_details exists so notification
+    // pipelines that strip the top-level `links` array still surface
+    // the URL as plaintext.
+    expect(body.payload.custom_details.runbookUrl).toBe(
+      "https://docs.example/runbook",
+    );
+  });
+});

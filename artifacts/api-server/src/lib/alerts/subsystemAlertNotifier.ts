@@ -56,6 +56,17 @@ export interface SubsystemDegradedEvent {
   /** Free-form structured details surfaced under PagerDuty `custom_details`
    *  and rendered as Slack fields. Values are coerced to strings for Slack. */
   details?: Record<string, string | number | null>;
+  /**
+   * Optional direct link to the runbook section the on-call should open
+   * first. Rendered as a clickable "Runbook" field in Slack and attached
+   * to the PagerDuty incident as both a `links` entry (the
+   * Events API v2 surface that lights up "Click here for runbook" in the
+   * mobile app) and a `custom_details.runbookUrl` mirror so plaintext
+   * channels still see the URL even if their integration strips
+   * `links`. Optional so existing callers (rate-limit, gateway) keep
+   * their current behaviour without modification.
+   */
+  runbookUrl?: string;
 }
 
 export interface SubsystemRecoveredEvent {
@@ -66,6 +77,13 @@ export interface SubsystemRecoveredEvent {
   /** Length of the degraded streak in ms (clamped to >= 0). */
   durationMs: number;
   details?: Record<string, string | number | null>;
+  /**
+   * Optional runbook link mirrored on the recovery message so the same
+   * channel/incident reference makes it easy to compare timing across
+   * triggers and resolves. Same rendering rules as
+   * `SubsystemDegradedEvent.runbookUrl`.
+   */
+  runbookUrl?: string;
 }
 
 export interface SubsystemAlertNotifier {
@@ -162,6 +180,37 @@ function detailFields(
 }
 
 /**
+ * Slack auto-linkifies bare http(s) URLs, so emitting the runbook URL
+ * as a plain field value is enough to make it clickable in the
+ * channel. We deliberately keep it as a separate field (rather than
+ * cramming a `<url|text>` mrkdwn link into the footer) because the
+ * existing `attachments` shape uses the legacy "fields + footer"
+ * layout where mrkdwn rendering is opt-in per workspace; a plain URL
+ * works in every workspace today.
+ */
+function runbookField(
+  runbookUrl: string | undefined,
+): Array<{ title: string; value: string; short: boolean }> {
+  if (runbookUrl === undefined || runbookUrl.trim() === "") return [];
+  return [{ title: "Runbook", value: runbookUrl, short: false }];
+}
+
+/**
+ * PagerDuty Events API v2 supports an optional `links` array on the
+ * top-level payload that surfaces as "Click here for the runbook"-style
+ * buttons in the PagerDuty UI / mobile app. We attach the runbook URL
+ * there AND mirror it under `custom_details.runbookUrl` so notification
+ * pipelines that strip `links` (some older Slack/PagerDuty integrations
+ * do) still surface the link as plaintext.
+ */
+function pagerDutyLinks(
+  runbookUrl: string | undefined,
+): Array<{ href: string; text: string }> | undefined {
+  if (runbookUrl === undefined || runbookUrl.trim() === "") return undefined;
+  return [{ href: runbookUrl, text: "Runbook" }];
+}
+
+/**
  * Build the Slack message body for a degraded transition. Keep wording
  * symmetrical with the rate-limit notifier so on-call recognises both
  * channels at a glance.
@@ -181,6 +230,7 @@ export function buildSlackDegradedPayload(
           { title: "Subsystem", value: event.subsystem, short: true },
           { title: "Streak began", value: startedIso, short: true },
           ...detailFields(event.details),
+          ...runbookField(event.runbookUrl),
         ],
         footer:
           `${event.label} flipped from healthy to degraded. Investigate the ` +
@@ -207,6 +257,7 @@ export function buildSlackRecoveredPayload(
           { title: "Duration", value: `${durationSeconds}s`, short: true },
           { title: "Recovered at", value: recoveredIso, short: true },
           ...detailFields(event.details),
+          ...runbookField(event.runbookUrl),
         ],
       },
     ],
@@ -222,6 +273,18 @@ export function buildPagerDutyDegradedPayload(
   source: string,
   routingKey: string,
 ): string {
+  const links = pagerDutyLinks(event.runbookUrl);
+  // The mirror under custom_details exists for notification pipelines
+  // that strip the top-level `links` array — see `pagerDutyLinks` doc.
+  const customDetails: Record<string, unknown> = {
+    subsystem: event.subsystem,
+    firstFailureAt: event.firstFailureAt,
+    detectedAt: event.detectedAt,
+    ...(event.details ?? {}),
+  };
+  if (event.runbookUrl !== undefined && event.runbookUrl.trim() !== "") {
+    customDetails.runbookUrl = event.runbookUrl;
+  }
   return JSON.stringify({
     routing_key: routingKey,
     event_action: "trigger",
@@ -233,13 +296,9 @@ export function buildPagerDutyDegradedPayload(
       component: event.subsystem,
       group: "api-server",
       class: "subsystem-degraded",
-      custom_details: {
-        subsystem: event.subsystem,
-        firstFailureAt: event.firstFailureAt,
-        detectedAt: event.detectedAt,
-        ...(event.details ?? {}),
-      },
+      custom_details: customDetails,
     },
+    ...(links ? { links } : {}),
   });
 }
 

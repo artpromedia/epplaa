@@ -1314,6 +1314,61 @@ describe("GET /readyz — optional dependency probes (Clerk / payment gateways)"
       restoreFetch();
     }
   });
+
+  it("WIRING: every probe result feeds the dependencyProbeAlertMonitor — the on-call paging path can never silently disconnect", async () => {
+    // Regression guard for task #121: the singleton monitor in
+    // `lib/alerts/dependencyProbeAlerts.ts` is what decides whether
+    // a stuck probe pages on-call. If a future refactor of the
+    // /readyz handler stops calling `monitor.observe(...)` for one
+    // of the probes (e.g. by accidentally moving the call inside an
+    // `if (result.ok === false)` branch), pages would silently
+    // never fire — and only an outage would tell us.
+    //
+    // We don't mock `pingDependency` here: with the env flags
+    // unset, the probes default to skipped, so the monitor should
+    // be observed with `(name, null)` for each of the three
+    // probes. That alone is sufficient to prove wiring without
+    // having to reach into network mocks.
+    //
+    // We deliberately reset the module registry and re-import BOTH
+    // `health.ts` AND `dependencyProbeAlerts.ts` together so that
+    // the route handler we exercise and the singleton we spy on
+    // share the same module instance — earlier tests in this file
+    // call `vi.resetModules()` themselves, so the top-level
+    // singleton captured by `healthRouter` may not be the same one
+    // a fresh import resolves to.
+    vi.resetModules();
+    const { dependencyProbeAlertMonitor } = await import(
+      "../lib/alerts/dependencyProbeAlerts"
+    );
+    const { default: freshRouter } = await import("./health");
+    const observeSpy = vi.spyOn(dependencyProbeAlertMonitor, "observe");
+    const app = express();
+    app.use(freshRouter);
+    try {
+      dbExecuteMock.mockResolvedValueOnce({ rows: [] });
+      pingRedisMock.mockResolvedValueOnce({ ok: true });
+      const res = await request(app).get("/readyz");
+      expect(res.status).toBe(200);
+      // The handler MUST observe every probe — clerk, paystack,
+      // flutterwave — even when they're disabled (skipped). Disabled
+      // probes still need to feed the monitor so a re-enable mid-
+      // incident produces a clean transition rather than a stale
+      // streak.
+      const observed = observeSpy.mock.calls.map(
+        ([name, result]) => [name, result] as const,
+      );
+      expect(observed).toEqual(
+        expect.arrayContaining([
+          ["clerk", null],
+          ["paystack", null],
+          ["flutterwave", null],
+        ]),
+      );
+    } finally {
+      observeSpy.mockRestore();
+    }
+  });
 });
 
 describe("getReadyzConfigBlock — pure helper", () => {

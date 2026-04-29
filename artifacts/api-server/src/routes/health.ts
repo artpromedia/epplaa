@@ -50,6 +50,7 @@ import {
   type DependencyProbeConfigBlock,
   type DependencyProbeName,
 } from "../lib/dependencyProbes";
+import { dependencyProbeAlertMonitor } from "../lib/alerts/dependencyProbeAlerts";
 
 const router: IRouter = Router();
 
@@ -414,6 +415,15 @@ router.get("/readyz", (_req, res) => {
         checks[name] = "failed";
         failures[name] = result.error;
       }
+      // Feed the per-probe streak monitor (task #121). The monitor
+      // tracks consecutive failures per probe and fires a Slack /
+      // PagerDuty page once the configurable threshold is crossed —
+      // single transient blips are deliberately swallowed by the
+      // streak counter, and recovery resolves the matching incident.
+      // Skipped/ok results are also observed so the monitor can
+      // close any open streak (a probe disabled mid-incident is the
+      // operator's documented escape hatch — see runbook).
+      dependencyProbeAlertMonitor.observe(name, result);
     }
 
     const config = getReadyzConfigBlock();
