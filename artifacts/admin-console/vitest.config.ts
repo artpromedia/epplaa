@@ -18,6 +18,11 @@ export default defineConfig({
     globals: false,
   },
   resolve: {
+    // The lib is resolved to source via the alias below. When source
+    // files in the lib import react peer deps, vitest needs to find a
+    // single, deduplicated instance — otherwise React context (e.g.
+    // QueryClientProvider) silently uses two different copies.
+    dedupe: ["react", "react-dom", "@tanstack/react-query"],
     alias: {
       "@": path.resolve(__dirname, "src"),
       "@workspace/api-client-react": path.resolve(

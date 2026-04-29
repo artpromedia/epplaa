@@ -13,6 +13,7 @@ import { Link, useLocation } from "wouter";
 import { useTheme } from "@/lib/theme-context";
 import { useSeller } from "@/lib/seller-context";
 import { useCart } from "@/lib/cart-context";
+import { SystemStatusBanner } from "@/components/system-status-banner";
 
 export function Layout({ children }: { children: React.ReactNode }) {
   const [location] = useLocation();
@@ -69,6 +70,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
             !hideTabNav ? "pb-20" : ""
           }`}
         >
+          <SystemStatusBanner />
           {children}
         </div>
 

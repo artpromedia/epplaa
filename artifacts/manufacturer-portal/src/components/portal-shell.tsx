@@ -10,6 +10,7 @@ import {
   Wallet,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { SystemStatusBanner } from "@/components/system-status-banner";
 import epplaaLogo from "@assets/epplaa-logo-color-nobg.png";
 
 interface NavItem {
@@ -116,7 +117,10 @@ export function PortalShell({ children }: { children: ReactNode }) {
             );
           })}
         </div>
-        <div className="p-4 md:p-6 lg:p-8">{children}</div>
+        <div className="p-4 md:p-6 lg:p-8">
+          <SystemStatusBanner />
+          {children}
+        </div>
       </main>
     </div>
   );

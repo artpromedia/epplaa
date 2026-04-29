@@ -9,6 +9,7 @@ import NotFound from "@/pages/not-found";
 import { ApiAuthBridge } from "@/lib/auth-bridge";
 import { CsrfBridge } from "@/lib/csrf-bridge";
 import { PortalShell } from "@/components/portal-shell";
+import { SystemStatusBanner } from "@/components/system-status-banner";
 import epplaaLogo from "@assets/epplaa-logo-color-nobg.png";
 
 import DashboardPage from "@/pages/dashboard";
@@ -35,7 +36,9 @@ const CLERK_PUBLISHABLE_KEY = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY as
 
 function SignInPage() {
   return (
-    <div className="min-h-screen w-full flex items-center justify-center bg-muted px-4">
+    <div className="min-h-screen w-full flex flex-col bg-muted">
+      <SystemStatusBanner />
+      <div className="flex-1 flex items-center justify-center px-4">
       <div className="w-full max-w-md">
         <div className="text-center mb-6">
           <img
@@ -54,6 +57,7 @@ function SignInPage() {
           fallbackRedirectUrl={import.meta.env.BASE_URL}
           appearance={{ elements: { rootBox: "mx-auto" } }}
         />
+      </div>
       </div>
     </div>
   );

@@ -4,6 +4,7 @@ import { useClerk, useSignIn } from "@clerk/clerk-react";
 import { startOtp, verifyOtp } from "@workspace/api-client-react";
 import { useToast } from "@/hooks/use-toast";
 import epplaaLogo from "@assets/epplaa-logo-color-nobg.png";
+import { SystemStatusBanner } from "@/components/system-status-banner";
 
 type Step = "phone" | "code";
 
@@ -90,6 +91,8 @@ export default function PhoneSignInPage() {
   }
 
   return (
+    <>
+    <SystemStatusBanner />
     <div className="min-h-screen flex flex-col items-center justify-center px-6 py-10 bg-[var(--color-background)]">
       <div className="mb-6 text-center">
         <img
@@ -192,5 +195,6 @@ export default function PhoneSignInPage() {
         </div>
       </div>
     </div>
+    </>
   );
 }

@@ -1,8 +1,11 @@
 import { SignUp } from "@clerk/clerk-react";
 import epplaaLogo from "@assets/epplaa-logo-color-nobg.png";
+import { SystemStatusBanner } from "@/components/system-status-banner";
 
 export default function SignUpPage() {
   return (
+    <>
+    <SystemStatusBanner />
     <div className="min-h-screen flex flex-col items-center justify-center px-6 py-10 bg-[var(--color-background)]">
       <div className="mb-6 text-center">
         <img
@@ -20,5 +23,6 @@ export default function SignUpPage() {
         fallbackRedirectUrl="/"
       />
     </div>
+    </>
   );
 }
