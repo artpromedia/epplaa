@@ -48,6 +48,7 @@ import type {
   AdminScanTextBody,
   AdminTransitionCaseBody,
   ApiError,
+  AppealTakedownBody,
   AppendReturnMessageBody,
   ApplySellerBody,
   ApproveKycVerificationBody,
@@ -117,6 +118,7 @@ import type {
   OtpStartResponse,
   OtpVerifyBody,
   OtpVerifyResponse,
+  OwnerTakedown,
   PaymentIntent,
   Payout,
   PayoutAction,
@@ -171,6 +173,7 @@ import type {
   SubmitKycVerificationBody,
   SubmitSafetyReportBody,
   Takedown,
+  TakedownAppealResult,
   TooManyRequestsResponse,
   TransitionReturnBody,
   TransitionSellerOrderBody,
@@ -13136,6 +13139,156 @@ export const useAdminCreateTakedown = <
   TContext
 > => {
   return useMutation(getAdminCreateTakedownMutationOptions(options));
+};
+
+export const getListMyTakedownsUrl = () => {
+  return `/api/admin/takedowns/mine`;
+};
+
+export const listMyTakedowns = async (
+  options?: RequestInit,
+): Promise<OwnerTakedown[]> => {
+  return customFetch<OwnerTakedown[]>(getListMyTakedownsUrl(), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getListMyTakedownsQueryKey = () => {
+  return [`/api/admin/takedowns/mine`] as const;
+};
+
+export const getListMyTakedownsQueryOptions = <
+  TData = Awaited<ReturnType<typeof listMyTakedowns>>,
+  TError = ErrorType<UnauthorizedResponse>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof listMyTakedowns>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getListMyTakedownsQueryKey();
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof listMyTakedowns>>> = ({
+    signal,
+  }) => listMyTakedowns({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof listMyTakedowns>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type ListMyTakedownsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listMyTakedowns>>
+>;
+export type ListMyTakedownsQueryError = ErrorType<UnauthorizedResponse>;
+
+export function useListMyTakedowns<
+  TData = Awaited<ReturnType<typeof listMyTakedowns>>,
+  TError = ErrorType<UnauthorizedResponse>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof listMyTakedowns>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getListMyTakedownsQueryOptions(options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+export const getAppealTakedownUrl = (id: string) => {
+  return `/api/admin/takedowns/${id}/appeal`;
+};
+
+export const appealTakedown = async (
+  id: string,
+  appealTakedownBody: AppealTakedownBody,
+  options?: RequestInit,
+): Promise<TakedownAppealResult> => {
+  return customFetch<TakedownAppealResult>(getAppealTakedownUrl(id), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(appealTakedownBody),
+  });
+};
+
+export const getAppealTakedownMutationOptions = <
+  TError = ErrorType<UnauthorizedResponse | void>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof appealTakedown>>,
+    TError,
+    { id: string; data: BodyType<AppealTakedownBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof appealTakedown>>,
+  TError,
+  { id: string; data: BodyType<AppealTakedownBody> },
+  TContext
+> => {
+  const mutationKey = ["appealTakedown"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof appealTakedown>>,
+    { id: string; data: BodyType<AppealTakedownBody> }
+  > = (props) => {
+    const { id, data } = props ?? {};
+
+    return appealTakedown(id, data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type AppealTakedownMutationResult = NonNullable<
+  Awaited<ReturnType<typeof appealTakedown>>
+>;
+export type AppealTakedownMutationBody = BodyType<AppealTakedownBody>;
+export type AppealTakedownMutationError =
+  ErrorType<UnauthorizedResponse | void>;
+
+export const useAppealTakedown = <
+  TError = ErrorType<UnauthorizedResponse | void>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof appealTakedown>>,
+    TError,
+    { id: string; data: BodyType<AppealTakedownBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof appealTakedown>>,
+  TError,
+  { id: string; data: BodyType<AppealTakedownBody> },
+  TContext
+> => {
+  return useMutation(getAppealTakedownMutationOptions(options));
 };
 
 export const getAdminGetUserRolesUrl = (userId: string) => {

@@ -47,4 +47,10 @@ export type EventType =
   | "box_reservation_expired"
   | "mfa_backup_codes_low"
   | "mfa_activated"
-  | "mfa_backup_codes_regenerated";
+  | "mfa_backup_codes_regenerated"
+  // Trust & Safety due-process notifications. `content_takedown` is sent to
+  // the seller whose stream/listing/post was removed; `safety_report_decided`
+  // is sent to the original reporter when their case is closed. Both are
+  // ungated by marketing/category prefs (see prefs.ts).
+  | "content_takedown"
+  | "safety_report_decided";

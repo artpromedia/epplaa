@@ -1394,6 +1394,32 @@ export interface Takedown {
   notifiedAtIso?: string | null;
   notes?: string;
   createdAtIso?: string;
+  /** @nullable */
+  caseId?: string | null;
+  /** @nullable */
+  caseStatus?: string | null;
+}
+
+export interface OwnerTakedown {
+  id: string;
+  targetKind: string;
+  targetId: string;
+  reasonCode: string;
+  /** @nullable */
+  notifiedAtIso?: string | null;
+  notes?: string;
+  createdAtIso?: string;
+  /** @nullable */
+  caseId?: string | null;
+  /** @nullable */
+  caseStatus?: string | null;
+}
+
+export interface TakedownAppealResult {
+  id: string;
+  caseId: string;
+  caseStatus: string;
+  appealedAtIso: string;
 }
 
 export interface ModerationScanResult {
@@ -1967,6 +1993,10 @@ export type AdminCreateTakedownBody = {
   targetId: string;
   reasonCode: string;
   notes?: string;
+};
+
+export type AppealTakedownBody = {
+  reason: string;
 };
 
 export type AdminGrantUserRoleBody = {

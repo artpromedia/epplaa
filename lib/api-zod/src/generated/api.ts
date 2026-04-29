@@ -2721,6 +2721,8 @@ export const AdminListTakedownsResponseItem = zod.object({
   notifiedAtIso: zod.string().nullish(),
   notes: zod.string().optional(),
   createdAtIso: zod.string().optional(),
+  caseId: zod.string().nullish(),
+  caseStatus: zod.string().nullish(),
 });
 export const AdminListTakedownsResponse = zod.array(
   AdminListTakedownsResponseItem,
@@ -2731,6 +2733,27 @@ export const AdminCreateTakedownBody = zod.object({
   targetId: zod.string(),
   reasonCode: zod.string(),
   notes: zod.string().optional(),
+});
+
+export const ListMyTakedownsResponseItem = zod.object({
+  id: zod.string(),
+  targetKind: zod.string(),
+  targetId: zod.string(),
+  reasonCode: zod.string(),
+  notifiedAtIso: zod.string().nullish(),
+  notes: zod.string().optional(),
+  createdAtIso: zod.string().optional(),
+  caseId: zod.string().nullish(),
+  caseStatus: zod.string().nullish(),
+});
+export const ListMyTakedownsResponse = zod.array(ListMyTakedownsResponseItem);
+
+export const AppealTakedownParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const AppealTakedownBody = zod.object({
+  reason: zod.string(),
 });
 
 export const AdminGetUserRolesParams = zod.object({

@@ -1,4 +1,4 @@
-import { sql } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { db, schema } from "./db";
 import { logger } from "./logger";
 import { recordAudit } from "./audit";
@@ -1001,6 +1001,80 @@ export async function moderateImage(url: string, ctx: ModerationContext): Promis
     scanId,
     csamMatch: result.csamMatch,
   };
+}
+
+/**
+ * Resolve the user account that owns a given moderation target. Used to
+ * notify the affected seller when a takedown is issued: a takedown of a
+ * `product` removes the listing on the catalogue, but the seller is the
+ * party we owe a "your content was removed" notification to.
+ *
+ * Returns `null` when the target kind has no natural owner (e.g. `text`
+ * snippets pasted into a moderator scan bench, where there is nothing to
+ * remove). The caller is expected to log + skip the notification rather
+ * than fail the takedown — recording the takedown row is the source of
+ * truth even when notification routing fails.
+ */
+export async function resolveTargetOwnerUserId(
+  targetKind: string,
+  targetId: string,
+): Promise<string | null> {
+  const id = String(targetId ?? "").trim();
+  if (!id) return null;
+  switch (targetKind) {
+    case "user":
+    case "seller": {
+      // Both forward to the underlying clerk id directly. `seller` rows
+      // are keyed by `userId` so the caller already has the answer.
+      return id;
+    }
+    case "product": {
+      const [row] = await db
+        .select({ sellerUserId: schema.productsTable.sellerUserId })
+        .from(schema.productsTable)
+        .where(eq(schema.productsTable.id, id))
+        .limit(1);
+      return row?.sellerUserId ?? null;
+    }
+    case "listing": {
+      const [row] = await db
+        .select({ userId: schema.sellerListingsTable.userId })
+        .from(schema.sellerListingsTable)
+        .where(eq(schema.sellerListingsTable.id, id))
+        .limit(1);
+      return row?.userId ?? null;
+    }
+    case "stream": {
+      const [row] = await db
+        .select({ sellerUserId: schema.streamsTable.sellerUserId })
+        .from(schema.streamsTable)
+        .where(eq(schema.streamsTable.id, id))
+        .limit(1);
+      return row?.sellerUserId ?? null;
+    }
+    case "message": {
+      const [row] = await db
+        .select({ userId: schema.streamChatMessagesTable.userId })
+        .from(schema.streamChatMessagesTable)
+        .where(eq(schema.streamChatMessagesTable.id, id))
+        .limit(1);
+      return row?.userId ?? null;
+    }
+    case "return": {
+      // A takedown of a return (rare — usually for fraudulent return
+      // claims) affects the buyer who filed it.
+      const [row] = await db
+        .select({ userId: schema.returnsTable.userId })
+        .from(schema.returnsTable)
+        .where(eq(schema.returnsTable.id, id))
+        .limit(1);
+      return row?.userId ?? null;
+    }
+    default:
+      // image/video/text or any future surface where ownership is not
+      // resolvable from the id alone — caller decides what to do.
+      return null;
+  }
 }
 
 /** Used by the dashboard to surface backlogs / SLA breaches. */

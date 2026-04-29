@@ -2241,6 +2241,40 @@ paths:
       responses:
         "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/Takedown" } } } }
         "400": { $ref: "#/components/responses/BadRequest" }
+  /admin/takedowns/mine:
+    get:
+      operationId: listMyTakedowns
+      tags: [safety]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/OwnerTakedown" } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /admin/takedowns/{id}/appeal:
+    post:
+      operationId: appealTakedown
+      tags: [safety]
+      parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason: { type: string }
+      responses:
+        "202":
+          description: Accepted
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TakedownAppealResult" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { description: Forbidden }
+        "404": { description: Not Found }
   /admin/users/{userId}/roles:
     get:
       operationId: adminGetUserRoles
@@ -3740,6 +3774,36 @@ components:
         notifiedAtIso: { type: ["string", "null"] }
         notes: { type: string }
         createdAtIso: { type: string }
+        # Buyer transparency: linked T&S case id + state, surfaced on
+        # /admin/takedowns/mine so the appeal CTA can reflect whether
+        # an appeal is already in flight.
+        caseId: { type: ["string", "null"] }
+        caseStatus: { type: ["string", "null"] }
+    # Seller-facing variant of `Takedown` returned by /admin/takedowns/mine.
+    # Intentionally omits `actorUserId` so the moderator's identity is
+    # never disclosed to the affected user. Operator-facing endpoints
+    # continue to use the full `Takedown` schema.
+    OwnerTakedown:
+      type: object
+      required: [id, targetKind, targetId, reasonCode]
+      properties:
+        id: { type: string }
+        targetKind: { type: string }
+        targetId: { type: string }
+        reasonCode: { type: string }
+        notifiedAtIso: { type: ["string", "null"] }
+        notes: { type: string }
+        createdAtIso: { type: string }
+        caseId: { type: ["string", "null"] }
+        caseStatus: { type: ["string", "null"] }
+    TakedownAppealResult:
+      type: object
+      required: [id, caseId, caseStatus, appealedAtIso]
+      properties:
+        id: { type: string }
+        caseId: { type: string }
+        caseStatus: { type: string }
+        appealedAtIso: { type: string }
     ModerationScanResult:
       type: object
       required: [blocked, decision, scanId]

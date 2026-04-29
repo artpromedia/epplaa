@@ -5,6 +5,8 @@ import {
   useSubmitSafetyReport,
   useBlockSeller,
   useUnblockSeller,
+  useListMyTakedowns,
+  useAppealTakedown,
 } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
 
@@ -56,9 +58,31 @@ export interface BlockedSeller {
   atIso: string;
 }
 
+/**
+ * A takedown affecting the current user, surfaced in the safety hub
+ * so sellers see what was removed and can file an appeal. We omit the
+ * operator's `actorUserId` from the buyer-facing surface — the server
+ * still returns it on the shared `Takedown` shape (since the operator
+ * console reads the same endpoint family), but the safety hub never
+ * renders it.
+ */
+export interface MyTakedown {
+  id: string;
+  targetKind: string;
+  targetId: string;
+  reasonCode: string;
+  notifiedAtIso: string | null;
+  notes: string;
+  createdAtIso: string;
+  caseId: string | null;
+  /** open | triage | in_review | action | closed | null */
+  caseStatus: string | null;
+}
+
 interface SafetyContextValue {
   reports: SafetyReport[];
   blocked: BlockedSeller[];
+  takedowns: MyTakedown[];
   submitReport: (input: {
     targetKind: ReportTargetKind;
     targetId: string;
@@ -71,6 +95,7 @@ interface SafetyContextValue {
   blockSeller: (sellerName: string, reason?: ReportReason | "manual") => void;
   unblockSeller: (sellerName: string) => void;
   isBlocked: (sellerName: string) => boolean;
+  appealTakedown: (takedownId: string, reason: string) => Promise<void>;
   reset: () => void;
 }
 
@@ -79,6 +104,7 @@ const SafetyContext = createContext<SafetyContextValue | null>(null);
 export function SafetyProvider({ children }: { children: ReactNode }) {
   const reportsQuery = useListSafetyReports();
   const blockedQuery = useListBlockedSellers();
+  const takedownsQuery = useListMyTakedowns();
   const qc = useQueryClient();
 
   const invalidateReports = useCallback(
@@ -89,12 +115,22 @@ export function SafetyProvider({ children }: { children: ReactNode }) {
     () => qc.invalidateQueries({ queryKey: ["/api/safety/blocked"] }),
     [qc],
   );
+  const invalidateTakedowns = useCallback(
+    () => qc.invalidateQueries({ queryKey: ["/api/admin/takedowns/mine"] }),
+    [qc],
+  );
 
   const submitMut = useSubmitSafetyReport({
     mutation: { onSuccess: () => { invalidateReports(); invalidateBlocked(); } },
   });
   const blockMut = useBlockSeller({ mutation: { onSuccess: invalidateBlocked } });
   const unblockMut = useUnblockSeller({ mutation: { onSuccess: invalidateBlocked } });
+  // Appeal posts to /admin/takedowns/:id/appeal. We refetch the
+  // takedowns list on success so the surfaced `caseStatus` flips to
+  // "in_review", which the UI uses to disable the appeal button.
+  const appealMut = useAppealTakedown({
+    mutation: { onSuccess: invalidateTakedowns },
+  });
 
   const reports = useMemo<SafetyReport[]>(
     () =>
@@ -123,6 +159,26 @@ export function SafetyProvider({ children }: { children: ReactNode }) {
         atIso: b.atIso,
       })),
     [blockedQuery.data],
+  );
+
+  const takedowns = useMemo<MyTakedown[]>(
+    () =>
+      (takedownsQuery.data ?? []).map((t) => ({
+        id: t.id,
+        targetKind: t.targetKind,
+        targetId: t.targetId,
+        reasonCode: t.reasonCode,
+        notifiedAtIso: t.notifiedAtIso ?? null,
+        // Generated client marks these optional because they aren't in
+        // the schema's `required` list (omitted to keep the operator
+        // console schema lean). The buyer-app needs concrete strings,
+        // so we default to empty / now to avoid a render-time crash.
+        notes: t.notes ?? "",
+        createdAtIso: t.createdAtIso ?? new Date(0).toISOString(),
+        caseId: (t as { caseId?: string | null }).caseId ?? null,
+        caseStatus: (t as { caseStatus?: string | null }).caseStatus ?? null,
+      })),
+    [takedownsQuery.data],
   );
 
   const isBlocked = useCallback(
@@ -174,6 +230,16 @@ export function SafetyProvider({ children }: { children: ReactNode }) {
     [submitMut],
   );
 
+  const appealTakedown = useCallback(
+    async (takedownId: string, reason: string) => {
+      // mutateAsync surfaces the 403/404 to the caller so the UI can
+      // toast a contextual error; on success the onSuccess handler
+      // refetches the takedowns list.
+      await appealMut.mutateAsync({ id: takedownId, data: { reason } });
+    },
+    [appealMut],
+  );
+
   const reset = useCallback(() => {
     blocked.forEach((b) => unblockMut.mutate({ sellerName: b.sellerName }));
   }, [blocked, unblockMut]);
@@ -182,13 +248,25 @@ export function SafetyProvider({ children }: { children: ReactNode }) {
     () => ({
       reports,
       blocked,
+      takedowns,
       submitReport,
       blockSeller,
       unblockSeller,
       isBlocked,
+      appealTakedown,
       reset,
     }),
-    [reports, blocked, submitReport, blockSeller, unblockSeller, isBlocked, reset],
+    [
+      reports,
+      blocked,
+      takedowns,
+      submitReport,
+      blockSeller,
+      unblockSeller,
+      isBlocked,
+      appealTakedown,
+      reset,
+    ],
   );
 
   return <SafetyContext.Provider value={value}>{children}</SafetyContext.Provider>;

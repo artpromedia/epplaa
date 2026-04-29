@@ -38,6 +38,14 @@ const EVENT_CHANNEL_DEFAULTS: Record<EventType, ChannelKind[]> = {
   // suppress, and so the alert lands in the user's inbox where it can
   // be reviewed weeks later if needed.
   mfa_backup_codes_regenerated: ["email"],
+  // Trust & Safety: due-process notifications. Push for in-app
+  // immediacy, email for the audit trail the seller / reporter can
+  // search later (e.g. "when was my listing removed?", "what reason
+  // code did the moderator give?"). Never SMS — these messages contain
+  // structured reason codes + appeal URLs that don't render well in 160
+  // chars.
+  content_takedown: ["push", "email"],
+  safety_report_decided: ["push", "email"],
 };
 
 /**
@@ -71,6 +79,14 @@ const EVENT_CATEGORY: Record<EventType, "orderUpdates" | "liveDrops" | "promos" 
   // silent takeover, so it must reach them regardless of which
   // marketing categories they've muted.
   mfa_backup_codes_regenerated: null,
+  // Trust & Safety due-process notifications: never gated by category
+  // toggles. Telling a seller their content was removed (and how to
+  // appeal) is a regulatory requirement under EU/UK transparency
+  // rules, and confirming a report decision back to the original
+  // reporter is core buyer protection. Both must reach the user even
+  // if they've muted every marketing category.
+  content_takedown: null,
+  safety_report_decided: null,
 };
 
 const COUNTRY_TZ: Record<string, string> = {
