@@ -1,6 +1,8 @@
-import { Server as SocketServer, type Socket } from "socket.io";
+import { Server as SocketServer, type Namespace, type Socket } from "socket.io";
 import type { Server as HttpServer } from "node:http";
 import { verifyToken } from "@clerk/backend";
+import IORedis, { type Redis as RedisClient } from "ioredis";
+import { createAdapter } from "@socket.io/redis-adapter";
 import { logger } from "./logger";
 import { db, schema } from "./db";
 import { eq, sql } from "drizzle-orm";
@@ -13,8 +15,16 @@ import {
 import { enqueueReaction, REACTION_BUCKET_MS, startReactionFlusher } from "./reactions";
 import { recordAudit } from "./audit";
 
-// Single-instance Socket.IO. Rooms = `stream:{id}`. Anonymous sockets
+// Multi-instance Socket.IO. Rooms = `stream:{id}`. Anonymous sockets
 // can join (for presence); write events require a verified Clerk JWT.
+//
+// When `REDIS_URL` is set, sockets are bridged across api-server
+// replicas via the @socket.io/redis-adapter pub/sub adapter, and
+// per-room presence is computed cluster-wide via `fetchSockets`. This
+// is what lets two instances share one chat room and one viewer count.
+//
+// Without `REDIS_URL` we fall back to the in-process adapter so local
+// dev still works against a single replica.
 interface AuthedSocket extends Socket {
   data: {
     userId?: string;
@@ -24,6 +34,8 @@ interface AuthedSocket extends Socket {
 }
 
 let io: SocketServer | null = null;
+let redisPub: RedisClient | null = null;
+let redisSub: RedisClient | null = null;
 
 export function getSocketServer(): SocketServer | null {
   return io;
@@ -43,12 +55,70 @@ async function resolveUsername(userId: string): Promise<string> {
   }
 }
 
+// Cluster-wide room size. With the Redis adapter wired up,
+// `fetchSockets()` walks every replica's adapter so we get one
+// global viewer count, not the per-instance count from
+// `adapter.rooms.get(room).size`.
+export async function getRoomSize(
+  ns: Namespace,
+  room: string,
+): Promise<number> {
+  try {
+    const sockets = await ns.in(room).fetchSockets();
+    return sockets.length;
+  } catch (err) {
+    logger.warn(
+      { err: (err as Error).message, room },
+      "presence_fetch_sockets_failed_falling_back_to_local",
+    );
+    return ns.adapter.rooms.get(room)?.size ?? 0;
+  }
+}
+
+interface RedisAdapterClients {
+  pub: RedisClient;
+  sub: RedisClient;
+}
+
+// Builds the Redis pub/sub client pair the adapter needs. Exported
+// for testing; the production wiring just calls into this from
+// `bootstrapSocketServer`.
+export function createRedisAdapterClients(url: string): RedisAdapterClients {
+  const pub = new IORedis(url, {
+    maxRetriesPerRequest: 3,
+    enableReadyCheck: true,
+    lazyConnect: false,
+  });
+  pub.on("error", (err) => {
+    logger.error({ err: err.message }, "socket_redis_pub_error");
+  });
+  const sub = pub.duplicate();
+  sub.on("error", (err) => {
+    logger.error({ err: err.message }, "socket_redis_sub_error");
+  });
+  return { pub, sub };
+}
+
 export function bootstrapSocketServer(httpServer: HttpServer): SocketServer {
   if (io) return io;
   io = new SocketServer(httpServer, {
     path: "/api/socket.io",
     cors: { origin: true, credentials: true },
   });
+
+  const redisUrl = process.env.REDIS_URL?.trim();
+  if (redisUrl) {
+    const { pub, sub } = createRedisAdapterClients(redisUrl);
+    redisPub = pub;
+    redisSub = sub;
+    io.adapter(createAdapter(pub, sub));
+    logger.info({ adapter: "redis" }, "socket_io_adapter_configured");
+  } else {
+    logger.warn(
+      { adapter: "memory" },
+      "socket_io_adapter_in_memory_single_instance_only",
+    );
+  }
 
   const ns = io.of("/streams");
 
@@ -78,7 +148,7 @@ export function bootstrapSocketServer(httpServer: HttpServer): SocketServer {
       const room = `stream:${streamId}`;
       await socket.join(room);
       socket.data.joinedStreams.add(streamId);
-      const count = ns.adapter.rooms.get(room)?.size ?? 0;
+      const count = await getRoomSize(ns, room);
       try {
         await db
           .update(schema.streamsTable)
@@ -223,6 +293,8 @@ export function bootstrapSocketServer(httpServer: HttpServer): SocketServer {
   });
 
   startReactionFlusher((streamId, kind, count) => {
+    // With the Redis adapter, this `to(...).emit(...)` reaches viewers
+    // on every replica, not just sockets connected to this process.
     ns.to(`stream:${streamId}`).emit("reaction:burst", { streamId, kind, count });
   });
 
@@ -238,8 +310,10 @@ async function leaveStream(socket: AuthedSocket, streamId: string, alreadyInRoom
     await socket.leave(room);
   }
   socket.data.joinedStreams.delete(streamId);
-  // disconnecting fires before socket.io evicts the socket; subtract 1.
-  const raw = ns.adapter.rooms.get(room)?.size ?? 0;
+  // disconnecting fires before socket.io evicts the socket, so the
+  // cluster-wide count still includes this socket; subtract 1 in
+  // that case to report the post-disconnect total.
+  const raw = await getRoomSize(ns, room);
   const count = alreadyInRoom ? Math.max(0, raw - 1) : raw;
   try {
     await db
@@ -250,4 +324,21 @@ async function leaveStream(socket: AuthedSocket, streamId: string, alreadyInRoom
     logger.error({ err: (err as Error).message, streamId }, "presence_leave_failed");
   }
   ns.to(room).emit("presence:count", { streamId, count });
+}
+
+export async function shutdownSocketServer(): Promise<void> {
+  if (io) {
+    await io.close();
+    io = null;
+  }
+  const closes: Promise<unknown>[] = [];
+  if (redisPub) {
+    closes.push(redisPub.quit().catch(() => undefined));
+    redisPub = null;
+  }
+  if (redisSub) {
+    closes.push(redisSub.quit().catch(() => undefined));
+    redisSub = null;
+  }
+  await Promise.all(closes);
 }
