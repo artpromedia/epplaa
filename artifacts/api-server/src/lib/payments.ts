@@ -519,7 +519,24 @@ export async function reverifyIntent(intentId: string): Promise<typeof schema.pa
   if (!intent) throw new Error("intent_not_found");
   if (intent.status === "succeeded" || intent.status === "refunded") return intent;
   const gw = gatewayRouter.byName(intent.gateway as GatewayName);
-  const result = await gw.verify(intent.reference);
+  // Verify must hit the same gateway that issued the original
+  // charge — there is no failover here. Route the outcome through
+  // `recordDirectCallOutcome` so the verify path feeds the same
+  // `gateway_health` counters and `paymentGatewayWatchers` streak as
+  // the charge path that goes through `withFailover`. Without this,
+  // a Paystack outage that only stalls /verify would never tick the
+  // duration-based stuck-degraded alert in
+  // `scripts/checkHealthzDegraded.ts`. A throw (timeout / 5xx) is
+  // also recorded as a failure before being re-raised so the streak
+  // doesn't go silent on the worst kind of outage.
+  let result;
+  try {
+    result = await gw.verify(intent.reference);
+  } catch (err) {
+    await gatewayRouter.recordDirectCallOutcome(intent.gateway as GatewayName, false);
+    throw err;
+  }
+  await gatewayRouter.recordDirectCallOutcome(intent.gateway as GatewayName, result.ok);
   await logAttempt({
     intentId: intent.id,
     gateway: intent.gateway as GatewayName,
@@ -1166,15 +1183,31 @@ export async function processDuePayouts(): Promise<{ processed: number; failed: 
       continue;
     }
     const gw = gatewayRouter.byName((payout.gateway as GatewayName | null) ?? "devmock");
-    const result = await gw.payout({
-      reference: payout.reference,
-      amountMinor: payout.amountMinor,
-      currencyCode: payout.currencyCode,
-      bankCode,
-      accountNumber,
-      accountName,
-      reason: `Payout for order ${payout.orderId ?? ""}`.trim(),
-    });
+    // Payouts pin a specific gateway (Paystack for NGN sellers,
+    // Flutterwave for the manufacturer international rail) so there
+    // is no failover here either. Route the outcome through
+    // `recordDirectCallOutcome` so a stuck disbursement endpoint
+    // contributes to the same `paymentGatewayWatchers` streak as the
+    // charge path. Catch+record on throw — disbursement timeouts are
+    // exactly the kind of slow degradation this alert exists for, so
+    // we must not let an unrecorded throw silently keep the watcher
+    // looking healthy.
+    let result;
+    try {
+      result = await gw.payout({
+        reference: payout.reference,
+        amountMinor: payout.amountMinor,
+        currencyCode: payout.currencyCode,
+        bankCode,
+        accountNumber,
+        accountName,
+        reason: `Payout for order ${payout.orderId ?? ""}`.trim(),
+      });
+    } catch (err) {
+      await gatewayRouter.recordDirectCallOutcome(gw.name, false);
+      throw err;
+    }
+    await gatewayRouter.recordDirectCallOutcome(gw.name, result.ok);
     await logAttempt({
       intentId: payout.intentId ?? "",
       gateway: gw.name,

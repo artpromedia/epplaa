@@ -27,11 +27,13 @@ process.env.PAYSTACK_SECRET_KEY = "sk_test_health_check";
 process.env.FLUTTERWAVE_SECRET_KEY = "FLWSECK_TEST-health-check";
 process.env.FLUTTERWAVE_WEBHOOK_HASH = "hash_health_check";
 
-// Mock db just enough to satisfy DbHealthStore.record's drizzle
-// chain (`insert(...).values(...).onConflictDoUpdate(...)`). The
-// health-store write is the only DB interaction reached on the test
-// path; createPaymentIntent / reverifyIntent / payouts are not
-// exercised here so their drizzle chains don't need stubbing.
+// Mock db just enough to satisfy the drizzle chains hit on the
+// tested code paths. Most tests only reach DbHealthStore.record
+// (`insert().values().onConflictDoUpdate()` + `select().from().where().limit()`)
+// — the callsite-level integration tests for `reverifyIntent` and
+// `processDuePayouts` reach a few more chains and override
+// `limitMock` / `whereUpdateMock` per-test via `mockResolvedValueOnce`
+// / `mockReturnValueOnce` to inject row fixtures.
 const onConflictDoUpdateMock = vi.fn().mockResolvedValue(undefined);
 const valuesMock = vi.fn().mockReturnValue({
   onConflictDoUpdate: onConflictDoUpdateMock,
@@ -40,7 +42,26 @@ const valuesMock = vi.fn().mockReturnValue({
 const limitMock = vi.fn().mockResolvedValue([]);
 const whereSelectMock = vi.fn().mockReturnValue({ limit: limitMock });
 const fromMock = vi.fn().mockReturnValue({ where: whereSelectMock });
-const whereUpdateMock = vi.fn().mockResolvedValue(undefined);
+// `update().set().where(...)` is awaited directly in most call sites
+// (DbHealthStore.openCircuit, payout-status updates, etc.), but
+// `processDuePayouts` does `update().set().where(...).returning()` to
+// atomically claim due payouts. The default is a thenable that
+// resolves to undefined AND exposes `.returning()` so both shapes
+// work without the existing tests breaking, and tests that need to
+// inject claimed-row fixtures can do
+// `whereUpdateMock.mockReturnValueOnce(makeWhereUpdateResult([row]))`.
+function makeWhereUpdateResult(returningRows: unknown[] = []) {
+  // Thenable so `await where(...)` resolves to undefined (the previous
+  // behaviour), with a `.returning()` escape hatch so the same handle
+  // also satisfies `update().set().where().returning()`.
+  return {
+    then: (resolve: (v: undefined) => unknown) => resolve(undefined),
+    returning: vi.fn().mockResolvedValue(returningRows),
+  };
+}
+const whereUpdateMock = vi
+  .fn()
+  .mockImplementation(() => makeWhereUpdateResult());
 const setMock = vi.fn().mockReturnValue({ where: whereUpdateMock });
 vi.mock("./db", () => ({
   db: {
@@ -55,6 +76,9 @@ vi.mock("./db", () => ({
     walletTxnsTable: {},
     ordersTable: {},
     payoutsTable: {},
+    productsTable: {},
+    sellersTable: {},
+    manufacturersTable: {},
   },
 }));
 
@@ -90,7 +114,8 @@ const {
 // to assert on. Resetting the registry BEFORE the import would clear
 // the entries we are about to verify, so do it after the import is
 // in flight via `beforeAll` — but only for the *re-run* path.
-const { gatewayRouter } = await import("./payments");
+const { gatewayRouter, gateways, reverifyIntent, processDuePayouts } =
+  await import("./payments");
 
 describe("lib/payments — payment-gateway watcher integration with subsystemHealth", () => {
   beforeAll(() => {
@@ -185,6 +210,114 @@ describe("lib/payments — payment-gateway watcher integration with subsystemHea
     expect(typeof snap.lastRecoveredAt).toBe("number");
   });
 
+  it("flips the gateway watcher to degraded for a stuck-verify scenario via recordDirectCallOutcome", async () => {
+    // Mirror the charge-path stuck-failure test, but for the
+    // `reverifyIntent` call site that hits `gw.verify(...)` directly
+    // (no failover — verify must hit the gateway that issued the
+    // original charge). Without `recordDirectCallOutcome` the verify
+    // path would silently bypass the `paymentGatewayWatchers` streak,
+    // so a Paystack outage that only stalls /verify would never page
+    // on-call via the duration-based stuck-degraded alert.
+    __resetPaymentGatewayWatchersForTests();
+    const { registerPaymentGatewayWatcher } = await import(
+      "./subsystemHealth"
+    );
+    registerPaymentGatewayWatcher("paystack");
+    registerPaymentGatewayWatcher("flutterwave");
+
+    // Synthetic verify op that always returns { ok: false } — the
+    // way Paystack's /transaction/verify would behave during a
+    // reconciliation outage. We drive the same outcome-recording
+    // helper that the real call site invokes.
+    const stuckVerifyResult = { ok: false, errorMessage: "verify_5xx" };
+    await gatewayRouter.recordDirectCallOutcome(
+      "paystack",
+      stuckVerifyResult.ok,
+    );
+    await gatewayRouter.recordDirectCallOutcome(
+      "paystack",
+      stuckVerifyResult.ok,
+    );
+
+    const paystackSnap = getPaymentGatewayWatcher("paystack")!.getSnapshot();
+    expect(paystackSnap.state).toBe("degraded");
+    expect(paystackSnap.failureCount).toBeGreaterThanOrEqual(2);
+    expect(typeof paystackSnap.firstFailureAt).toBe("number");
+    // Verify is single-gateway (no failover), so the secondary's
+    // watcher should remain healthy — unlike the charge-path test
+    // where failover spreads failures to both watchers.
+    const flutterwaveSnap = getPaymentGatewayWatcher(
+      "flutterwave",
+    )!.getSnapshot();
+    expect(flutterwaveSnap.state).toBe("healthy");
+  });
+
+  it("flips the gateway watcher to degraded for a stuck-payout scenario via recordDirectCallOutcome", async () => {
+    // Same shape as the stuck-verify test but for the
+    // `processDuePayouts` call site that hits `gw.payout(...)`
+    // directly. Manufacturer payouts pin the Flutterwave
+    // international rail regardless of which gateway charged the
+    // buyer, so a stuck Flutterwave disbursement endpoint has to
+    // surface on the Flutterwave-specific watcher even when Paystack
+    // (the charge primary) is perfectly healthy.
+    __resetPaymentGatewayWatchersForTests();
+    const { registerPaymentGatewayWatcher } = await import(
+      "./subsystemHealth"
+    );
+    registerPaymentGatewayWatcher("paystack");
+    registerPaymentGatewayWatcher("flutterwave");
+
+    const stuckPayoutResult = { ok: false, errorMessage: "transfer_timeout" };
+    await gatewayRouter.recordDirectCallOutcome(
+      "flutterwave",
+      stuckPayoutResult.ok,
+    );
+    await gatewayRouter.recordDirectCallOutcome(
+      "flutterwave",
+      stuckPayoutResult.ok,
+    );
+
+    const flutterwaveSnap = getPaymentGatewayWatcher(
+      "flutterwave",
+    )!.getSnapshot();
+    expect(flutterwaveSnap.state).toBe("degraded");
+    expect(flutterwaveSnap.failureCount).toBeGreaterThanOrEqual(2);
+    expect(typeof flutterwaveSnap.firstFailureAt).toBe("number");
+    // Paystack's watcher must NOT be tripped by a Flutterwave-only
+    // disbursement outage — the per-gateway separation is the whole
+    // point of registering one watcher per gateway rather than a
+    // single combined `paymentGateway` entry.
+    const paystackSnap = getPaymentGatewayWatcher("paystack")!.getSnapshot();
+    expect(paystackSnap.state).toBe("healthy");
+  });
+
+  it("records a verify/payout failure observation even when the underlying call throws", async () => {
+    // The most dangerous failure mode for a "stuck" upstream is a
+    // hung connection that eventually throws (timeout / socket
+    // error). The wrappers in `reverifyIntent` and `processDuePayouts`
+    // must catch+record before re-raising, otherwise the streak
+    // would silently stay at zero on the worst kind of outage.
+    // Simulate that contract here by recording a failure exactly
+    // once per thrown-and-caught call, then re-raising.
+    __resetPaymentGatewayWatchersForTests();
+    const { registerPaymentGatewayWatcher } = await import(
+      "./subsystemHealth"
+    );
+    registerPaymentGatewayWatcher("paystack");
+
+    const hangingVerify = vi.fn().mockRejectedValue(new Error("ETIMEDOUT"));
+    for (let i = 0; i < 2; i++) {
+      try {
+        await hangingVerify();
+      } catch {
+        await gatewayRouter.recordDirectCallOutcome("paystack", false);
+      }
+    }
+    const snap = getPaymentGatewayWatcher("paystack")!.getSnapshot();
+    expect(snap.state).toBe("degraded");
+    expect(snap.failureCount).toBeGreaterThanOrEqual(2);
+  });
+
   it("ignores observations for unregistered gateway names instead of throwing", async () => {
     // Defensive: GatewayName is a typed union but the call site
     // ultimately passes a string into the registry lookup. A bogus
@@ -203,5 +336,134 @@ describe("lib/payments — payment-gateway watcher integration with subsystemHea
       gatewayRouter.withFailover("paystack", failingOp),
     ).resolves.toBeDefined();
     expect(getPaymentGatewayWatcher("paystack")).toBeUndefined();
+  });
+
+  it("[callsite] reverifyIntent feeds the watcher via recordDirectCallOutcome", async () => {
+    // Callsite-level integration test: drive `reverifyIntent` end-to-
+    // end through stubbed db rows + a spied gateway, and assert that
+    // the wiring added in this task actually invokes
+    // `gatewayRouter.recordDirectCallOutcome` with the gateway and
+    // outcome. This guards against an accidental future removal of
+    // the helper call (which would silently bypass the watcher and
+    // re-introduce the original bug).
+    __resetPaymentGatewayWatchersForTests();
+    const { registerPaymentGatewayWatcher } = await import(
+      "./subsystemHealth"
+    );
+    registerPaymentGatewayWatcher("paystack");
+
+    // First select inside reverifyIntent reads the intent row. The
+    // health-store's own selects (called from inside
+    // recordDirectCallOutcome) fall through to the default `[]`.
+    limitMock.mockResolvedValueOnce([
+      {
+        id: "pi_test",
+        gateway: "paystack",
+        reference: "ref_stuck_verify",
+        status: "processing",
+      },
+    ]);
+    const verifySpy = vi
+      .spyOn(gateways.paystack, "verify")
+      .mockResolvedValue({
+        ok: false,
+        errorMessage: "verify_5xx",
+      });
+    const recordSpy = vi.spyOn(gatewayRouter, "recordDirectCallOutcome");
+
+    await reverifyIntent("pi_test");
+
+    expect(verifySpy).toHaveBeenCalledWith("ref_stuck_verify");
+    // The wiring contract: the verify outcome MUST be recorded on
+    // the same gateway that issued the original charge, so the
+    // duration-based stuck-degraded probe can observe a
+    // verify-only Paystack outage.
+    expect(recordSpy).toHaveBeenCalledWith("paystack", false);
+    // And the watcher is now in degraded state — proves the path
+    // didn't just pretend to record but actually drove the streak.
+    const snap = getPaymentGatewayWatcher("paystack")!.getSnapshot();
+    expect(snap.state).toBe("degraded");
+
+    verifySpy.mockRestore();
+    recordSpy.mockRestore();
+  });
+
+  it("[callsite] processDuePayouts feeds the watcher via recordDirectCallOutcome", async () => {
+    // Symmetric callsite-level test for the payout path: a
+    // claimed-due payout is run through `gw.payout(...)` which we
+    // spy to return `{ ok: false }`, and we assert the wiring
+    // invokes `recordDirectCallOutcome` so a stuck disbursement
+    // endpoint contributes to the gateway's failure streak. The
+    // manufacturer-share payout shape is used because it pins
+    // Flutterwave (the international rail), which proves the
+    // recorded gateway name comes from the actually-invoked
+    // gateway rather than a hard-coded primary.
+    __resetPaymentGatewayWatchersForTests();
+    const { registerPaymentGatewayWatcher } = await import(
+      "./subsystemHealth"
+    );
+    registerPaymentGatewayWatcher("flutterwave");
+
+    // The blocked-rows scan uses `db.select().from(payoutsTable).where(eq(...))`
+    // with NO `.limit()` chain — the awaited result is the rows
+    // themselves. The default whereSelectMock returns `{limit: limitMock}`
+    // (the right shape for the limit-based selects elsewhere) which
+    // would not be iterable. Override per-test to return [].
+    whereSelectMock.mockReturnValueOnce([]);
+    // The atomic claim does `update().set().where().returning()`.
+    // Stage one claimed-due manufacturer payout for the
+    // disbursement loop.
+    whereUpdateMock.mockReturnValueOnce(
+      makeWhereUpdateResult([
+        {
+          id: "po_stuck_payout",
+          userId: "mfr_test",
+          sellerId: "mfr_test",
+          orderId: "ord_test",
+          intentId: "pi_test",
+          amountMinor: 50000,
+          currencyCode: "NGN",
+          gateway: "flutterwave",
+          kind: "manufacturer_share",
+          reference: "MO-ord_test-mfr_te",
+          requiredKycTier: 1,
+          bankCode: null,
+        },
+      ]),
+    );
+    // The first `limit(1)` call reached on this path is
+    // loadPayoutDestination's lookup of the manufacturer row —
+    // bank details flow through the returned `application` JSON.
+    limitMock.mockResolvedValueOnce([
+      {
+        userId: "mfr_test",
+        application: {
+          bankCode: "058",
+          bankAccount: "0123456789",
+          bankName: "Acme Bank",
+        },
+      },
+    ]);
+
+    const payoutSpy = vi
+      .spyOn(gateways.flutterwave, "payout")
+      .mockResolvedValue({
+        ok: false,
+        errorMessage: "transfer_timeout",
+      });
+    const recordSpy = vi.spyOn(gatewayRouter, "recordDirectCallOutcome");
+
+    await processDuePayouts();
+
+    expect(payoutSpy).toHaveBeenCalled();
+    // Wiring contract: the payout outcome MUST be recorded on the
+    // gateway that actually executed the transfer (Flutterwave
+    // here, regardless of which gateway charged the buyer).
+    expect(recordSpy).toHaveBeenCalledWith("flutterwave", false);
+    const snap = getPaymentGatewayWatcher("flutterwave")!.getSnapshot();
+    expect(snap.state).toBe("degraded");
+
+    payoutSpy.mockRestore();
+    recordSpy.mockRestore();
   });
 });

@@ -106,6 +106,29 @@ export class GatewayRouter {
     return { result: fbResult, gateway: fallback.name };
   }
 
+  /**
+   * Record the outcome of a direct (non-failover) gateway call so it
+   * feeds the same in-DB `gateway_health` counters and in-process
+   * subsystem watcher as the charge path that goes through
+   * `withFailover`. Use this from call sites that intentionally
+   * bypass failover — e.g. `gw.verify(...)` (must hit the gateway
+   * that issued the original charge) and `gw.payout(...)` (must hit
+   * the gateway pinned on the payout row). Without this hook, those
+   * call sites would silently degrade: a Paystack outage that only
+   * stalls the verify or disbursement endpoints would never tick the
+   * `paymentGatewayPaystack` failure streak, so the duration-based
+   * stuck-degraded alert in `scripts/checkHealthzDegraded.ts` would
+   * never fire.
+   *
+   * Semantics intentionally match `withFailover`'s post-op call to
+   * `recordAndMaybeTrip`, including the breaker-trip rule, so the
+   * three call surfaces (charge / verify / payout) contribute to the
+   * same rolling-window counter.
+   */
+  async recordDirectCallOutcome(name: GatewayName, ok: boolean): Promise<void> {
+    await this.recordAndMaybeTrip(name, ok);
+  }
+
   private async recordAndMaybeTrip(name: GatewayName, ok: boolean): Promise<void> {
     await this.health.record(name, ok);
     const snap = await this.health.read(name);
