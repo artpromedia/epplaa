@@ -1,11 +1,25 @@
-name: Backup verify (weekly)
+name: Backup verify (weekly full)
 
-# Weekly restore-from-dump smoke test. The actual nightly pg_dump is owned
-# by the deployment platform / managed Postgres provider, not GitHub
+# Weekly *fuller* restore-from-dump test. The actual nightly pg_dump is
+# owned by the deployment platform / managed Postgres provider, not GitHub
 # Actions — we cannot reach the production network from here. This workflow
-# acts as a fallback "did the dump survive transport and is it restorable"
-# check that runs against a documented backup share (e.g. S3/GCS pre-signed
-# URL synced into the runner) and a throwaway sandbox database.
+# acts as a fallback "did the dump survive transport and is it restorable
+# *in depth*" check that runs against a documented backup share (e.g.
+# S3/GCS pre-signed URL synced into the runner) and a throwaway sandbox
+# database.
+#
+# Two cadences in this repo (see also `backup-verify-nightly.yml`):
+#  * Nightly (`backup-verify-nightly.yml`): runs `verifyBackup.ts --mode=smoke`
+#    on Mon-Sat. Fast (~30s after fetch). Catches a dump that is
+#    completely unrestorable or missing core tables.
+#  * Weekly (this workflow): runs `verifyBackup.ts --mode=full` on Sunday.
+#    Slower (several minutes) — adds VACUUM ANALYZE, full-table
+#    inventory, and best-effort `amcheck` btree validation. Catches
+#    block-level corruption and silent index damage that the smoke
+#    pass wouldn't notice.
+# The two run on different days so they never collide for the
+# `RESTORE_DATABASE_URL` sandbox; each has its own Sentry Cron monitor
+# slug so the pages route distinctly.
 #
 # Required repo variables / secrets:
 #   vars.BACKUP_VERIFY_ENABLED        — must equal "1" to opt-in. Acts as
@@ -96,10 +110,15 @@ permissions:
 
 jobs:
   verify:
-    name: pg_restore + smoke psql
+    name: pg_restore + smoke + vacuum + inventory + amcheck (full)
     if: ${{ vars.BACKUP_VERIFY_ENABLED == '1' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # 60 min: VACUUM ANALYZE + per-index amcheck on a large dump can run
+    # several minutes longer than the 30 min smoke pass needed; the
+    # Sentry monitor's max-runtime is set to 90 min so this bound is
+    # the tighter one. If a healthy run starts hitting this, raise both
+    # in lockstep (workflow timeout + Sentry monitor max runtime).
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -160,7 +179,12 @@ jobs:
           fi
           eval "$BACKUP_FETCH_CMD"
           ls -la ./backups
-          pnpm --filter @workspace/scripts exec tsx src/verifyBackup.ts
+          # --mode=full: smoke + VACUUM ANALYZE + full-table inventory +
+          # amcheck btree validation. The nightly counterpart
+          # (backup-verify-nightly.yml) runs the same script with
+          # --mode=smoke; keep the two flags in lockstep when adding new
+          # verify steps.
+          pnpm --filter @workspace/scripts exec tsx src/verifyBackup.ts --mode=full
           VERIFY
           chmod +x "$RUNNER_TEMP/verify.sh"
 

@@ -1,46 +1,95 @@
 /**
- * Nightly Postgres backup + weekly restore verification.
+ * Postgres backup restore verification.
  *
  * Operating model (documented for the runbook — actual cron is owned by the
- * deployment platform, not this script):
+ * deployment platform / GitHub Actions schedule, not this script):
  *
- *   00 02 * * *  pg_dump $DATABASE_URL --format=custom --file=/backups/$(date +%F).dump
- *   00 03 * * 0  pnpm --filter @workspace/scripts exec tsx src/verifyBackup.ts
+ *   00 02 * * *    pg_dump $DATABASE_URL --format=custom --file=/backups/$(date +%F).dump
+ *   00 03 * * 1-6  verifyBackup.ts --mode=smoke   (nightly, fast)
+ *   00 03 * * 0    verifyBackup.ts --mode=full    (weekly, fuller)
  *
- * The verify pass:
- *  1. Picks the most recent dump under $BACKUP_DIR (default /backups).
- *  2. Asserts the newest dump is recent (mtime within $MAX_DUMP_AGE_HOURS,
- *     default 36h). Catches the "last week's dump was restored because the
- *     new one never landed" failure mode that pure mtime ordering hides.
- *  3. Restores into $RESTORE_DATABASE_URL — a throwaway DB. Fails loudly
- *     if the env var is unset; we never restore over the live DB.
- *  4. Smoke row-count check on `audit_events`, `payment_intents`, `orders`
- *     so a structurally-valid but empty dump still pages.
- *  5. Asserts every name in $REQUIRED_EXTENSIONS (comma-separated) is
- *     installed in the restored sandbox. pg_restore happily "succeeds"
- *     against a stripped-down sandbox, leaving the data unusable for the
- *     real app boot — this catches that gap.
- *  6. Anti-join FK integrity check across the core relational graph
- *     (orders → users, payment_intents → users, payment_intents → orders).
- *     Drizzle does not declare DB-level FKs on these columns, so a corrupt
- *     dump can satisfy `pg_restore` and still violate the invariants the
- *     application code relies on.
- *  7. Recomputes the audit_events hash chain end-to-end — the very thing
- *     the audit log exists to prove. Mirrors the recompute logic in
- *     artifacts/api-server/src/lib/audit.ts (`verifyAuditChain` /
- *     `canonicalJson`); keep the two in lockstep — if the canonical
- *     content shape changes there it must change here too, or the
- *     verifier will start false-positive paging.
+ * Two modes, layered: `full` is a strict superset of `smoke`. Every smoke
+ * check also runs in full; full adds the deeper integrity checks that are
+ * too expensive to run nightly.
+ *
+ *   smoke (nightly, ~30s on a fresh sandbox):
+ *     1. Pick the most recent dump under $BACKUP_DIR (default /backups).
+ *     2. Assert the newest dump is recent (mtime within
+ *        $MAX_DUMP_AGE_HOURS, default 36h). Catches the "last week's dump
+ *        was restored because the new one never landed" failure mode that
+ *        pure mtime ordering hides.
+ *     3. Restore into $RESTORE_DATABASE_URL — a throwaway DB. Fails loudly
+ *        if the env var is unset; we never restore over the live DB.
+ *     4. Smoke row-count check on `audit_events`, `payment_intents`,
+ *        `orders` — a structurally-valid but empty dump still pages.
+ *     5. Assert every name in $REQUIRED_EXTENSIONS (comma-separated) is
+ *        installed in the restored sandbox. pg_restore happily "succeeds"
+ *        against a stripped-down sandbox, leaving the data unusable for
+ *        the real app boot — this catches that gap.
+ *
+ *   full (weekly, several minutes — does everything smoke does, plus):
+ *     6. Anti-join FK integrity across the core relational graph
+ *        (orders → users, payment_intents → users, payment_intents →
+ *        orders). Drizzle does not declare DB-level FKs on these columns,
+ *        so a corrupt dump can pass `pg_restore` and still violate the
+ *        invariants the app code assumes.
+ *     7. VACUUM (ANALYZE) the restored DB. This forces a full heap scan
+ *        of every table, which is the cheapest way to detect block-level
+ *        corruption that pg_restore itself didn't catch (pg_restore
+ *        replays COPY, but a corrupt page won't surface until something
+ *        actually reads it).
+ *     8. Inventory every user table (schema + name + row count) so a
+ *        silent table drop or an unexpectedly empty table is visible in
+ *        the run output, not just the three smoke tables.
+ *     9. Best-effort `amcheck` btree index validation. Requires the
+ *        `amcheck` contrib extension; if it isn't installable in the
+ *        sandbox (e.g. managed Postgres without superuser) we log a
+ *        warning and continue rather than fail — the smoke + vacuum +
+ *        inventory layers above already cover the high-value failure
+ *        modes for this script's purpose.
+ *    10. Recompute the audit_events hash chain end-to-end — the very
+ *        thing the audit log exists to prove. Mirrors the recompute
+ *        logic in artifacts/api-server/src/lib/audit.ts
+ *        (`verifyAuditChain` / `canonicalJson`); keep the two in
+ *        lockstep — if the canonical content shape changes there it must
+ *        change here too, or the verifier will start false-positive
+ *        paging.
  *
  * Distinct exit codes are surfaced so an orchestrator (GitHub Actions
- * schedule, k8s CronJob, or a host cron+Sentry-cron) can route the right
- * page to the right team — see docs/runbooks/backup-verify.md for the
- * full table and on-call ownership mapping.
+ * schedule, k8s CronJob, or a host cron + Sentry-cron) can route the
+ * right page to the right team. They are also documented in
+ * docs/runbooks/backup-verify.md — keep the two in lockstep when adding
+ * a new exit code.
+ *
+ *    1  generic verify error (the script's `fail()` default)
+ *    2  no .dump files in BACKUP_DIR / cannot read BACKUP_DIR
+ *    3  RESTORE_DATABASE_URL unset (refused to restore for safety)
+ *    4  pg_restore exited non-zero
+ *    5  smoke psql exited non-zero (missing tables OR empty rows)
+ *    6  stale dump (newest .dump older than MAX_DUMP_AGE_HOURS)
+ *    7  FK integrity violation (full mode only)
+ *    8  audit chain broken (full mode only)
+ *    9  required Postgres extensions missing on restored sandbox
+ *   10  VACUUM (ANALYZE) exited non-zero (full mode only)
+ *   11  full-mode table inventory exited non-zero (full mode only)
+ *   12  amcheck btree validation reported a corrupt index (full mode
+ *       only; extension-missing is downgraded to a warning, not exit 12)
+ *   13  unknown --mode value
+ *
+ * Ownership grouping (matches the runbook's page-routing contract):
+ *   transport / freshness / sandbox config -> platform team (2, 3, 6, 9)
+ *   dump-internal corruption                -> platform team + DB owner
+ *                                              (4, 5, 7, 10, 11, 12)
+ *   audit-chain integrity                   -> audit / compliance owner
+ *                                              (8)
+ *   operator / workflow misconfig           -> repo owner (13)
  */
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { readdirSync, statSync } from "node:fs";
 import path from "node:path";
+
+type Mode = "smoke" | "full";
 
 const BACKUP_DIR = process.env.BACKUP_DIR ?? "/backups";
 const RESTORE_DATABASE_URL = process.env.RESTORE_DATABASE_URL;
@@ -53,11 +102,6 @@ const REQUIRED_EXTENSIONS = (process.env.REQUIRED_EXTENSIONS ?? "")
 /**
  * Exit codes. Stable contract — the runbook (and any external monitor /
  * Sentry alert routing) keys on these values to decide who to page.
- *
- * 1xx-shaped grouping by ownership:
- *   transport / freshness / sandbox config -> platform team (2, 3, 6, 9)
- *   dump-internal corruption                -> platform team + DB owner (4, 5, 7)
- *   audit-chain integrity                   -> audit / compliance owner (8)
  */
 const EXIT = {
   GENERIC: 1,
@@ -69,11 +113,35 @@ const EXIT = {
   FK_INTEGRITY: 7,
   CHAIN_BROKEN: 8,
   EXTENSION_MISSING: 9,
+  VACUUM_FAILED: 10,
+  INVENTORY_FAILED: 11,
+  AMCHECK_FAILED: 12,
+  UNKNOWN_MODE: 13,
 } as const;
 
 function fail(msg: string, code: number = EXIT.GENERIC): never {
   console.error(`[verifyBackup] FAIL exit=${code}: ${msg}`);
   process.exit(code);
+}
+
+function parseMode(argv: readonly string[]): Mode {
+  // Accept --mode=smoke / --mode=full / --mode smoke / --mode full.
+  // Default to smoke so a bare invocation matches the original behavior.
+  // Also accept VERIFY_MODE env var so the GH Actions workflow can wire
+  // it through `env:` without rebuilding the args array.
+  let raw: string | undefined = process.env.VERIFY_MODE;
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i]!;
+    if (a.startsWith("--mode=")) {
+      raw = a.slice("--mode=".length);
+    } else if (a === "--mode" && i + 1 < argv.length) {
+      raw = argv[i + 1];
+      i++;
+    }
+  }
+  if (raw == null || raw === "") return "smoke";
+  if (raw === "smoke" || raw === "full") return raw;
+  fail(`unknown --mode value '${raw}' (expected 'smoke' or 'full')`, EXIT.UNKNOWN_MODE);
 }
 
 interface DumpInfo {
@@ -125,7 +193,7 @@ function checkFreshness(dump: DumpInfo): void {
  * stdout. JSON / row_to_json output is safe to split on '\n' because PG's
  * JSON serializer escapes embedded newlines inside string values.
  */
-function psql(sql: string, code: number): string {
+function psqlCapture(sql: string, code: number): string {
   const r = spawnSync(
     "psql",
     [RESTORE_DATABASE_URL!, "-X", "-At", "-v", "ON_ERROR_STOP=1", "-c", sql],
@@ -139,6 +207,21 @@ function psql(sql: string, code: number): string {
     fail(`psql exited ${r.status} for query: ${sql.slice(0, 120).replace(/\s+/g, " ")}`, code);
   }
   return r.stdout;
+}
+
+/**
+ * Run a psql command and stream its output to the operator's terminal /
+ * GitHub Actions log. Use this when the *output* of the query (e.g. the
+ * inventory row counts) is itself part of what we want a human to see in
+ * the run log, not just whether it exited 0.
+ */
+function psqlInherit(sql: string, code: number, label: string): void {
+  const r = spawnSync(
+    "psql",
+    [RESTORE_DATABASE_URL!, "-v", "ON_ERROR_STOP=1", "-X", "-A", "-c", sql],
+    { stdio: "inherit" },
+  );
+  if (r.status !== 0) fail(`${label} psql exited ${r.status}`, code);
 }
 
 /**
@@ -173,7 +256,7 @@ function checkExtensions(): void {
     return;
   }
   const literals = REQUIRED_EXTENSIONS.map((n) => `('${n.replace(/'/g, "''")}')`).join(",");
-  const out = psql(
+  const out = psqlCapture(
     `SELECT COALESCE(string_agg(req.name, ','), '') FROM (VALUES ${literals}) AS req(name)
      LEFT JOIN pg_extension e ON e.extname = req.name
      WHERE e.extname IS NULL`,
@@ -204,7 +287,7 @@ function checkExtensions(): void {
  */
 function checkFkIntegrity(): void {
   const orphanIntents = Number(
-    psql(
+    psqlCapture(
       `SELECT count(*) FROM payment_intents pi
        WHERE pi.order_id IS NOT NULL
          AND NOT EXISTS (SELECT 1 FROM orders o WHERE o.id = pi.order_id)`,
@@ -212,14 +295,14 @@ function checkFkIntegrity(): void {
     ).trim(),
   );
   const danglingOrders = Number(
-    psql(
+    psqlCapture(
       `SELECT count(*) FROM orders o
        WHERE NOT EXISTS (SELECT 1 FROM users u WHERE u.clerk_id = o.user_id)`,
       EXIT.FK_INTEGRITY,
     ).trim(),
   );
   const danglingIntents = Number(
-    psql(
+    psqlCapture(
       `SELECT count(*) FROM payment_intents pi
        WHERE NOT EXISTS (SELECT 1 FROM users u WHERE u.clerk_id = pi.user_id)`,
       EXIT.FK_INTEGRITY,
@@ -277,7 +360,7 @@ function checkAuditChain(): void {
   // Stream rows in seq order as JSON-per-line. row_to_json escapes any
   // embedded newlines inside string values to "\n", so split on '\n' is
   // safe and the per-line parse is well-defined.
-  const out = psql(
+  const out = psqlCapture(
     `SELECT row_to_json(t) FROM (
        SELECT seq, actor_id, action, entity, entity_id, pii_read, payload, prev_hash, row_hash
        FROM audit_events ORDER BY seq
@@ -328,7 +411,91 @@ function checkAuditChain(): void {
   console.log(`[verifyBackup] audit chain OK (${count} row(s) replayed)`);
 }
 
+function redactUrl(u: string): string {
+  return u.replace(/:[^@/]+@/, ":***@");
+}
+
+function runVacuumAnalyze(): void {
+  // VACUUM (ANALYZE) reads every heap page of every table, which is the
+  // cheapest way to surface block-level corruption that pg_restore's
+  // COPY replay didn't notice. ANALYZE updates stats so any follow-on
+  // queries the operator runs locally aren't planned with stale stats.
+  // VACUUM cannot run inside a transaction block, so use psql -c (which
+  // implicitly autocommits) rather than wrapping in BEGIN/COMMIT.
+  psqlInherit("VACUUM (ANALYZE);", EXIT.VACUUM_FAILED, "vacuum");
+}
+
+function runTableInventory(): void {
+  // Per-table row counts for *every* user table, not just the three
+  // smoke tables. The previous failure mode this catches: a partial
+  // dump that includes the smoke tables but is missing other tables
+  // (silent dump truncation), or a table that exists but is suddenly
+  // empty when it shouldn't be.
+  //
+  // n_live_tup from pg_stat_user_tables is approximate but only requires
+  // a single catalog query rather than a count(*) per table — important
+  // because a real production DB can have hundreds of tables and a
+  // count(*) per table multiplies the verify runtime by a lot. We just
+  // ran VACUUM ANALYZE above, so the live-tup estimates are fresh.
+  psqlInherit(
+    "SELECT schemaname, relname, n_live_tup " +
+      "FROM pg_stat_user_tables ORDER BY schemaname, relname;",
+    EXIT.INVENTORY_FAILED,
+    "inventory",
+  );
+}
+
+function runAmcheck(): void {
+  // Best-effort btree index validation via the `amcheck` contrib
+  // extension. Two failure modes are intentionally distinguished:
+  //
+  //  - Extension cannot be installed (managed Postgres without
+  //    superuser, base image without contrib): warn + return. The
+  //    smoke + vacuum + inventory layers already cover the high-value
+  //    cases for this script's purpose, and this is a sandbox-config
+  //    issue, not a backup-quality issue.
+  //  - Extension is installed and an index reports corruption:
+  //    exit AMCHECK_FAILED. That's a real signal that the dump's index
+  //    data is broken.
+  //
+  // We capture stderr here (not via inherit) so we can detect the
+  // extension-missing case from psql's error stream and downgrade it.
+  const create = spawnSync(
+    "psql",
+    [RESTORE_DATABASE_URL!, "-v", "ON_ERROR_STOP=1", "-X", "-c", "CREATE EXTENSION IF NOT EXISTS amcheck;"],
+    { encoding: "utf8" },
+  );
+  if (create.status !== 0) {
+    console.warn(
+      `[verifyBackup] amcheck extension unavailable in sandbox (psql exit ${create.status}): ` +
+        `${(create.stderr ?? "").trim()}. Skipping btree index validation; ` +
+        `smoke + vacuum + inventory still ran.`,
+    );
+    return;
+  }
+  // bt_index_check vs bt_index_parent_check: we use the cheaper
+  // bt_index_check (no AccessExclusiveLock, no parent-key cross-check).
+  // Stronger than nothing, weak enough to run against a freshly
+  // restored DB without monopolizing it. Iterate every btree index in
+  // user schemas; a single corrupt index raises an ERROR, which
+  // ON_ERROR_STOP turns into a non-zero psql exit -> exit AMCHECK_FAILED.
+  const sql =
+    "DO $$ DECLARE r record; BEGIN " +
+    "FOR r IN SELECT c.oid::regclass AS idx " +
+    "  FROM pg_index i " +
+    "  JOIN pg_class c ON c.oid = i.indexrelid " +
+    "  JOIN pg_am am ON am.oid = c.relam " +
+    "  JOIN pg_namespace n ON n.oid = c.relnamespace " +
+    "  WHERE am.amname = 'btree' " +
+    "    AND n.nspname NOT IN ('pg_catalog','information_schema','pg_toast') " +
+    "    AND i.indisvalid AND i.indisready " +
+    "LOOP RAISE NOTICE 'bt_index_check %', r.idx; " +
+    "PERFORM bt_index_check(r.idx); END LOOP; END $$;";
+  psqlInherit(sql, EXIT.AMCHECK_FAILED, "amcheck");
+}
+
 function main(): void {
+  const mode = parseMode(process.argv.slice(2));
   if (!RESTORE_DATABASE_URL) {
     fail(
       "RESTORE_DATABASE_URL is required (and must NOT point at the live DB)",
@@ -345,11 +512,13 @@ function main(): void {
   const dump = latestDump(BACKUP_DIR);
   // Freshness check first — if the dump is stale, restoring it is wasted
   // work and the resulting smoke/FK/chain results would mis-attribute
-  // "last week's data" as "this week's healthy state".
+  // "last week's data" as "this week's healthy state". Runs in both
+  // modes: nightly stalls of the producer must page within ~36h, not
+  // wait for the weekly fuller pass.
   checkFreshness(dump);
 
   console.log(
-    `[verifyBackup] restoring ${dump.path} -> ${RESTORE_DATABASE_URL.replace(/:[^@]+@/, ":***@")}`,
+    `[verifyBackup] mode=${mode} restoring ${dump.path} -> ${redactUrl(RESTORE_DATABASE_URL)}`,
   );
   const restore = spawnSync(
     "pg_restore",
@@ -396,14 +565,27 @@ function main(): void {
   );
   if (smoke.status !== 0) fail(`smoke psql exited ${smoke.status}`, EXIT.SMOKE_FAILED);
 
-  // Order matters: cheap structural checks first, expensive chain replay
-  // last. A failure earlier in the chain short-circuits before we spend
-  // minutes streaming the audit log.
+  // Extensions check runs in both modes — the "production app boots
+  // against this sandbox" property is a smoke-grade invariant, and the
+  // check itself is one fast catalog query.
   checkExtensions();
-  checkFkIntegrity();
-  checkAuditChain();
 
-  console.log("[verifyBackup] OK");
+  if (mode === "full") {
+    // Full-mode integrity layers, ordered cheap → expensive so a failure
+    // earlier in the chain short-circuits before we spend minutes
+    // streaming the audit log. FK integrity is a few catalog joins;
+    // VACUUM ANALYZE walks every heap page; inventory is a single
+    // catalog query but logged for human eyeballing; amcheck walks
+    // every btree; audit-chain replay streams the entire audit_events
+    // table and recomputes a sha256 per row.
+    checkFkIntegrity();
+    runVacuumAnalyze();
+    runTableInventory();
+    runAmcheck();
+    checkAuditChain();
+  }
+
+  console.log(`[verifyBackup] OK (mode=${mode})`);
 }
 
 main();

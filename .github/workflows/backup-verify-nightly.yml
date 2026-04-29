@@ -1,0 +1,225 @@
+name: Backup verify (nightly smoke)
+
+# Nightly restore-from-dump *smoke* test. The actual nightly pg_dump is
+# owned by the deployment platform / managed Postgres provider (we cannot
+# reach the production network from GitHub Actions); this workflow is the
+# automated safety net that proves each fresh dump is restorable within
+# ~24 hours of being written, instead of waiting up to 7 days for the
+# weekly fuller pass to catch a broken dump.
+#
+# Two cadences in this repo (see also `backup-verify.yml`):
+#  * Nightly (this workflow): runs `verifyBackup.ts --mode=smoke` on
+#    Mon-Sat. Fast (~30s after fetch) — pg_restore + 3 row-count
+#    queries. Catches dumps that are completely unrestorable, missing
+#    core tables, or the platform's pg_dump cron stopped running. This
+#    is the primary safety net.
+#  * Weekly (`backup-verify.yml`): runs `verifyBackup.ts --mode=full` on
+#    Sunday. Adds VACUUM ANALYZE + full-table inventory + amcheck.
+#    Catches block-level / index corruption that smoke wouldn't notice.
+#
+# The nightly runs Mon-Sat (cron `0 3 * * 1-6`) and the weekly runs Sun
+# at the same hour, so the two never collide on the shared
+# `RESTORE_DATABASE_URL` sandbox.
+#
+# Required repo variables / secrets — these are SHARED with
+# `backup-verify.yml` (kill switch + sandbox URL + fetch snippet are the
+# same for both cadences); only the Sentry Cron monitor slug differs:
+#
+#   vars.BACKUP_VERIFY_ENABLED        — must equal "1" to opt-in. Same
+#                                        kill switch as the weekly job;
+#                                        flipping it off silences both
+#                                        cadences.
+#   vars.SENTRY_ORG, vars.SENTRY_PROJECT
+#                                     — Sentry destination. Reused from
+#                                        the release / healthz / weekly
+#                                        backup-verify workflows so on-call
+#                                        sees these events in the same
+#                                        project.
+#   secrets.RESTORE_DATABASE_URL      — sandbox DB URL (NEVER prod).
+#                                        verifyBackup.ts pg_restore's
+#                                        with --clean --if-exists, which
+#                                        would wipe whatever this points
+#                                        at.
+#   secrets.BACKUP_FETCH_CMD          — shell snippet that downloads the
+#                                        latest dump into ./backups/<date>.dump
+#   secrets.BACKUP_VERIFY_SENTRY_DSN  — DSN used by `sentry-cli monitors run`
+#                                        to post Sentry Cron monitor
+#                                        check-ins for this nightly job.
+#                                        Same DSN secret as the weekly
+#                                        job; the slug differs.
+#
+# Schedule: Mon-Sat 03:00 UTC (`0 3 * * 1-6`). Tweak `cron` if your
+# backup window shifts — remember to update the Sentry Cron monitor
+# schedule + check-in margin in lockstep (see
+# docs/runbooks/backup-verify.md). Manual runs via workflow_dispatch are
+# encouraged for ad-hoc validation.
+#
+# Heartbeat / Sentry Cron monitor:
+#   The verify step is wrapped with `sentry-cli monitors run
+#   backup-verify-nightly --environment production -- ...`. This sends
+#   an `in_progress` check-in at start and an `ok`/`error` check-in at
+#   finish to a Sentry Cron monitor with the slug
+#   `backup-verify-nightly` (configured in the Sentry UI to expect six
+#   check-ins per week, Mon-Sat 03:00 UTC; see
+#   docs/runbooks/backup-verify.md for required values). Sentry pages
+#   on-call automatically when an expected check-in fails to arrive on
+#   time, which catches the failure modes that neither the in-workflow
+#   exit code nor GitHub's "Failed workflow run" mail can detect: GH
+#   Actions outages, the workflow being silently disabled (e.g. auto-
+#   disable after 60 days of inactivity if BACKUP_VERIFY_ENABLED is
+#   flipped off temporarily and forgotten), schedule delays under load,
+#   or the workflow file being deleted/renamed.
+#
+# When secrets/vars are missing the workflow degrades safely (same
+# matrix as the weekly job — keep them in lockstep when changing):
+#   - BACKUP_VERIFY_ENABLED != "1"      -> job is skipped entirely. The
+#                                          Sentry Cron monitor will then
+#                                          page on missed check-ins,
+#                                          which is what we want — the
+#                                          kill switch should be a
+#                                          deliberate decision, not a
+#                                          silent regression.
+#   - BACKUP_FETCH_CMD missing          -> the verify script exits 2
+#                                          with a clear stderr line;
+#                                          workflow fails, which both
+#                                          pages via the GitHub "Failed
+#                                          workflow run" notification
+#                                          AND posts an `error`
+#                                          cron-monitor check-in.
+#   - RESTORE_DATABASE_URL missing      -> verifyBackup.ts exits 3 with
+#                                          a clear stderr line; same
+#                                          paging path as above.
+#   - BACKUP_VERIFY_SENTRY_DSN missing  -> the cron-monitor heartbeat is
+#                                          skipped, but the workflow
+#                                          still fails on non-zero
+#                                          verify exit so on-call still
+#                                          sees the failure in GitHub.
+#                                          Configure the DSN to get
+#                                          heartbeat coverage for "the
+#                                          job stopped running at all."
+
+on:
+  schedule:
+    # Mon-Sat 03:00 UTC. Sunday is reserved for the weekly fuller pass
+    # in backup-verify.yml so the two never share the
+    # RESTORE_DATABASE_URL sandbox at the same hour.
+    - cron: "0 3 * * 1-6"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+# Cap at one running + one pending so an unusually slow runner can't fan
+# out into a backlog of overlapping nightly verifies (each one wipes the
+# sandbox DB at the start of pg_restore, so two concurrent runs would
+# fight each other).
+concurrency:
+  group: backup-verify-nightly
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: pg_restore + smoke psql (nightly)
+    if: ${{ vars.BACKUP_VERIFY_ENABLED == '1' }}
+    runs-on: ubuntu-latest
+    # 30 min: smoke mode is pg_restore + 3 count(*) — typically <60s on
+    # a fresh sandbox, but 30 min absorbs runner queue time + a slow
+    # large dump fetch. The Sentry monitor's max-runtime should be 45
+    # min so this bound trips first; raise both in lockstep if needed.
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+
+      - name: Install pg client tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client
+
+      - run: pnpm install --frozen-lockfile
+
+      # sentry-cli is a single static binary; fetching it inline keeps
+      # the workflow self-contained without adding a workspace dep.
+      # If Sentry isn't configured the install still succeeds — we just
+      # never invoke it in the wrapped step below.
+      - name: Install sentry-cli
+        run: curl -sL https://sentry.io/get-cli/ | INSTALL_DIR=/usr/local/bin sh
+
+      - name: Fetch + verify latest backup dump (with cron-monitor heartbeat)
+        env:
+          BACKUP_FETCH_CMD: ${{ secrets.BACKUP_FETCH_CMD }}
+          BACKUP_DIR: ${{ github.workspace }}/backups
+          RESTORE_DATABASE_URL: ${{ secrets.RESTORE_DATABASE_URL }}
+          # Used by `sentry-cli monitors run` (below) to post the
+          # cron-monitor check-ins. SENTRY_ORG / SENTRY_PROJECT are not
+          # strictly required for DSN-based ingestion but are passed
+          # through so operators can grep for them in failed-workflow
+          # audits.
+          SENTRY_DSN: ${{ secrets.BACKUP_VERIFY_SENTRY_DSN }}
+          SENTRY_ORG: ${{ vars.SENTRY_ORG }}
+          SENTRY_PROJECT: ${{ vars.SENTRY_PROJECT }}
+        run: |
+          # Materialise the fetch + verify body as a temp script so it
+          # can be invoked either directly (no Sentry DSN -> no
+          # heartbeat coverage, mirrors the weekly workflow's safe-
+          # degradation behavior) or wrapped by `sentry-cli monitors
+          # run` (DSN configured -> Sentry Cron monitor records
+          # `in_progress` at start + `ok`/`error` at finish, and pages
+          # on missed check-ins independent of the GitHub workflow-
+          # failure notification).
+          #
+          # Using a heredoc with a quoted terminator (VERIFY) means
+          # nothing inside the script is expanded at heredoc time —
+          # `$BACKUP_FETCH_CMD`, `$RESTORE_DATABASE_URL`, etc. all
+          # expand at runtime against the env inherited from this step.
+          cat > "$RUNNER_TEMP/verify.sh" <<'VERIFY'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          mkdir -p ./backups
+          if [ -z "${BACKUP_FETCH_CMD:-}" ]; then
+            echo "BACKUP_FETCH_CMD secret missing; cannot fetch dump." >&2
+            exit 2
+          fi
+          eval "$BACKUP_FETCH_CMD"
+          ls -la ./backups
+          # --mode=smoke (default — passed explicitly for clarity vs
+          # backup-verify.yml's --mode=full). Smoke runs pg_restore +
+          # row-count smoke queries on (audit_log, payment_intents,
+          # orders). Keep this flag in lockstep with the weekly
+          # workflow when adding new verify steps.
+          pnpm --filter @workspace/scripts exec tsx src/verifyBackup.ts --mode=smoke
+          VERIFY
+          chmod +x "$RUNNER_TEMP/verify.sh"
+
+          if [ -n "${SENTRY_DSN:-}" ]; then
+            # Cron-monitor heartbeat. `sentry-cli monitors run` posts
+            # an `in_progress` check-in before exec'ing the wrapped
+            # command and an `ok`/`error` check-in afterwards based on
+            # the wrapped command's exit code. The Sentry Cron monitor
+            # with slug `backup-verify-nightly` (configured in the
+            # Sentry UI to expect six check-ins per week, Mon-Sat
+            # 03:00 UTC; see docs/runbooks/backup-verify.md) will page
+            # on-call when an expected check-in fails to arrive within
+            # its check-in margin — which is the only signal that
+            # survives the scheduler itself going away (workflow
+            # disabled, GH Actions outage, schedule silently delayed,
+            # file deleted/renamed).
+            #
+            # The wrapper preserves the wrapped command's exit code,
+            # so a non-zero verify still fails the workflow step and
+            # the GitHub "Failed workflow run" notification still
+            # fires as a backstop.
+            sentry-cli monitors run \
+              --environment production \
+              backup-verify-nightly \
+              -- "$RUNNER_TEMP/verify.sh"
+          else
+            echo "::warning::BACKUP_VERIFY_SENTRY_DSN not configured; cron-monitor heartbeat is disabled — a stopped/disabled workflow will go unnoticed until the next manual restore drill"
+            "$RUNNER_TEMP/verify.sh"
+          fi
