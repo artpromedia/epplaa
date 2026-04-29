@@ -44,6 +44,7 @@ import { initStreamModeratorsSchema } from "./lib/streamModerators";
 import { securityHeaders } from "./middlewares/securityHeaders";
 import { csrfMiddleware } from "./middlewares/csrf";
 import { apiRateLimit } from "./middlewares/apiRateLimit";
+import { startMfaAbuseWatcherSweepTimer } from "./lib/rate-limit/mfaAbuseWatcher";
 
 const app: Express = express();
 
@@ -332,6 +333,13 @@ function startScheduledJobs(): void {
       );
     }, DAY_MS);
   }, 210_000);
+  // MFA-burst watcher memory sweep: drop per-identity buckets that
+  // have been quiet for at least one window length so a steady drip
+  // of distinct attacker identities can't grow the in-process map
+  // unboundedly. The watcher itself runs synchronously inside the
+  // 429 path; this is just GC. Skipped under NODE_ENV=test by the
+  // helper so unit tests aren't polluted by stray timers.
+  startMfaAbuseWatcherSweepTimer();
 }
 
 if (process.env.NODE_ENV !== "test") {

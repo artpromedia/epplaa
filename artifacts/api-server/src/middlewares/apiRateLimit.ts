@@ -10,6 +10,7 @@ import {
   WebhookIncidentNotifier,
   type RateLimitIncidentNotifier,
 } from "../lib/rate-limit/incidentNotifier";
+import { mfaAbuseWatcher } from "../lib/rate-limit/mfaAbuseWatcher";
 import { userHasAnyRole } from "../lib/roles";
 import { captureException, captureMessage } from "../lib/sentry";
 
@@ -913,6 +914,28 @@ export function apiRateLimit(opts: ApiRateLimitOptions = {}): RequestHandler {
           .catch((err) =>
             logger.warn({ err: (err as Error).message }, "rate_limit_event_insert_failed"),
           );
+        // Real-time burst detection for the sensitive MFA mutation
+        // routes. The forensic `rate_limit_events` table above is a
+        // post-incident lookup; the watcher closes the loop by
+        // paging trust & safety when a single identity racks up
+        // multiple MFA 429s in a short window — the canonical
+        // compromise pattern (failed verify/backup-code flood ->
+        // regenerate storm) that this rate limiter shapes into a
+        // 429 burst. See `docs/runbooks/mfa-rate-limit-alerts.md`
+        // for the recommended response and the threshold tuning
+        // env vars (`MFA_RATE_LIMIT_ALERT_*`). Limited to limiters
+        // declared in `routes/mfa.ts` (`mfa_sensitive`, `mfa_setup`,
+        // `mfa_verify`) by checking the limiter name prefix so the
+        // global per-tier limiter can't drown the alert in non-MFA
+        // 429 noise.
+        if (name.startsWith("mfa_")) {
+          mfaAbuseWatcher.record({
+            identity,
+            route: req.path,
+            name,
+            tier,
+          });
+        }
         return;
       }
       next();

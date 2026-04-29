@@ -39,6 +39,7 @@ import {
   getRateLimitStoreStatus,
   pingRateLimitRedis,
 } from "./apiRateLimit";
+import { mfaAbuseWatcher } from "../lib/rate-limit/mfaAbuseWatcher";
 
 beforeEach(() => {
   sentryCalls.exceptions.length = 0;
@@ -1546,5 +1547,118 @@ describe("apiRateLimit `max` option (absolute per-identity cap)", () => {
     expect(r1.nexted).toBe(true);
     expect(r2.nexted).toBe(false);
     expect(r2.res.statusCode).toBe(429);
+  });
+});
+
+describe("apiRateLimit MFA-burst watcher wiring (Task #132)", () => {
+  type MockReq = {
+    method: string;
+    path: string;
+    headers: Record<string, string>;
+    ip: string;
+    socket: { remoteAddress: string };
+  };
+  type MockRes = {
+    statusCode: number | null;
+    body: unknown;
+    headers: Record<string, string | number>;
+  };
+
+  function makeReq(userId: string, path: string): MockReq {
+    return {
+      method: "POST",
+      path,
+      headers: { "x-test-user-id": userId },
+      ip: "127.0.0.1",
+      socket: { remoteAddress: "127.0.0.1" },
+    };
+  }
+
+  async function runMiddleware(
+    middleware: ReturnType<typeof apiRateLimit>,
+    req: MockReq,
+  ): Promise<{ res: MockRes; nexted: boolean }> {
+    const res: MockRes = { statusCode: null, body: null, headers: {} };
+    let nexted = false;
+    await new Promise<void>((resolve) => {
+      middleware(
+        req as never,
+        {
+          status(code: number) {
+            res.statusCode = code;
+            return {
+              json(body: unknown) {
+                res.body = body;
+                resolve();
+                return res;
+              },
+            };
+          },
+          setHeader(name: string, value: string | number) {
+            res.headers[name] = value;
+          },
+        } as never,
+        () => {
+          nexted = true;
+          resolve();
+        },
+      );
+    });
+    return { res, nexted };
+  }
+
+  beforeEach(() => {
+    mfaAbuseWatcher.__reset();
+  });
+
+  it("invokes mfaAbuseWatcher.record on a 429 from a limiter named with the `mfa_` prefix", async () => {
+    const recordSpy = vi.spyOn(mfaAbuseWatcher, "record");
+    const middleware = apiRateLimit({
+      name: "mfa_verify",
+      windowMs: 60_000,
+      max: 1,
+      perRoute: true,
+    });
+    const userId = `task-132-mfa-watcher-${crypto.randomUUID()}`;
+    const r1 = await runMiddleware(
+      middleware,
+      makeReq(userId, "/api/me/mfa/verify"),
+    );
+    const r2 = await runMiddleware(
+      middleware,
+      makeReq(userId, "/api/me/mfa/verify"),
+    );
+    expect(r1.nexted).toBe(true);
+    expect(r2.res.statusCode).toBe(429);
+    // First call passes (no 429 -> no watcher invocation); second 429s
+    // and feeds the watcher.
+    expect(recordSpy).toHaveBeenCalledTimes(1);
+    const arg = recordSpy.mock.calls[0]![0];
+    expect(arg.identity).toBe(`user:${userId}`);
+    expect(arg.route).toBe("/api/me/mfa/verify");
+    expect(arg.name).toBe("mfa_verify");
+    expect(arg.tier).toBeDefined();
+    recordSpy.mockRestore();
+  });
+
+  it("does NOT invoke the watcher for 429s from non-MFA limiters", async () => {
+    const recordSpy = vi.spyOn(mfaAbuseWatcher, "record");
+    const middleware = apiRateLimit({
+      name: "non_mfa_limiter",
+      windowMs: 60_000,
+      max: 1,
+      perRoute: true,
+    });
+    const userId = `task-132-non-mfa-${crypto.randomUUID()}`;
+    await runMiddleware(middleware, makeReq(userId, "/api/some/route"));
+    const r2 = await runMiddleware(
+      middleware,
+      makeReq(userId, "/api/some/route"),
+    );
+    expect(r2.res.statusCode).toBe(429);
+    // The 429 must NOT feed the MFA watcher — that channel is reserved
+    // for the trust & safety alert.
+    expect(recordSpy).not.toHaveBeenCalled();
+    recordSpy.mockRestore();
   });
 });
