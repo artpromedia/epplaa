@@ -24,6 +24,7 @@ import { initPudoDeliverySchema } from "./lib/pudo/schema";
 import { runDailyPudoManifestDelivery } from "./lib/pudo/delivery";
 import { auditMutations, auditPiiReads, initAuditChain } from "./lib/audit";
 import { startAuditDlqMonitor } from "./lib/auditDlqMonitor";
+import { startAuditChainVerifier } from "./lib/auditChainVerifier";
 import { initAdminSchema } from "./lib/roles";
 import { initManufacturerSchema } from "./lib/manufacturers";
 import { initSecuritySchema } from "./lib/security";
@@ -345,6 +346,15 @@ if (process.env.NODE_ENV !== "test") {
       // exist`. The monitor is idempotent on repeat calls so a
       // future caller can't accidentally double-schedule it.
       startAuditDlqMonitor();
+      // Periodic in-prod audit-chain integrity probe (task #106). Runs
+      // `verifyAuditChain()` against the live `audit_events` table on
+      // an `AUDIT_CHAIN_VERIFY_INTERVAL_MS` cadence (default 4h) and
+      // pages audit/compliance owners on a non-null offending seq via
+      // the same Sentry capture path the weekly backup-verify drill
+      // uses for its exit-8 routing — see
+      // `docs/runbooks/backup-verify.md`. Idempotent on repeat calls
+      // so a future caller can't double-schedule the verifier.
+      startAuditChainVerifier();
       // Run the moderation provider's connection check and write the
       // outcome to the audit log. Deferred until after `initAuditChain`
       // so the audit table is guaranteed to exist when we append; runs

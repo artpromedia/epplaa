@@ -6,6 +6,10 @@ import { requireRole } from "../lib/roles";
 import { runDailyReconciliation } from "../lib/reconciliation";
 import { processDuePayouts } from "../lib/payments";
 import { approveVerification, rejectVerification } from "../lib/kyc";
+import {
+  getAuditChainVerifierSnapshot,
+  runAuditChainVerification,
+} from "../lib/auditChainVerifier";
 
 const router: IRouter = Router();
 
@@ -152,6 +156,67 @@ router.post("/admin/kyc/:id/approve", requireRole(ADMIN_ONLY), async (req, res) 
     return;
   }
   res.json({ ok: true, kycTier: result.kycTier });
+});
+
+// ---- In-prod audit-chain integrity probe (admin) ----
+//
+// Exposes the same `runAuditChainVerification` path that the periodic
+// scheduler uses (see `lib/auditChainVerifier.ts`), so an operator can
+// force an immediate verify against the live `audit_events` table — for
+// example after a suspected DB restore, before/after maintenance, or
+// when investigating a Sentry `audit_chain_tamper_detected` alert.
+//
+// On a non-null result this endpoint pages audit/compliance owners via
+// the same Sentry capture + log-tag path the scheduled tick uses; the
+// HTTP response just carries the structured result for the operator.
+//
+// Mounted at `/internal/audit-chain/verify` (not `/admin/...`) per the
+// task spec — the path advertises that the surface is for internal
+// operations callers only. The `requireAdmin` env-allowlist gate is
+// the canonical admin gate for ops endpoints because it does not
+// depend on a DB role lookup (so it still authorises operators when
+// the very table being investigated has issues).
+router.post("/internal/audit-chain/verify", requireAdmin, async (req, res) => {
+  const result = await runAuditChainVerification(Date.now(), "admin-endpoint");
+  if (result.error !== null) {
+    // The probe itself failed (DB unreachable, query timeout). Surface
+    // 503 so the caller can distinguish this from a clean run or a
+    // tamper detection — same triage split the snapshot's
+    // `lastVerifyError` field documents.
+    req.log.warn(
+      { err: result.error, durationMs: result.durationMs },
+      "audit_chain_verify_admin_probe_failed",
+    );
+    res.status(503).json({
+      ok: false,
+      error: "verify_failed",
+      detail: result.error,
+      durationMs: result.durationMs,
+    });
+    return;
+  }
+  if (result.offendingSeq !== null) {
+    // Tamper detected. The captureMessage + structured log have
+    // already been emitted from inside runAuditChainVerification; the
+    // 409 status conveys "the chain is in an invalid state" without
+    // implying the request itself was malformed (4xx) or the server
+    // failed to handle it (5xx).
+    res.status(409).json({
+      ok: false,
+      error: "audit_chain_tamper_detected",
+      offendingSeq: result.offendingSeq,
+      durationMs: result.durationMs,
+      verifiedAtIso: new Date(result.verifiedAt).toISOString(),
+    });
+    return;
+  }
+  res.json({
+    ok: true,
+    offendingSeq: null,
+    durationMs: result.durationMs,
+    verifiedAtIso: new Date(result.verifiedAt).toISOString(),
+    snapshot: getAuditChainVerifierSnapshot(),
+  });
 });
 
 router.post("/admin/kyc/:id/reject", requireRole(ADMIN_ONLY), async (req, res) => {

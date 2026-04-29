@@ -24,6 +24,10 @@ import {
   type AuditDlqSnapshot,
 } from "../lib/auditDlqMonitor";
 import {
+  getAuditChainVerifierSnapshot,
+  type AuditChainVerifierSnapshot,
+} from "../lib/auditChainVerifier";
+import {
   getRateLimitStoreKind,
   getRateLimitStoreReadyzStatus,
   getRateLimitStoreStatus,
@@ -93,6 +97,17 @@ router.get("/healthz", (_req, res) => {
   // `lib/auditDlqMonitor.ts` and runbook Step 5 for the full
   // rationale.
   const auditDlqStatus: AuditDlqSnapshot = getAuditDlqSnapshot();
+  // `auditChainVerify` mirrors the periodic in-prod chain integrity
+  // probe (task #106). The chain is hash-linked + protected by
+  // append-only DB triggers; this surface catches the impossible-
+  // shouldn't-happen case where a row was nevertheless rewritten in
+  // place between weekly backup-verify drills. A non-null offending
+  // seq trips the streak so the duration-based probe pages on-call,
+  // AND `runAuditChainVerification` separately fires a fatal Sentry
+  // capture that routes to the same audit/compliance owners as exit
+  // 8 of `scripts/src/verifyBackup.ts`.
+  const auditChainVerifyStatus: AuditChainVerifierSnapshot =
+    getAuditChainVerifierSnapshot();
   const subsystems: Record<string, SubsystemSnapshot> = {
     // Strip `kind` from the rate-limit snapshot so every subsystem
     // entry has an identical shape — `kind` stays on the top-level
@@ -112,6 +127,18 @@ router.get("/healthz", (_req, res) => {
     // thresholdCount, lastPollAt, lastPollError) are surfaced for
     // human triage and ignored by the probe's evaluator.
     auditDlq: auditDlqStatus,
+    // AuditChainVerifierSnapshot extends SubsystemSnapshot so the
+    // duration probe sees the same `{ state, firstFailureAt, ... }`
+    // shape; the verifier-specific fields (lastVerifiedAt,
+    // lastDurationMs, lastOffendingSeq, lastVerifyError, intervalMs)
+    // are surfaced for human triage and ignored by the probe's
+    // evaluator. A `degraded` state here means the most recent verify
+    // returned a non-null offending seq — i.e. tamper detected — and
+    // the audit/compliance owners' Sentry alert is the canonical
+    // page; the streak only stays open until the next scheduled tick
+    // (or admin-triggered re-probe) re-verifies, after which the
+    // streak closes but the Sentry issue remains as the audit trail.
+    auditChainVerify: auditChainVerifyStatus,
     // One entry per real, configured payment gateway (e.g.
     // `paymentGatewayPaystack`, `paymentGatewayFlutterwave`). Driven
     // by the same gateway success/failure stream that powers the

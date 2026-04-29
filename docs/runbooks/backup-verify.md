@@ -387,6 +387,21 @@ itself is the problem — the scheduler is fine.
    latter is a security incident: preserve the dump file, do not
    overwrite it, and follow the audit-tamper incident response (out of
    scope for this runbook).
+   > **Cross-reference — in-prod chain verifier.** The same
+   > `verifyAuditChain()` invariant is also probed against the **live**
+   > `audit_events` table every few hours by the in-prod scheduled
+   > runner in `artifacts/api-server/src/lib/auditChainVerifier.ts`
+   > (see ["In-prod audit-chain verifier"](#in-prod-audit-chain-verifier)
+   > below). If the live runner has been firing
+   > `audit_chain_tamper_detected` Sentry alerts in the days leading up
+   > to a weekly exit-8 page, the live tamper happened before the
+   > `pg_dump` was taken — the dump didn't corrupt anything, it
+   > faithfully captured a tampered live row. Triage from the live
+   > runner's first detection rather than from the weekly drill, and
+   > preserve both the dump and the live `audit_events` table state.
+   > Conversely, an exit 8 with a clean live runner timeline strongly
+   > suggests transport corruption rather than live tampering — start
+   > with a re-fetch + re-checksum of the dump.
 9. **Exit 9 (missing extensions)** — the restored sandbox is missing one
    or more names from `REQUIRED_EXTENSIONS` (the `fail()` line lists
    them). Either install them on the sandbox (`CREATE EXTENSION ...`)
@@ -558,6 +573,85 @@ workflow name in step 1.
    missed-check-in issue auto-resolves. Do **not** mark the issue
    resolved manually before the workflow runs successfully — you'll
    lose the audit trail of when coverage was actually restored.
+
+## In-prod audit-chain verifier
+
+The weekly backup-verify drill (exit 8 above) only sees the chain
+*after* the most recent `pg_dump`, so a tamper-then-redump sequence —
+or any in-place edit of `audit_events` between drills — could go
+undetected for up to a week. To close that gap the api-server runs a
+lightweight in-prod loop that calls `verifyAuditChain()` from
+`artifacts/api-server/src/lib/audit.ts` against the **live DB** on a
+configurable cadence and pages the **same audit/compliance owners**
+that exit 8 routes to.
+
+| Aspect | Value |
+| --- | --- |
+| Implementation | [`artifacts/api-server/src/lib/auditChainVerifier.ts`](../../artifacts/api-server/src/lib/auditChainVerifier.ts) |
+| Cadence | Every `AUDIT_CHAIN_VERIFY_INTERVAL_MS` ms (default `14_400_000` = 4h; minimum 60s, sub-minute values fall back to the default). First run is staggered ~5 min after boot to avoid racing schema/seed init. |
+| Probe | `verifyAuditChain(0)` — full-chain replay against `audit_events`. |
+| On a non-null offending seq | (a) Structured log `audit_chain_tamper_detected` with `{ offendingSeq, source, durationMs }`. (b) `captureMessage("audit_chain_tamper_detected", { level: "fatal", tags: { subsystem: "auditChain", check: "verifyAuditChain", source }, fingerprint: ["audit_chain_tamper_detected"], extra: { offendingSeq, durationMs, verifiedAt } })` — the audit/compliance owners' Sentry alert routing rule keys off `subsystem=auditChain` + the stable fingerprint, mirroring exit 8 above. (c) Trips `auditChainVerifyHealthWatcher` so /healthz reports `subsystems.auditChainVerify.state = "degraded"` and the duration probe (see the rate-limit-store runbook for the duration-probe contract) keeps paging until an operator manually intervenes. |
+| On a null result | Closes the watcher streak (sets `state = "healthy"`, stamps `lastRecoveredAt`). The Sentry issue stays open as the forensic trail; only the in-memory health state recovers. |
+| On a probe error (DB unreachable / query timeout) | Logs warn `audit_chain_verify_failed`; stores the message in `subsystems.auditChainVerify.lastVerifyError`; **does NOT trip the watcher and does NOT call `captureMessage`** — conflating "we couldn't measure the chain" with "the chain is broken" would erode the alert's signal and cross-page audit/compliance owners for what is actually a platform incident (the dbHealthWatcher already pages on the underlying DB outage via /readyz). |
+| Pager channel | Same as exit 8 — audit/compliance owners' on-call queue, via the Sentry alert rule keyed on `subsystem=auditChain` + `audit_chain_tamper_detected` fingerprint. |
+
+### Admin endpoint — `POST /api/internal/audit-chain/verify`
+
+Exposes the same `runAuditChainVerification()` path so an operator can
+force an immediate verify between scheduled ticks — for example after
+a suspected DB restore, before/after maintenance, or when investigating
+a Sentry `audit_chain_tamper_detected` alert. Sharing the
+implementation guarantees the on-demand probe has the same paging
+semantics as the scheduled tick.
+
+- **Auth**: gated by `requireAdmin` (the env-allowlist gate in
+  `artifacts/api-server/src/routes/admin.ts`). Use the env-allowlist
+  rather than the DB role check on purpose: it still authorises
+  operators when the very table being investigated has issues.
+- **Request**: empty body.
+- **Responses**:
+  - `200 { ok: true, offendingSeq: null, durationMs, verifiedAtIso, snapshot }` — chain is intact.
+  - `409 { ok: false, error: "audit_chain_tamper_detected", offendingSeq, durationMs, verifiedAtIso }` — tamper detected. The Sentry capture + structured log have already fired from inside `runAuditChainVerification` before the response is sent.
+  - `503 { ok: false, error: "verify_failed", detail, durationMs }` — the probe itself errored (DB unreachable, query timeout). Triage as a platform incident, not an audit incident.
+
+Example:
+
+```sh
+curl -fsS -X POST -u "$ADMIN_USER:$ADMIN_PASS" \
+  https://<host>/api/internal/audit-chain/verify | jq
+```
+
+### Tuning env vars
+
+| Name | Default | Purpose |
+| --- | --- | --- |
+| `AUDIT_CHAIN_VERIFY_INTERVAL_MS` | `14400000` (4h) | Cadence between scheduled verify runs against the live `audit_events` table. Sub-minute values (or any non-numeric/zero/negative value) fall back to the 4h default — sub-minute polling would slam the DB on a large chain and isn't a realistic operator intent. Lower it (e.g. to 30 min) if you want tighter detection latency on a small table; do not raise it past ~12h without sign-off from the audit/compliance owners — the whole point of this runner is to detect tampering between weekly drills, and a 24h cadence approaches that drill cadence. |
+
+### /healthz surface
+
+The verifier exposes its state under `subsystems.auditChainVerify` in
+the `/healthz` response. Shape (extends the standard
+`SubsystemSnapshot`):
+
+```json
+{
+  "state": "healthy" | "degraded",
+  "failureCount": <number>,
+  "firstFailureAt": <ms-epoch | null>,
+  "lastRecoveredAt": <ms-epoch | null>,
+  "lastVerifiedAt": <ms-epoch | null>,
+  "lastDurationMs": <number | null>,
+  "lastOffendingSeq": <number | null>,
+  "lastVerifyError": <string | null>,
+  "intervalMs": 14400000
+}
+```
+
+Triage tells:
+
+- `state="degraded"` + `lastOffendingSeq` set + `lastVerifyError=null` → tamper detected; the Sentry page is the canonical alert.
+- `state="healthy"` + `lastVerifyError` set → the probe is failing to measure (DB-pool issue); not an audit incident, look at /readyz.
+- `lastVerifiedAt=null` after the boot stagger window has elapsed → the verifier never started; check the api-server boot logs for `audit_chain_verifier_started`.
 
 ## Local invocation
 

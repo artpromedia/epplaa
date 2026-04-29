@@ -444,11 +444,13 @@ describe("GET /healthz (liveness)", () => {
     // the matching `payment_provider_missing_for_production` boot
     // warning during triage, so the registry stays empty and only
     // the canonical non-payment subsystem entries (rateLimitStore,
-    // db, auditChain, auditDlq, retention) are exposed.
+    // db, auditChain, auditChainVerify, auditDlq, retention) are
+    // exposed.
     const res = await request(buildApp()).get("/healthz");
     expect(res.status).toBe(200);
     expect(Object.keys(res.body.subsystems).sort()).toEqual([
       "auditChain",
+      "auditChainVerify",
       "auditDlq",
       "db",
       "rateLimitStore",
