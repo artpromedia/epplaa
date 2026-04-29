@@ -32,7 +32,7 @@ import {
   pruneExpiredMfaChallenges,
   pruneStalePendingMfaEnrollments,
 } from "./lib/mfa";
-import { runRetentionSweep } from "./lib/retention";
+import { initRetentionSchema, runRetentionSweep } from "./lib/retention";
 import { securityHeaders } from "./middlewares/securityHeaders";
 import { csrfMiddleware } from "./middlewares/csrf";
 import { apiRateLimit } from "./middlewares/apiRateLimit";
@@ -332,6 +332,15 @@ if (process.env.NODE_ENV !== "test") {
   // of the project. NEVER use a destructive force-push here.
   void initSecuritySchema().catch((err) =>
     logger.error({ err: (err as Error).message }, "security_schema_init_failed"),
+  );
+  // Retention heartbeat table: per-arm `last_run_at` rows for the
+  // daily sweep. Same additive `CREATE TABLE IF NOT EXISTS` pattern
+  // as the other init* helpers. Also primes the in-memory heartbeat
+  // cache from the previous process's writes so a redeploy doesn't
+  // false-trigger the "no successful sweep in >36h" alert before the
+  // next scheduled tick lands.
+  void initRetentionSchema().catch((err) =>
+    logger.error({ err: (err as Error).message }, "retention_schema_init_failed"),
   );
   // OpenTelemetry SDK init. No-op when OTEL_EXPORTER_OTLP_ENDPOINT is
   // unset, which is the normal case in dev. In prod it ships traces from

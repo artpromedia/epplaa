@@ -72,6 +72,11 @@ const {
   registerPaymentGatewayWatcher,
   __resetPaymentGatewayWatchersForTests,
 } = await import("../lib/subsystemHealth");
+const {
+  __resetRetentionStateForTests,
+  __seedHeartbeatForTests,
+  RETENTION_HEARTBEAT_STALE_MS,
+} = await import("../lib/retention");
 const { default: healthRouter, getReadyzConfigBlock } = await import("./health");
 const { __resetProductionEnvCacheForTests } = await import(
   "../lib/productionSignals"
@@ -158,6 +163,12 @@ beforeEach(() => {
   dbHealthWatcher.__reset();
   auditHealthWatcher.__reset();
   __resetPaymentGatewayWatchersForTests();
+  // Default the retention cache to a healthy "fresh sweep just landed"
+  // state so unrelated tests don't see `subsystems.retention=degraded`
+  // bleed into their assertions; cases that exercise the staleness
+  // logic explicitly call `__resetRetentionStateForTests` themselves.
+  __resetRetentionStateForTests();
+  __seedHeartbeatForTests("sweep", new Date());
   clearProductionConfigEnv();
   __resetProductionEnvCacheForTests();
 });
@@ -184,7 +195,10 @@ describe("GET /healthz (liveness)", () => {
     });
     // New canonical multi-subsystem map. Each entry must have the same
     // shape so a probe walking it doesn't need per-subsystem branching.
-    expect(res.body.subsystems).toEqual({
+    // The retention entry uses `expect.objectContaining` because its
+    // `lastRecoveredAt` is a wall-clock timestamp from the test's
+    // `beforeEach` heartbeat seed; the other fields are stable.
+    expect(res.body.subsystems).toMatchObject({
       rateLimitStore: {
         state: "healthy",
         failureCount: 0,
@@ -203,7 +217,15 @@ describe("GET /healthz (liveness)", () => {
         firstFailureAt: null,
         lastRecoveredAt: null,
       },
+      retention: {
+        state: "healthy",
+        failureCount: 0,
+        firstFailureAt: null,
+      },
     });
+    expect(typeof res.body.subsystems.retention.lastRecoveredAt).toBe(
+      "number",
+    );
     expect(dbExecuteMock).not.toHaveBeenCalled();
     expect(pingRedisMock).not.toHaveBeenCalled();
   });
@@ -351,13 +373,14 @@ describe("GET /healthz (liveness)", () => {
     // the matching `payment_provider_missing_for_production` boot
     // warning during triage, so the registry stays empty and only
     // the canonical non-payment subsystem entries (rateLimitStore,
-    // db, auditChain) are exposed.
+    // db, auditChain, retention) are exposed.
     const res = await request(buildApp()).get("/healthz");
     expect(res.status).toBe(200);
     expect(Object.keys(res.body.subsystems).sort()).toEqual([
       "auditChain",
       "db",
       "rateLimitStore",
+      "retention",
     ]);
     for (const k of Object.keys(res.body.subsystems)) {
       expect(k.startsWith("paymentGateway")).toBe(false);
@@ -452,6 +475,65 @@ describe("GET /healthz (liveness)", () => {
     expect(res.body.subsystems.db.state).toBe("healthy");
     expect(res.body.subsystems.db.firstFailureAt).toBeNull();
     expect(typeof res.body.subsystems.db.lastRecoveredAt).toBe("number");
+  });
+
+  // -------------------------------------------------------------------
+  // Retention sweep heartbeat (task #123): the daily privacy/cleanup
+  // sweep silently logged its results before, so a stopped scheduler
+  // (deploy bug, unhandled rejection in a sibling tick, etc.) was
+  // invisible until the trimmed tables blew up. /healthz now surfaces
+  // a `subsystems.retention` snapshot driven by the per-arm heartbeat
+  // cache so the same duration probe that pages on a stuck DB pool
+  // also pages on a stuck retention engine.
+  // -------------------------------------------------------------------
+
+  it("surfaces a degraded retention engine in subsystems.retention when the last sweep is older than 36h", async () => {
+    // Drop the cache so the snapshot has a real heartbeat to compare
+    // against rather than the "fresh seed" the global beforeEach
+    // installs. We seed an explicit stale `sweep` heartbeat at a
+    // wall-clock time well past the 36h staleness window.
+    __resetRetentionStateForTests();
+    const lastRunAtMs = Date.now() - (RETENTION_HEARTBEAT_STALE_MS + 60_000);
+    __seedHeartbeatForTests("sweep", new Date(lastRunAtMs));
+
+    const res = await request(buildApp()).get("/healthz");
+    expect(res.body.subsystems.retention.state).toBe("degraded");
+    // `firstFailureAt` is the moment the sweep aged out of the freshness
+    // window so the duration probe's threshold acts as a small grace
+    // tail on top of the 36h window — never earlier than the last
+    // successful run + 36h, never later than "now".
+    expect(res.body.subsystems.retention.firstFailureAt).toBe(
+      lastRunAtMs + RETENTION_HEARTBEAT_STALE_MS,
+    );
+    expect(res.body.subsystems.retention.failureCount).toBe(1);
+    expect(res.body.subsystems.retention.lastRecoveredAt).toBe(lastRunAtMs);
+    // Sibling subsystems remain healthy — only retention is flagged.
+    expect(res.body.subsystems.db.state).toBe("healthy");
+  });
+
+  it("reports retention as healthy when a fresh sweep heartbeat exists", async () => {
+    // The default beforeEach already seeds a fresh `sweep` heartbeat.
+    // Asserting explicitly here locks in the recovery path so a future
+    // refactor of the snapshot helper can't silently flip the default
+    // to degraded.
+    const res = await request(buildApp()).get("/healthz");
+    expect(res.body.subsystems.retention.state).toBe("healthy");
+    expect(res.body.subsystems.retention.firstFailureAt).toBeNull();
+    expect(typeof res.body.subsystems.retention.lastRecoveredAt).toBe(
+      "number",
+    );
+  });
+
+  it("treats a fresh deploy with no heartbeats as healthy during the post-boot grace window", async () => {
+    // First sweep tick is delayed 150s after boot, so an empty cache
+    // immediately after process start MUST report healthy — otherwise
+    // every redeploy would page on-call within seconds. The grace
+    // window matches the staleness threshold (36h).
+    __resetRetentionStateForTests();
+    const res = await request(buildApp()).get("/healthz");
+    expect(res.body.subsystems.retention.state).toBe("healthy");
+    expect(res.body.subsystems.retention.firstFailureAt).toBeNull();
+    expect(res.body.subsystems.retention.lastRecoveredAt).toBeNull();
   });
 });
 

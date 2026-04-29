@@ -18,6 +18,7 @@ import {
   getPaymentGatewaySubsystemSnapshots,
   type SubsystemSnapshot,
 } from "../lib/subsystemHealth";
+import { getRetentionSubsystemSnapshot } from "../lib/retention";
 import {
   getRateLimitStoreKind,
   getRateLimitStoreReadyzStatus,
@@ -70,6 +71,15 @@ router.get("/healthz", (_req, res) => {
   // surfaces here within seconds and pages on-call via the duration
   // alert once it stays degraded longer than the configured threshold.
   const auditStatus: SubsystemSnapshot = auditHealthWatcher.getSnapshot();
+  // `retention` mirrors the daily privacy/cleanup sweep heartbeat. If
+  // the timer silently stops firing (deploy bug, unhandled rejection
+  // in a sibling tick that throttles `setInterval`, etc.) the snapshot
+  // flips to `state: "degraded"` ~36h after the last successful sweep
+  // so the same duration-based probe that pages on a stuck DB / Redis
+  // / audit chain also pages on a stuck retention engine — preventing
+  // the silent "tables grow forever and NDPR erase SLAs are missed"
+  // failure mode the heartbeat was added to catch.
+  const retentionStatus: SubsystemSnapshot = getRetentionSubsystemSnapshot();
   const subsystems: Record<string, SubsystemSnapshot> = {
     // Strip `kind` from the rate-limit snapshot so every subsystem
     // entry has an identical shape — `kind` stays on the top-level
@@ -82,6 +92,7 @@ router.get("/healthz", (_req, res) => {
     },
     db: dbStatus,
     auditChain: auditStatus,
+    retention: retentionStatus,
     // One entry per real, configured payment gateway (e.g.
     // `paymentGatewayPaystack`, `paymentGatewayFlutterwave`). Driven
     // by the same gateway success/failure stream that powers the
