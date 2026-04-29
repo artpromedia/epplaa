@@ -1,5 +1,6 @@
 import { createServer } from "node:http";
 import { logger } from "./lib/logger";
+import { assertStubFulfillmentSafe } from "./lib/fulfillment/bootGuard";
 import { assertRateLimitStoreConfiguredForProduction } from "./middlewares/apiRateLimit";
 import {
   assertProductionHostnamePatternConfigured,
@@ -73,6 +74,24 @@ if (!rateLimitStoreGuard.ok) {
   process.exit(1);
 }
 
+// Boot-time hard failure (task #88): refuse to boot if the carrier
+// stub-fallback escape hatch (STUB_FULFILLMENT=1) is observed in a
+// production environment. Task #83 already added a per-request guard
+// inside each carrier (`lib/fulfillment/{gig,okhi,shipbubble}.ts`)
+// that refuses to substitute synthetic carrier data on real-call
+// failure when any production signal is observed, but that guard is
+// reactive — a misconfigured production deploy would silently boot
+// and only surface the misconfiguration the first time a real
+// carrier call fails (potentially mid-checkout for a real buyer).
+// Failing here turns the per-request runtime guard into an additional
+// technical control on the deploy pipeline, mirroring how
+// `assertRehearsalKillSwitchSafe` is already a hard failure above.
+// See `docs/runbooks/staging-only-endpoints.md` (boot-time guard).
+const stubFulfillmentGuard = assertStubFulfillmentSafe(process.env, logger);
+if (!stubFulfillmentGuard.ok) {
+  process.exit(1);
+}
+
 // Test-only affordance for `src/index.boot.test.ts` (task #92). When set
 // to the exact sentinel value below, the entrypoint exits cleanly AFTER
 // all boot-time guards have run but BEFORE the PORT check /
@@ -82,10 +101,10 @@ if (!rateLimitStoreGuard.ok) {
 // (`RATE_LIMIT_STORE_ALLOW_MEMORY_IN_PRODUCTION=1`) reaches an exit-0
 // state without spinning up the full app on the test runner.
 //
-// The check is intentionally placed AFTER all three guards so a future
-// refactor that drops the exit on a guard failure or reorders the
-// guards is still caught — the spawn test for the failing-guard cases
-// sees exit code 1 from the guard, not exit code 0 from this
+// The check is intentionally placed AFTER all boot-time guards so a
+// future refactor that drops the exit on a guard failure or reorders
+// the guards is still caught — the spawn test for the failing-guard
+// cases sees exit code 1 from the guard, not exit code 0 from this
 // affordance.
 //
 // Defense-in-depth against accidental production misuse:

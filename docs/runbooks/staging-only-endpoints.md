@@ -100,13 +100,17 @@ path log-throttling for the compiled hostname-pattern cache).
   stub fallback whenever `isProductionEnvironment(...)` is true,
   regardless of whether `STUB_FULFILLMENT=1` is set. The previous
   `NODE_ENV !== "production"` check is preserved underneath as the
-  default behaviour for staging/dev.
+  default behaviour for staging/dev. Task #88 additionally added a
+  boot-time guard (`assertStubFulfillmentSafe`, see below) so a
+  misconfigured production deploy crash-loops at startup instead of
+  waiting for the first carrier failure to surface.
 
 ### `lib/fulfillment/shipbubble.ts` `allowStubFallback()`
 
 - Env flag: `STUB_FULFILLMENT=1`
 - Same threat model as GIG.
-- Disposition: **hardened** (same change as GIG).
+- Disposition: **hardened** (same change as GIG, plus the same boot-
+  time guard in Task #88).
 
 ### `lib/fulfillment/okhi.ts` `allowStubFallback()`
 
@@ -116,7 +120,37 @@ path log-throttling for the compiled hostname-pattern cache).
   stub place id with high confidence. An unverified address would
   pass the home-delivery confidence gate (≥70) and ship to a bad
   address.
-- Disposition: **hardened** (same change as GIG / Shipbubble).
+- Disposition: **hardened** (same change as GIG / Shipbubble, plus the
+  same boot-time guard in Task #88).
+
+### Boot-time guard for `STUB_FULFILLMENT=1` (`assertStubFulfillmentSafe`)
+
+- Env flag: `STUB_FULFILLMENT=1`
+- File: `artifacts/api-server/src/lib/fulfillment/bootGuard.ts`
+- Wired in: `artifacts/api-server/src/index.ts` (alongside
+  `assertRehearsalKillSwitchSafe` and
+  `assertRateLimitStoreConfiguredForProduction`).
+- Why dangerous on production: the per-request `allowStubFallback()`
+  guards above are reactive — a copy-paste of staging env vars
+  (which include `STUB_FULFILLMENT=1`) into a production deploy would
+  let the api-server boot cleanly and only surface the
+  misconfiguration the first time a real carrier call failed
+  (potentially mid-checkout for a real buyer). The per-request guard
+  would then throw on every dispatch attempt rather than producing
+  one loud crash on-call could act on.
+- Disposition: **hardened (Task #88).** Mirrors the rehearsal injector
+  guard: at boot, if `STUB_FULFILLMENT=1` is observed alongside any
+  production signal (`NODE_ENV=production`, `REPLIT_DEPLOYMENT=1`,
+  `DEPLOYMENT_ENVIRONMENT=production`, or `HOSTNAME` matching
+  `PRODUCTION_HOSTNAME_PATTERN`), `process.exit(1)` runs and the
+  platform health check crash-loops the deploy. The structured log
+  line (`stub_fulfillment_kill_switch_on_in_production`) names every
+  triggered signal so the operator can fix the misconfiguration in
+  one round trip.
+- Unit-tested in `lib/fulfillment/bootGuard.test.ts` (staging-allowed
+  paths covering each non-production NODE_ENV / hostname-mismatch
+  case, and production-rejected paths covering each individual signal
+  plus multi-signal aggregation).
 
 ## Acceptable single-flag (or shared-secret) gates
 
