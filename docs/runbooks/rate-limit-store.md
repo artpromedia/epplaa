@@ -110,7 +110,16 @@ sequence so casing drift can't accidentally bypass the failure.
 Wire a separate alert on the
 `rate_limit_store_memory_in_production_via_opt_out` warn so the
 opt-out path is auditable — it should be a known list of named deploys,
-not a quiet steady stream of warns from random api-server hosts.
+not a quiet steady stream of warns from random api-server hosts. The
+canonical "known list" is the inventory at
+[`rate-limit-store-opt-outs.md`](./rate-limit-store-opt-outs.md).
+Every production deploy that sets
+`RATE_LIMIT_STORE_ALLOW_MEMORY_IN_PRODUCTION=1` MUST add a row to
+that file (deploy name, owner, reason, expected sunset date) in the
+same change that sets the env var. The Sentry alert wiring below
+keys off the inventory: a warn from a host listed there is a routine
+audit notification, a warn from any other host pages on-call as a
+suspected misuse.
 
 ### Wire alerts
 
@@ -128,7 +137,10 @@ route both to the rate-limit owners, and treat them differently:
   emitted on every boot of an opted-out deploy) — the deploy is
   knowingly running on the bypassable bucket. Should be a known list
   of named deploys; an unrecognised host on this alert means somebody
-  set the opt-out where they shouldn't have.
+  set the opt-out where they shouldn't have. The structured payload
+  includes `hostname` (the container's `HOSTNAME` env var) so the
+  alert can decide whether the emitting host is in the inventory at
+  [`rate-limit-store-opt-outs.md`](./rate-limit-store-opt-outs.md).
 
 Sentry wiring:
 
@@ -139,13 +151,38 @@ Sentry wiring:
   that owns rate limiting. Severity should match the
   `production_hostname_pattern_missing` alert above so both
   production-config drifts are routed the same way.
-- A second issue alert on
-  `message:"*rate_limit_store_memory_in_production_via_opt_out*"`
-  routed to the same channel as a notification (not a page) so the
-  team can audit which deploys are opted out.
+- Two issue alerts on
+  `message:"*rate_limit_store_memory_in_production_via_opt_out*"`,
+  differentiated by the emitting host's match against the opt-out
+  inventory:
+  - **Audit notification (inventoried hosts).** Filter the warn tag
+    AND `hostname:` matches the union of every `HOSTNAME (regex
+    match)` row in
+    [`rate-limit-store-opt-outs.md`](./rate-limit-store-opt-outs.md)
+    (e.g. `hostname:[/^api-canary-[a-z0-9]+$/, /^internal-admin-[a-z0-9]+$/]`).
+    Routed to the rate-limit owners channel as a **notification (not
+    a page)** — this is the routine audit signal that confirms the
+    inventory matches what's actually in production. Update the
+    `hostname:` filter union in the same change that adds a row to
+    the inventory file (so the new opt-out doesn't immediately page
+    on-call via the second alert below).
+  - **Page on unknown host (uninventoried hosts).** Filter the warn
+    tag AND `hostname:` does NOT match any inventory row. Routed to
+    the rate-limit on-call rotation as a **page** at the same
+    severity as `rate_limit_store_misconfigured_for_production`. A
+    page from this alert means somebody set
+    `RATE_LIMIT_STORE_ALLOW_MEMORY_IN_PRODUCTION=1` on a deploy that
+    isn't sanctioned by the inventory — treat it as a misuse and
+    walk the inventory file's "Notes" section. The page body should
+    include the warn payload's `hostname` so on-call knows which
+    deploy to track down without re-grepping logs.
 
 Datadog / log aggregator: equivalent saved queries on the same two
-message tags, monitored at `count > 0 last 5 minutes`.
+message tags, monitored at `count > 0 last 5 minutes`. The warn-tag
+query should be split into two saved queries the same way the Sentry
+rules above are split — one with a `host` allow-list matching the
+inventory regexes (notify) and one with the negation (page) — so an
+unknown host triggers a page rather than a quiet notification.
 
 When the production-shape boot failure fires, fix the deploy:
 

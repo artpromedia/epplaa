@@ -884,6 +884,43 @@ describe("assertRateLimitStoreConfiguredForProduction — production rate-limit 
       rate_limit_store: null,
       rate_limit_store_allow_memory_in_production: "1",
       production_signals: ["node_env"],
+      // `hostname: null` when HOSTNAME is unset — the field must
+      // still be present so the downstream Sentry alert never sees a
+      // missing key (which Sentry would group as a separate issue
+      // shape from "hostname present"). See
+      // `docs/runbooks/rate-limit-store-opt-outs.md` for how the
+      // alert uses this field to gate page vs notify routing.
+      hostname: null,
+    });
+  });
+
+  it("opt-out warn payload includes HOSTNAME so the Sentry alert can match against the inventory", () => {
+    // The opt-out inventory at
+    // `docs/runbooks/rate-limit-store-opt-outs.md` is keyed by
+    // container hostname. The warn payload MUST forward `HOSTNAME`
+    // verbatim (not the configured production hostname pattern, not
+    // a deploy slug) so the Sentry rule keyed off
+    // `rate_limit_store_memory_in_production_via_opt_out` can decide
+    // whether the emitting host is a sanctioned opt-out (notify) or
+    // an uninventoried deploy that has misused the escape hatch
+    // (page). Failing to forward this field would degrade the alert
+    // back to "warn from somewhere — go grep" which is exactly what
+    // the inventory exists to fix.
+    const log = buildLogSink();
+    const result = assertRateLimitStoreConfiguredForProduction(
+      {
+        NODE_ENV: "production",
+        RATE_LIMIT_STORE_ALLOW_MEMORY_IN_PRODUCTION: "1",
+        HOSTNAME: "api-canary-7f9c2",
+      },
+      log,
+    );
+    expect(result.ok).toBe(true);
+    expect(log.warnCalls).toHaveLength(1);
+    const [obj] = log.warnCalls[0]!;
+    expect(obj).toMatchObject({
+      hostname: "api-canary-7f9c2",
+      rate_limit_store_allow_memory_in_production: "1",
     });
   });
 

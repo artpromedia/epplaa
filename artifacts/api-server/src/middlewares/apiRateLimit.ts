@@ -164,6 +164,14 @@ export function assertRateLimitStoreConfiguredForProduction(
   // bypassable per-process bucket is in use; boot is allowed to
   // proceed.
   if (env.RATE_LIMIT_STORE_ALLOW_MEMORY_IN_PRODUCTION === "1") {
+    // The structured payload includes `hostname` so the Sentry alert
+    // on this warn tag can match the emitting host against the
+    // opt-out inventory in
+    // `docs/runbooks/rate-limit-store-opt-outs.md`. A warn from a
+    // host not in the inventory pages on-call as a misuse; a warn
+    // from an inventoried host is a routine audit notification. See
+    // `docs/runbooks/rate-limit-store.md` (Wire alerts section) for
+    // the exact rule wiring.
     log.warn(
       {
         node_env: env.NODE_ENV,
@@ -173,6 +181,7 @@ export function assertRateLimitStoreConfiguredForProduction(
         rate_limit_store_allow_memory_in_production:
           env.RATE_LIMIT_STORE_ALLOW_MEMORY_IN_PRODUCTION,
         production_signals: productionSignals.map((s) => s.signal),
+        hostname: env.HOSTNAME ?? null,
       },
       `rate_limit_store_memory_in_production_via_opt_out: ${reason} ` +
         "Boot is proceeding because " +
