@@ -601,3 +601,217 @@ jobs:
               echo '```'
             fi
           } >> "$GITHUB_STEP_SUMMARY"
+
+  verify-cron-monitors:
+    # Independent of the `rehearse` matrix above. Asserts that the
+    # Sentry Cron monitors that the per-minute probe and the daily
+    # rehearsal-notify-webhook probe heartbeat into actually exist
+    # in the Sentry org and are configured the way the workflows
+    # expect. If a monitor is missing (never created, deleted during
+    # a Sentry cleanup, or accidentally renamed), the wrapping
+    # `sentry-cli monitors run <slug>` call in the per-minute /
+    # daily workflows still appears to succeed (sentry-cli treats an
+    # unknown slug as auto-upsert by default), but on-call would NOT
+    # get paged when the workflow itself stops running -- which is
+    # the exact failure mode the heartbeat exists to catch. Same
+    # silent-failure mode if the monitor exists but is muted /
+    # disabled / on the wrong schedule / missing the production
+    # environment / has a zero check-in margin.
+    #
+    # See docs/runbooks/rate-limit-store.md ("Verifying the
+    # heartbeat") -- this job replaces the operator-memory check
+    # the runbook used to point at.
+    #
+    # Runs on the same `HEALTHZ_REHEARSAL_ENABLED` kill switch as
+    # the rehearse matrix above so toggling the rehearsal off also
+    # silences this check (otherwise we'd flap on every weekly tick
+    # for an org that opted out of rehearsals entirely).
+    #
+    # Runs in parallel with the rehearse matrix and never blocks it
+    # (and vice versa): a misconfigured Sentry monitor must not
+    # prevent the inject -> probe -> verify -> clear cycle from
+    # happening, and a flake in the rehearse matrix must not hide a
+    # missing monitor. Each surfaces independently in the workflow
+    # run summary.
+    name: "Verify Sentry Cron monitors exist & match the workflow schedules"
+    if: ${{ vars.HEALTHZ_REHEARSAL_ENABLED == '1' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    env:
+      SENTRY_ORG: ${{ vars.HEALTHZ_REHEARSAL_SENTRY_ORG }}
+      # Reuses the rehearsal Sentry auth token. The Sentry monitor
+      # read endpoint requires `org:read` scope (in addition to the
+      # `event:read` the rehearse-matrix verify step already needs).
+      # The job's first step asserts the token is present and the
+      # per-monitor step surfaces a 401/403 response with a clear
+      # message pointing operators at the missing scope.
+      SENTRY_AUTH_TOKEN: ${{ secrets.HEALTHZ_REHEARSAL_SENTRY_AUTH_TOKEN }}
+
+    steps:
+      - name: Verify required config is present
+        run: |
+          set -e
+          missing=()
+          [ -n "$SENTRY_ORG" ] || missing+=("vars.HEALTHZ_REHEARSAL_SENTRY_ORG")
+          [ -n "$SENTRY_AUTH_TOKEN" ] || missing+=("secrets.HEALTHZ_REHEARSAL_SENTRY_AUTH_TOKEN")
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::error::missing required config for cron monitor verification: ${missing[*]}"
+            exit 1
+          fi
+          echo "ok"
+
+      - name: Assert each cron monitor exists with the expected schedule, environment, and check-in margin
+        id: verify_monitors
+        run: |
+          # Don't let `set -e` short-circuit the loop -- we want to
+          # report ALL misconfigured monitors in one workflow run, not
+          # fail at the first one and leave operators chasing them
+          # one at a time over multiple weekly ticks.
+          set +e
+
+          # Quoted-heredoc terminator so nothing inside the function
+          # body is expanded at heredoc time.
+          cat > /tmp/verify_monitor.sh <<'VERIFY'
+          #!/usr/bin/env bash
+          # Args: <slug> <expected_schedule>
+          # Exit 0 if the monitor exists in the configured Sentry
+          # org and matches the workflow's schedule/env/margin
+          # expectations; non-zero otherwise. All failure modes emit
+          # an `::error::` annotation that is grouped into the run
+          # summary by the caller.
+          slug="$1"
+          expected_schedule="$2"
+          url="https://sentry.io/api/0/organizations/${SENTRY_ORG}/monitors/${slug}/"
+          # `\n%{http_code}` lets us cleanly split the body from the
+          # status line without shelling out to a second curl call.
+          resp=$(curl -sS -w '\n%{http_code}' \
+            -H "Authorization: Bearer $SENTRY_AUTH_TOKEN" \
+            -H "Accept: application/json" \
+            "$url")
+          curl_exit=$?
+          http_code=$(printf '%s' "$resp" | tail -n 1)
+          body=$(printf '%s' "$resp" | sed '$d')
+
+          if [ "$curl_exit" -ne 0 ]; then
+            echo "::error::curl exited ${curl_exit} reading Sentry monitor '${slug}' -- network/DNS/TLS failure from the runner; rerun the workflow"
+            return 1 2>/dev/null || exit 1
+          fi
+
+          case "$http_code" in
+            404)
+              echo "::error::Sentry Cron monitor '${slug}' does NOT exist in org '${SENTRY_ORG}'. The workflow that wraps itself with 'sentry-cli monitors run ${slug}' will silently stop heartbeating if it ever gets disabled, defeating the entire point of the heartbeat. Create it in Sentry UI -> Crons -> Add Monitor: slug='${slug}', schedule type='crontab', schedule='${expected_schedule}', timezone='UTC', environment='production', non-zero check-in margin. See docs/runbooks/rate-limit-store.md (Heartbeat / 'Verifying the heartbeat')."
+              return 1 2>/dev/null || exit 1
+              ;;
+            401|403)
+              echo "::error::Sentry returned HTTP ${http_code} reading monitor '${slug}'. The HEALTHZ_REHEARSAL_SENTRY_AUTH_TOKEN secret needs 'org:read' scope (in addition to the 'event:read' the rehearse-matrix verify step uses) so this job can read monitor configuration. Update the auth token in Sentry -> Settings -> Auth Tokens."
+              return 1 2>/dev/null || exit 1
+              ;;
+            200)
+              :
+              ;;
+            *)
+              echo "::error::Sentry returned HTTP ${http_code} reading monitor '${slug}': $(printf '%s' "$body" | head -c 512)"
+              return 1 2>/dev/null || exit 1
+              ;;
+          esac
+
+          # Parse the monitor config. `// empty` keeps jq from
+          # printing the literal string "null" when a field is
+          # absent, so the assertion messages below stay readable.
+          schedule=$(printf '%s' "$body" | jq -r '.config.schedule // empty')
+          schedule_type=$(printf '%s' "$body" | jq -r '.config.schedule_type // empty')
+          timezone=$(printf '%s' "$body" | jq -r '.config.timezone // empty')
+          checkin_margin=$(printf '%s' "$body" | jq -r '.config.checkin_margin // empty')
+          status=$(printf '%s' "$body" | jq -r '.status // empty')
+          is_muted=$(printf '%s' "$body" | jq -r '.isMuted // false')
+          # Sentry's monitor envelope returns environments as a
+          # list of `{name, status, ...}` objects. We only need to
+          # confirm a `production` entry exists -- the per-env
+          # status is irrelevant to "is this monitor wired up at
+          # all", which is what this job asserts.
+          env_names=$(printf '%s' "$body" | jq -c '[.environments[]?.name // empty]')
+          has_production=$(printf '%s' "$body" | jq -r '[.environments[]?.name // empty] | any(. == "production")')
+
+          errors=()
+          if [ "$schedule_type" != "crontab" ]; then
+            errors+=("schedule_type='${schedule_type}' (expected 'crontab')")
+          fi
+          if [ "$schedule" != "${expected_schedule}" ]; then
+            errors+=("schedule='${schedule}' (expected '${expected_schedule}' -- must match the GH Actions cron expression so Sentry expects exactly the right number of check-ins)")
+          fi
+          if [ "$timezone" != "UTC" ]; then
+            errors+=("timezone='${timezone}' (expected 'UTC' -- GH Actions schedules run in UTC; a mismatched timezone will make Sentry expect check-ins at the wrong wall-clock time and page on every tick)")
+          fi
+          # checkin_margin must be a positive integer number of
+          # minutes. Zero / null / non-numeric all defeat the
+          # heartbeat: Sentry would page the instant a runner is
+          # even slightly late, which trains operators to ignore
+          # the page.
+          if ! [[ "$checkin_margin" =~ ^[0-9]+$ ]] || [ "$checkin_margin" -le 0 ]; then
+            errors+=("checkin_margin='${checkin_margin}' (expected a positive integer number of minutes -- a zero/null margin pages on the slightest scheduler delay)")
+          fi
+          if [ "$status" != "active" ]; then
+            errors+=("status='${status}' (expected 'active' -- a disabled monitor will never page on missed check-ins)")
+          fi
+          if [ "$is_muted" = "true" ]; then
+            errors+=("isMuted=true (a muted monitor won't page on missed check-ins, defeating the entire heartbeat)")
+          fi
+          if [ "$has_production" != "true" ]; then
+            errors+=("environment 'production' not found in monitor environments (got: ${env_names}). The workflows always pass --environment production, so check-ins will land in an unexpected env and the monitor's production timeline will look permanently dead.")
+          fi
+
+          if [ ${#errors[@]} -gt 0 ]; then
+            joined=$(printf '%s; ' "${errors[@]}")
+            echo "::error::Sentry Cron monitor '${slug}' is misconfigured: ${joined%; }. Update it in Sentry UI -> Crons -> ${slug} -> Edit. See docs/runbooks/rate-limit-store.md (Heartbeat / 'Verifying the heartbeat')."
+            return 1 2>/dev/null || exit 1
+          fi
+
+          echo "monitor '${slug}' OK (status=${status}, isMuted=${is_muted}, schedule='${schedule}' ${schedule_type}, timezone=${timezone}, checkin_margin=${checkin_margin}m, environments=${env_names})"
+          VERIFY
+          chmod +x /tmp/verify_monitor.sh
+
+          # The two slugs and their expected GH Actions cron
+          # expressions. Keep this list in sync with the
+          # `sentry-cli monitors run <slug>` invocation at the
+          # bottom of each workflow file -- a renamed slug here
+          # without a matching workflow change would assert against
+          # the wrong monitor, which is exactly the silent
+          # regression this job exists to prevent.
+          declare -a SLUGS=(
+            "probe-rehearsal-notify-webhook|23 16 * * *"
+            "check-healthz-degraded|*/5 * * * *"
+          )
+
+          failed=0
+          results=()
+          for entry in "${SLUGS[@]}"; do
+            slug="${entry%%|*}"
+            schedule="${entry#*|}"
+            echo "::group::verify monitor '${slug}' (expected schedule '${schedule}')"
+            bash /tmp/verify_monitor.sh "$slug" "$schedule"
+            rc=$?
+            echo "::endgroup::"
+            if [ "$rc" -eq 0 ]; then
+              results+=("- \`${slug}\`: OK")
+            else
+              results+=("- \`${slug}\`: FAILED (see annotation above)")
+              failed=1
+            fi
+          done
+
+          {
+            echo "## Sentry Cron monitor verification"
+            echo ""
+            for line in "${results[@]}"; do
+              echo "$line"
+            done
+            echo ""
+            if [ "$failed" -ne 0 ]; then
+              echo "One or more Sentry Cron monitors are missing or misconfigured. The wrapping \`sentry-cli monitors run <slug>\` calls in the per-minute / daily probe workflows will appear to succeed, but on-call will NOT be paged when those workflows themselves stop running. See docs/runbooks/rate-limit-store.md -- *Heartbeat -- paging when the scheduler itself stops running* and *Daily rehearsal-notify-webhook liveness probe* -- for the required Sentry Cron monitor configuration."
+            else
+              echo "All cron monitors present and configured correctly. The probe workflows' heartbeat coverage is intact."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          exit $failed

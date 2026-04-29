@@ -456,13 +456,31 @@ first tick:
 | Environment | `production` | The workflow always passes `--environment production`. |
 | Owner / on-call | api-server / rate-limit owners | So the page routes to the same on-call as the streak-duration alert. |
 
-**Verifying the heartbeat.** From the Sentry UI's monitor detail page,
-the timeline should show one green check-in per 5 minutes. To
-end-to-end verify the page path, briefly disable the workflow
-(**Actions → Healthz degraded probe → ⋯ → Disable workflow**) and wait
-for one cron tick + check-in margin (~10 minutes total). Sentry should
-fire a `check-healthz-degraded` cron failure issue. Re-enable the
-workflow once the page is confirmed.
+**Verifying the heartbeat.** Two checks, in increasing cost:
+
+1. *Automated, runs weekly:* the `verify-cron-monitors` job in
+   [`.github/workflows/rehearse-healthz-degraded.yml`](../../.github/workflows/rehearse-healthz-degraded.yml)
+   queries the Sentry monitors API for both this monitor (slug
+   `check-healthz-degraded`) AND the daily probe's monitor (slug
+   `probe-rehearsal-notify-webhook`) on the same Sunday cadence as the
+   rest of the rehearsal. It fails the workflow loudly if either
+   monitor is missing, disabled, muted, on the wrong schedule, in the
+   wrong timezone, missing the `production` environment, or has a
+   zero/null check-in margin — exactly the misconfigurations that would
+   make the heartbeat silently stop paging. This is the check operators
+   should rely on day-to-day; the manual disable-and-wait drill below
+   is only needed when adding the monitor for the first time or after
+   substantive Sentry-side changes. The job uses
+   `secrets.HEALTHZ_REHEARSAL_SENTRY_AUTH_TOKEN` and requires that
+   token to also have `org:read` scope; if scope is missing the job
+   surfaces an HTTP 401/403 error pointing at the fix.
+2. *Manual, end-to-end, one-time:* From the Sentry UI's monitor detail
+   page, the timeline should show one green check-in per 5 minutes. To
+   end-to-end verify the page path, briefly disable the workflow
+   (**Actions → Healthz degraded probe → ⋯ → Disable workflow**) and
+   wait for one cron tick + check-in margin (~10 minutes total). Sentry
+   should fire a `check-healthz-degraded` cron failure issue. Re-enable
+   the workflow once the page is confirmed.
 
 ### Required GitHub repo configuration
 
@@ -599,7 +617,7 @@ schedule.
 | `HEALTHZ_REHEARSAL_SENTRY_PROJECT` | var | Sentry project SLUG (not numeric ID) used by the verification API call. Should be a dedicated `alerts-rehearsal` project. |
 | `HEALTHZ_REHEARSAL_TOKEN` | secret | Bearer token forwarded as `X-Rehearsal-Token`. Must match staging api-server's `HEALTHZ_REHEARSAL_TOKEN` env var. |
 | `HEALTHZ_REHEARSAL_SENTRY_DSN` | secret | DSN sentry-cli posts the rehearsal event to. Point at the dedicated `alerts-rehearsal` project. |
-| `HEALTHZ_REHEARSAL_SENTRY_AUTH_TOKEN` | secret | Sentry auth token with `event:read` scope on the rehearsal project. Used by the verification step to poll the events API. |
+| `HEALTHZ_REHEARSAL_SENTRY_AUTH_TOKEN` | secret | Sentry auth token with `event:read` scope on the rehearsal project (used by the rehearse-matrix verification step to poll the events API) AND `org:read` scope on the org (used by the `verify-cron-monitors` job to read each Sentry Cron monitor's slug/schedule/env/check-in margin). If `org:read` is missing, the cron-monitor verification job surfaces an HTTP 401/403 error and fails the workflow. |
 | `HEALTHZ_REHEARSAL_NOTIFY_WEBHOOK` | secret (optional) | Slack incoming webhook URL or Teams workflow webhook URL. The workflow POSTs a `{"text": ...}` payload (compatible with both) before injecting the synthetic streak ("rehearsal STARTING") and again after cleanup ("rehearsal PASSED/FAILED"). Leave unset to skip the chat heads-up entirely — same degrade-safe pattern as the Sentry config above. The URL is itself the credential, hence `secret` not `var`. |
 | `HEALTHZ_REHEARSAL_NOTIFY_CHANNEL` | var (optional) | Cosmetic channel label (e.g. `#ops`) included in the chat message and the workflow log so the destination is obvious without inspecting the webhook URL. Defaults to `#ops`. The actual routing is determined by the webhook URL, not by this value. |
 
@@ -698,6 +716,7 @@ When the rehearsal workflow fails, walk the steps top-down:
 | `Forward 5 page events to the rehearsal Sentry project` | `HEALTHZ_REHEARSAL_SENTRY_DSN` is wrong/expired, or the rehearsal project was deleted/renamed. | Sentry dashboard -> alerts-rehearsal project settings -> Client Keys (DSN). |
 | `Verify Sentry ingested the rehearsal events` | (a) Sentry is dropping/scrubbing events - check the Sentry stats page for the rehearsal project. (b) The `event:read` scope is missing on the auth token. (c) **Fingerprint dedup broken**: if the failure message says "expected ... 1 issue, saw 5", the per-subsystem fingerprint stopped collapsing iterations - verify nothing renamed `rate_limit_store_stuck_degraded_rehearsal` (rateLimitStore matrix entry) or `stuck_degraded_rehearsal_db` (db matrix entry), and that no new Sentry inbound filter or processor is forcing per-event grouping. The failing matrix entry's job name names the subsystem so you know which fingerprint to check. (d) **Tag stripped**: if the failure says "ingested event tags mismatched", Sentry's PII scrubber or a new `Tag Filter` rule is dropping `alert` / `subsystem` / `rehearsal` — or the expected per-subsystem tag values for the failing matrix entry have drifted from the production pager rule. The on-call page body for production would also be missing those tags. (e) **probe_output stripped**: if the failure says "event ... has no probe_output extra", Sentry's PII scrubber or a project rule is stripping the `--extra probe_output` payload. The on-call page body is composed FROM that extra (the probe JSON line with subsystem / streak duration / threshold / firstFailureAt), so production pages would arrive with no actionable detail. | Sentry project settings -> Data Scrubbing AND Alerts -> Issue alerts in the rehearsal project. The matched event/issue ID is surfaced in the workflow run summary so you can open the offending event directly. |
 | `Clear synthetic streak` | Staging is unreachable. Manually POST `clear-stuck-degraded` with the subsystem named in the failing matrix entry's job (`rateLimitStore` or `db`) before leaving - otherwise the per-minute probe workflow against staging will start paging for real for that subsystem. The `if: always()` guard means this step runs even if everything before it failed; if **this** step is the failure, the synthetic streak for THIS matrix entry's subsystem is still live on staging. | Re-run with the same token from your shell, e.g. `curl -X POST .../clear-stuck-degraded -H "X-Rehearsal-Token: $TOKEN" --data '{"subsystem":"db"}'`. |
+| `verify-cron-monitors` job (`Assert each cron monitor exists ...`) | A Sentry Cron monitor that one of the probe workflows wraps itself with is missing or misconfigured. The annotation names which slug failed (`probe-rehearsal-notify-webhook` or `check-healthz-degraded`) and exactly which field drifted (missing entirely, disabled, muted, wrong schedule, wrong timezone, missing `production` env, zero/null check-in margin). If the failure is HTTP 401/403 instead, the `HEALTHZ_REHEARSAL_SENTRY_AUTH_TOKEN` is missing the `org:read` scope needed to read monitors. **This job runs in parallel with the rehearse matrix and never blocks it** — a bad monitor doesn't stop the inject -> probe -> verify -> clear cycle from happening, and a flaky rehearse matrix won't hide a missing monitor. | Sentry UI -> Crons -> the named slug. Required values are in the *Heartbeat* table for `check-healthz-degraded` and the *Daily rehearsal-notify-webhook liveness probe* table for `probe-rehearsal-notify-webhook`. Re-run via `workflow_dispatch:` after fixing to confirm green without waiting until next Sunday. |
 
 ### Daily rehearsal-notify-webhook liveness probe (`probe-rehearsal-notify-webhook.yml`)
 
@@ -746,6 +765,14 @@ slug, schedule, and runtime/margin differ:
 | Recovery threshold | `1` | Resolve the issue as soon as the next daily check-in arrives. |
 | Environment | `production` | The workflow always passes `--environment production`. |
 | Owner / on-call | api-server / rate-limit owners | Same on-call as the rest of this alerting chain so a webhook rotation surfaces in the same channel as the per-minute probe and the weekly rehearsal. |
+
+The same `verify-cron-monitors` job described under *Verifying the
+heartbeat* above also asserts THIS monitor exists with the row above's
+configuration on every weekly rehearsal tick — so an operator who
+forgets to create it (or someone who deletes it during a Sentry
+cleanup) gets a loud workflow failure within ~7 days instead of the
+silent failure mode of "the daily probe stopped running and nothing
+paged."
 
 #### Interpreting a failed daily probe
 
