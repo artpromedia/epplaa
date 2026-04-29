@@ -10,7 +10,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run --passWithNoTests",
     "check-healthz-degraded": "tsx ./src/scripts/checkHealthzDegraded.ts",
-    "check-production-hostname-pattern": "tsx ./src/scripts/checkProductionHostnamePattern.ts"
+    "check-production-hostname-pattern": "tsx ./src/scripts/checkProductionHostnamePattern.ts",
+    "check-rate-limit-opt-out-inventory-drift": "tsx ./src/scripts/checkRateLimitOptOutInventoryDrift.ts"
   },
   "dependencies": {
     "@clerk/backend": "^3.4.1",

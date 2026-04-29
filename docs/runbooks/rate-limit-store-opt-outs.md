@@ -132,6 +132,76 @@ require updating the parser and the matching test cases in the same
 change so the probe doesn't silently start treating the new shape as
 malformed.
 
+## Drift rehearsal
+
+The Sentry rules above are configured by hand: an operator pastes
+the union of every `HOSTNAME (regex match)` row into each rule's
+`hostname:` filter (positive `re` for the audit-notification rule,
+negated `nre` for the page-on-unknown-host rule) in the same change
+that adds a row to this file. That hand-pasted union is the single
+point of failure in the alerting chain — if a canary deploy gets a
+new hostname suffix, or somebody updates this inventory but forgets
+the Sentry rule, on-call gets paged for a deploy that was actually
+sanctioned (or, worse, a real misuse on a stale inventory hostname
+gets silently absorbed by the audit-notification rule).
+
+The
+[`rehearse-rate-limit-opt-out-inventory.yml`](../../.github/workflows/rehearse-rate-limit-opt-out-inventory.yml)
+weekly GitHub Actions workflow detects that drift before a real
+opt-out warn fires. It runs every Sunday off-peak (a few minutes
+after the existing weekly
+[`rehearse-healthz-degraded.yml`](../../.github/workflows/rehearse-healthz-degraded.yml)
+rehearsal), fetches both Sentry rules via the rules API, and asserts
+that:
+
+- The set of regex alternatives in each rule's `hostname:` filter
+  equals the set computed from this file's `HOSTNAME (regex match)`
+  column (order-insensitive, dedupe-aware, splitting on top-level
+  `|` so a row that unions multiple hostnames-for-one-deploy
+  contributes each alternative).
+- The audit-notification rule's match mode is `re` and the page-
+  on-unknown-host rule's match mode is `nre` — a flipped mode would
+  silently page on every sanctioned canary boot.
+- The inventory file parses cleanly (no malformed table, no row
+  with an empty hostname cell).
+
+A drift fails the job with exit code 2 and forwards a fatal-level
+event to Sentry tagged
+`alert:rate_limit_opt_out_inventory_drift`, which the rate-limit
+owners' Sentry rule pages on. A probe error (file read failure,
+Sentry API error, malformed rule body) fails with exit code 1 and
+forwards an error-level event tagged
+`alert:rate_limit_opt_out_inventory_probe_error` so a broken
+rehearsal isn't silently swallowed.
+
+The probe itself lives in
+`artifacts/api-server/src/scripts/checkRateLimitOptOutInventoryDrift.ts`
+and can be run locally to verify a planned change before it ships:
+
+```sh
+INVENTORY_PATH=docs/runbooks/rate-limit-store-opt-outs.md \
+SENTRY_RULES_PATH=/path/to/sentry-rules.json \
+  pnpm --filter @workspace/api-server run check-rate-limit-opt-out-inventory-drift
+```
+
+The `sentry-rules.json` file shape is
+`{ "rules": [{ "name", "expectedMatchMode", "rule": <Sentry rule body> }, …] }`
+— the workflow builds it from the Sentry API response; for an
+ad-hoc local check you can construct it by hand from the same API
+or by exporting the rules from the Sentry UI.
+
+When this rehearsal pages, fix the drift in the same change:
+
+1. Open both Sentry rules and the inventory file side-by-side.
+2. Decide which side is correct — usually the inventory is the
+   source of truth and the Sentry filter is stale (e.g. a previous
+   add/remove change forgot to update the rule). Re-paste the union
+   of every `HOSTNAME (regex match)` cell, joined with `|`, into
+   each rule's `hostname:` filter `value` field. Keep the audit
+   rule on `match: re` and the page rule on `match: nre`.
+3. Re-run the workflow via `workflow_dispatch:` and confirm it
+   exits 0 (in_sync) before resolving the Sentry issue.
+
 ## When an opted-out deploy graduates to Redis
 
 Remove the opt-out env var on the deploy AND remove the row from this

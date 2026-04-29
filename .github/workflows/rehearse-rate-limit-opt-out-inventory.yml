@@ -1,0 +1,390 @@
+name: Rehearse rate-limit opt-out inventory drift (weekly)
+
+# Weekly drift check between the rate-limit-store opt-out inventory
+# at `docs/runbooks/rate-limit-store-opt-outs.md` and the Sentry
+# alert rules wired off the `rate_limit_store_memory_in_production_via_opt_out`
+# warn tag (audit-notification + page-on-unknown-host).
+#
+# Why this workflow exists (task #98, see
+# docs/runbooks/rate-limit-store-opt-outs.md "Drift rehearsal"):
+# the Sentry rules' `hostname:` regex union is hand-pasted into the
+# Sentry rule UI in the same change that adds a row to the inventory
+# file. Because the union is hand-pasted, it is the single point of
+# failure in the alerting chain:
+#
+#   - If a canary deploy gets a new hostname suffix (e.g. it
+#     re-deploys with a fresh container suffix outside the existing
+#     anchored regex) and the Sentry rule wasn't updated, on-call
+#     gets paged for a deploy that was actually sanctioned.
+#   - If somebody updates the inventory but forgets the Sentry rule,
+#     the same thing happens — the new opt-out's first warn-on-boot
+#     is treated as misuse and pages on-call.
+#   - If the Sentry rule's `hostname:` filter still names a deploy
+#     that was removed from the inventory (graduated to Redis or
+#     retired), a future misuse on the same hostname pattern is
+#     silently absorbed by the audit-notification rule — the page-
+#     on-unknown-host rule never fires for it.
+#   - If the Sentry rule's `match:` mode flipped (audit became
+#     `nre`, or the page rule became `re`), every sanctioned canary
+#     boot would silently page as if it were uninventoried.
+#
+# This rehearsal fetches both Sentry rules via the rules API, parses
+# the `hostname` filter out of each, and asserts the regex set in
+# each rule equals the inventory's regex set AND the rule's match
+# mode is what the runbook documents. Any drift fails the job loudly
+# (Sentry page + chat heads-up) BEFORE a real opt-out warn fires.
+#
+# Cadence: weekly mirrors the `rehearse-healthz-degraded.yml` weekly
+# rehearsal (Sunday off-peak). The inventory + rules don't churn fast
+# enough to warrant per-day rehearsals, and the rehearsal noise from
+# a clean run is a single fatal-level Sentry event (no chat post)
+# only when drift is observed.
+#
+# Required repo configuration (Settings -> Secrets and variables ->
+# Actions). The workflow degrades safely when these are missing —
+# see the `if:` gate and the `Verify required config is present`
+# step.
+#
+#   vars.RATE_LIMIT_OPT_OUT_DRIFT_ENABLED        — must equal "1" to
+#                                                  opt in. Acts as a
+#                                                  kill switch — set
+#                                                  to anything else
+#                                                  to silence the
+#                                                  workflow without
+#                                                  removing the file.
+#   vars.SENTRY_ORG                              — Sentry org SLUG
+#                                                  (reused from the
+#                                                  release workflow).
+#   vars.SENTRY_PROJECT                          — Sentry project
+#                                                  SLUG hosting the
+#                                                  two issue alert
+#                                                  rules.
+#   vars.RATE_LIMIT_OPT_OUT_AUDIT_RULE_ID        — numeric ID of the
+#                                                  "audit notification
+#                                                  (inventoried hosts)"
+#                                                  issue alert rule.
+#                                                  See Sentry UI ->
+#                                                  Alerts -> the rule
+#                                                  -> the URL ends in
+#                                                  /<id>/.
+#   vars.RATE_LIMIT_OPT_OUT_PAGE_RULE_ID         — numeric ID of the
+#                                                  "page on unknown
+#                                                  host (uninventoried
+#                                                  hosts)" issue alert
+#                                                  rule.
+#
+#   secrets.RATE_LIMIT_OPT_OUT_SENTRY_AUTH_TOKEN — Sentry auth token
+#                                                  with `alerts:read`
+#                                                  scope on the
+#                                                  project. Used to
+#                                                  fetch the rule
+#                                                  bodies from the
+#                                                  Sentry rules API.
+#   secrets.RATE_LIMIT_OPT_OUT_SENTRY_DSN        — DSN sentry-cli
+#                                                  posts the drift
+#                                                  page event to.
+#                                                  Routed to the
+#                                                  rate-limit owners.
+#                                                  Kept as a separate
+#                                                  secret so it can
+#                                                  be rotated
+#                                                  independently of
+#                                                  the runtime DSN.
+#
+# Optional chat heads-up (Slack incoming webhook or Teams workflow
+# webhook). When unset, the notify steps no-op silently — same
+# degrade-safe pattern as the rest of the rehearsal config.
+#
+#   secrets.RATE_LIMIT_OPT_OUT_NOTIFY_WEBHOOK    — Incoming webhook
+#                                                  URL. The workflow
+#                                                  POSTs `{"text":...}`
+#                                                  on a drift event
+#                                                  AND on a probe
+#                                                  error so a broken
+#                                                  webhook surfaces
+#                                                  in #ops. A clean
+#                                                  in_sync run does
+#                                                  NOT post — the
+#                                                  rate-limit owners
+#                                                  don't need a
+#                                                  weekly "all clear"
+#                                                  message.
+#   vars.RATE_LIMIT_OPT_OUT_NOTIFY_CHANNEL       — Cosmetic channel
+#                                                  label (e.g.
+#                                                  `#rate-limit-owners`)
+#                                                  included in the
+#                                                  message body so
+#                                                  the destination is
+#                                                  obvious in the
+#                                                  workflow logs and
+#                                                  the chat post
+#                                                  itself. Defaults
+#                                                  to `#rate-limit-owners`.
+
+on:
+  schedule:
+    # Sundays 04:23 UTC — off-peak so a real drift page can't be
+    # confused with business-hours noise, and 6 minutes after the
+    # `rehearse-healthz-degraded.yml` weekly rehearsal so the two
+    # don't pile up on the same runner pool / chat channel at the
+    # same minute.
+    - cron: "23 4 * * 0"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  # At most one drift check at a time — never overlap a scheduled
+  # run with an ad-hoc workflow_dispatch.
+  group: rehearse-rate-limit-opt-out-inventory
+  cancel-in-progress: false
+
+jobs:
+  drift:
+    name: Compare inventory file to Sentry rule hostname filters
+    if: ${{ vars.RATE_LIMIT_OPT_OUT_DRIFT_ENABLED == '1' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+
+    env:
+      INVENTORY_PATH: docs/runbooks/rate-limit-store-opt-outs.md
+      SENTRY_ORG: ${{ vars.SENTRY_ORG }}
+      SENTRY_PROJECT: ${{ vars.SENTRY_PROJECT }}
+      AUDIT_RULE_ID: ${{ vars.RATE_LIMIT_OPT_OUT_AUDIT_RULE_ID }}
+      PAGE_RULE_ID: ${{ vars.RATE_LIMIT_OPT_OUT_PAGE_RULE_ID }}
+      SENTRY_AUTH_TOKEN: ${{ secrets.RATE_LIMIT_OPT_OUT_SENTRY_AUTH_TOKEN }}
+      SENTRY_DSN: ${{ secrets.RATE_LIMIT_OPT_OUT_SENTRY_DSN }}
+      NOTIFY_WEBHOOK: ${{ secrets.RATE_LIMIT_OPT_OUT_NOTIFY_WEBHOOK }}
+      NOTIFY_CHANNEL: ${{ vars.RATE_LIMIT_OPT_OUT_NOTIFY_CHANNEL || '#rate-limit-owners' }}
+      RUN_ID_TAG: ${{ github.run_id }}-${{ github.run_attempt }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Install sentry-cli
+        run: curl -sL https://sentry.io/get-cli/ | INSTALL_DIR=/usr/local/bin sh
+
+      - name: Verify required config is present
+        run: |
+          set -e
+          missing=()
+          [ -n "$SENTRY_ORG" ] || missing+=("vars.SENTRY_ORG")
+          [ -n "$SENTRY_PROJECT" ] || missing+=("vars.SENTRY_PROJECT")
+          [ -n "$AUDIT_RULE_ID" ] || missing+=("vars.RATE_LIMIT_OPT_OUT_AUDIT_RULE_ID")
+          [ -n "$PAGE_RULE_ID" ] || missing+=("vars.RATE_LIMIT_OPT_OUT_PAGE_RULE_ID")
+          [ -n "$SENTRY_AUTH_TOKEN" ] || missing+=("secrets.RATE_LIMIT_OPT_OUT_SENTRY_AUTH_TOKEN")
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::error::missing required config: ${missing[*]}"
+            exit 1
+          fi
+          echo "ok"
+
+      - name: Fetch Sentry rule bodies
+        id: fetch
+        run: |
+          set -e
+          # Sentry's project rule API: GET /api/0/projects/{org}/{project}/rules/{id}/
+          # Returns the issue alert rule body including `conditions`,
+          # `filters`, `actions`, etc. We pass the body straight to
+          # the comparator after wrapping it in our descriptor shape.
+          fetch_rule() {
+            local id="$1"
+            local out_file="$2"
+            local label="$3"
+            local url="https://sentry.io/api/0/projects/${SENTRY_ORG}/${SENTRY_PROJECT}/rules/${id}/"
+            local code body
+            body=$(curl -sS -w '\n%{http_code}' \
+              -H "Authorization: Bearer $SENTRY_AUTH_TOKEN" \
+              -H "Accept: application/json" \
+              "$url" || echo $'\n000')
+            code=$(printf '%s' "$body" | tail -n 1)
+            body=$(printf '%s' "$body" | head -n -1)
+            if [ "$code" != "200" ]; then
+              echo "::error::Sentry rules API returned HTTP $code for ${label} rule id=${id}"
+              echo "body: $body"
+              exit 1
+            fi
+            printf '%s' "$body" > "$out_file"
+            echo "fetched ${label} rule id=${id} ($(wc -c < "$out_file") bytes)"
+          }
+          fetch_rule "$AUDIT_RULE_ID" "$RUNNER_TEMP/audit.json" "audit-notification"
+          fetch_rule "$PAGE_RULE_ID" "$RUNNER_TEMP/page.json" "page-on-unknown-host"
+
+          # Build the rules descriptor file the comparator script
+          # expects. Each entry pairs a human-readable label + the
+          # match mode the runbook documents the rule should be using.
+          jq -n \
+            --slurpfile audit "$RUNNER_TEMP/audit.json" \
+            --slurpfile page "$RUNNER_TEMP/page.json" \
+            '{
+              rules: [
+                {
+                  name: "audit-notification",
+                  expectedMatchMode: "re",
+                  rule: $audit[0]
+                },
+                {
+                  name: "page-on-unknown-host",
+                  expectedMatchMode: "nre",
+                  rule: $page[0]
+                }
+              ]
+            }' > "$RUNNER_TEMP/sentry-rules.json"
+          echo "rules_path=$RUNNER_TEMP/sentry-rules.json" >> "$GITHUB_OUTPUT"
+
+      - name: Run drift probe and capture exit code
+        id: probe
+        env:
+          SENTRY_RULES_PATH: ${{ steps.fetch.outputs.rules_path }}
+          # Override the script default (a relative path that
+          # resolves against the api-server cwd) with an absolute
+          # path so this works regardless of how pnpm filters the
+          # invocation.
+          INVENTORY_PATH: ${{ github.workspace }}/docs/runbooks/rate-limit-store-opt-outs.md
+        run: |
+          set +e
+          # Capture stdout (the structured report) AND the exit code
+          # so subsequent steps can:
+          #   - forward the report to Sentry as `extra.probe_output`
+          #   - decide whether to page (exit 2) vs probe-error (exit 1)
+          out=$(pnpm --silent --filter @workspace/api-server run check-rate-limit-opt-out-inventory-drift 2>probe.stderr)
+          code=$?
+          set -e
+          printf '%s\n' "$out"
+          printf '%s\n' "$out" > probe.stdout
+          if [ -s probe.stderr ]; then
+            echo "::warning::probe stderr (probe-error path)"
+            cat probe.stderr
+          fi
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          if [ "$code" -eq 0 ]; then
+            echo "in_sync — inventory matches every Sentry rule"
+            exit 0
+          fi
+          if [ "$code" -eq 2 ]; then
+            echo "::error::drift detected between the inventory and at least one Sentry rule's hostname filter"
+            exit 2
+          fi
+          echo "::error::probe error (exit $code) — see stderr above"
+          exit "$code"
+
+      - name: Forward drift / probe-error to Sentry as a fatal page
+        # Runs whenever the probe didn't exit 0. The Sentry pager
+        # path is the canonical alerting channel for the rate-limit
+        # owners — failing through to the GitHub workflow-failure
+        # notification alone would lose the structured report.
+        if: ${{ always() && steps.probe.outputs.exit_code != '0' && env.SENTRY_DSN != '' }}
+        env:
+          PROBE_EXIT: ${{ steps.probe.outputs.exit_code }}
+        run: |
+          set +e
+          run_url="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          # The probe writes either a `drift` or a `probe_error`
+          # JSON line. Tag both so the Sentry rule can fan out per
+          # outcome if the rate-limit owners want different routing
+          # for "the rules drifted" vs "the rehearsal itself broke".
+          if [ "$PROBE_EXIT" = "2" ]; then
+            alert_tag="rate_limit_opt_out_inventory_drift"
+            level="fatal"
+            msg="rate-limit opt-out inventory drifted from the Sentry rule hostname filter"
+          else
+            alert_tag="rate_limit_opt_out_inventory_probe_error"
+            level="error"
+            msg="rate-limit opt-out inventory drift rehearsal had a probe error (could not decide drift vs in_sync)"
+          fi
+          out=$(cat probe.stdout 2>/dev/null || true)
+          err=$(cat probe.stderr 2>/dev/null || true)
+          # Per-outcome fingerprint so all reruns of the same
+          # condition collapse onto a single Sentry issue (the
+          # rate-limit owners get one page, not one per cron tick).
+          sentry-cli send-event \
+            --message "$msg (probe exit $PROBE_EXIT)" \
+            --level "$level" \
+            --tag "subsystem:rate_limit" \
+            --tag "alert:${alert_tag}" \
+            --tag "exit_code:$PROBE_EXIT" \
+            --tag "scheduler:github-actions" \
+            --tag "workflow:rehearse-rate-limit-opt-out-inventory" \
+            --fingerprint "$alert_tag" \
+            --extra "probe_output=$out" \
+            --extra "probe_stderr=$err" \
+            --extra "exit_code=$PROBE_EXIT" \
+            --extra "workflow_run=$run_url" \
+            || echo "::warning::sentry-cli send-event failed (Sentry forwarder error, not the drift detector itself)"
+
+      - name: Notify chat about drift / probe-error
+        # Only post on a non-zero outcome — the rate-limit owners
+        # don't need a weekly "all clear" message in #ops, and that
+        # would train them to ignore the channel. A drift / probe-
+        # error is rare and noteworthy.
+        if: ${{ always() && steps.probe.outputs.exit_code != '0' && env.NOTIFY_WEBHOOK != '' }}
+        continue-on-error: true
+        env:
+          PROBE_EXIT: ${{ steps.probe.outputs.exit_code }}
+        run: |
+          set +e
+          run_url="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          if [ "$PROBE_EXIT" = "2" ]; then
+            emoji=":rotating_light:"
+            verb="DRIFT DETECTED"
+            detail="The Sentry rule hostname filter no longer matches the union of \`HOSTNAME (regex match)\` rows in \`docs/runbooks/rate-limit-store-opt-outs.md\`. Either re-paste the union into the Sentry rule UI, or update the inventory to reflect the deploys that are actually opted out. See the runbook *Drift rehearsal* section."
+          else
+            emoji=":warning:"
+            verb="PROBE ERROR"
+            detail="The drift rehearsal couldn't decide drift vs in_sync (file read, Sentry API error, or malformed rule body). Walk the failing step in the workflow run."
+          fi
+          text=$(printf '%s\n%s\n%s' \
+            "${emoji} *Rate-limit opt-out inventory rehearsal: ${verb}* (${NOTIFY_CHANNEL}, run \`${RUN_ID_TAG}\`)" \
+            "${detail}" \
+            "Workflow run: ${run_url}")
+          payload=$(jq -nc --arg text "$text" '{text: $text}')
+          code=$(curl -sS -o /tmp/notify_resp -w '%{http_code}' \
+            -X POST -H 'Content-Type: application/json' \
+            --data "$payload" "$NOTIFY_WEBHOOK" || echo "000")
+          body=$(cat /tmp/notify_resp 2>/dev/null || true)
+          if [ "$code" != "200" ] && [ "$code" != "204" ]; then
+            echo "::warning::notify webhook returned HTTP $code (body: $body) — chat path is broken; on-call still got the Sentry page but ${NOTIFY_CHANNEL} did not see the heads-up"
+            exit 1
+          fi
+          echo "drift heads-up posted to ${NOTIFY_CHANNEL} (HTTP $code)"
+
+      - name: Summarise rehearsal in run summary
+        if: ${{ always() }}
+        env:
+          PROBE_EXIT: ${{ steps.probe.outputs.exit_code }}
+        run: |
+          {
+            echo "## Rate-limit opt-out inventory drift rehearsal"
+            echo ""
+            echo "- Inventory file: \`$INVENTORY_PATH\`"
+            echo "- Audit-notification rule id: \`$AUDIT_RULE_ID\`"
+            echo "- Page-on-unknown-host rule id: \`$PAGE_RULE_ID\`"
+            echo "- Probe exit code: \`${PROBE_EXIT:-not-run}\`"
+            echo "- Run-id tag: \`$RUN_ID_TAG\`"
+            echo ""
+            if [ -f probe.stdout ]; then
+              echo "Probe output:"
+              echo '```json'
+              cat probe.stdout
+              echo '```'
+            fi
+            if [ -s probe.stderr ]; then
+              echo ""
+              echo "Probe stderr:"
+              echo '```'
+              cat probe.stderr
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

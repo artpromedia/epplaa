@@ -191,6 +191,21 @@ Sentry wiring:
     include the warn payload's `hostname` so on-call knows which
     deploy to track down without re-grepping logs.
 
+Because the `hostname:` filter on these two rules is hand-pasted in
+the same change that adds a row to the inventory file, drift between
+the two is the alerting chain's single point of failure (a sanctioned
+canary deploy with a new hostname suffix would page on-call as
+"unknown host", a deploy graduated off the opt-out would still be
+silently absorbed by the audit-notification rule, etc). The weekly
+[`rehearse-rate-limit-opt-out-inventory.yml`](../../.github/workflows/rehearse-rate-limit-opt-out-inventory.yml)
+GitHub Actions workflow asserts the regex set in each rule's
+`hostname:` filter matches the union of every `HOSTNAME (regex
+match)` row in the inventory and pages the rate-limit owners on any
+drift — see
+[`rate-limit-store-opt-outs.md`](./rate-limit-store-opt-outs.md)
+"Drift rehearsal" for the rehearsal's wiring and required repo
+configuration.
+
 Datadog / log aggregator: equivalent saved queries on the same two
 message tags, monitored at `count > 0 last 5 minutes`. The warn-tag
 query should be split into two saved queries the same way the Sentry
