@@ -501,6 +501,17 @@ router.post("/orders", async (req, res) => {
   if (isCod) {
     await db.delete(schema.cartItemsTable).where(eq(schema.cartItemsTable.userId, userId));
     await db.delete(schema.checkoutDraftsTable).where(eq(schema.checkoutDraftsTable.userId, userId));
+    // Pay-on-collection orders are auto-confirmed at order placement —
+    // they bypass the gateway webhook that normally triggers
+    // finalizeOrderAfterPayment, so we kick the dispatch pipeline here.
+    // This ensures a shipment row + (for Box) a reservation tied to the
+    // order's pickup OTP are created consistently with prepaid orders.
+    // We dispatch BEFORE re-loading the order so the response body
+    // already carries shipmentId / trackingUrl, matching the shape the
+    // order-detail page renders for prepaid shipments.
+    await dispatchShipmentForOrder(id).catch((err) =>
+      logger.error({ err: (err as Error).message, orderId: id }, "cod_dispatch_failed"),
+    );
   }
 
   const fresh = await db
@@ -509,6 +520,10 @@ router.post("/orders", async (req, res) => {
     .where(eq(schema.ordersTable.id, id))
     .limit(1);
   const order = rowToOrder(fresh[0]);
+  // For COD, also surface the freshly-created shipment + initial timeline
+  // event in the immediate response so the client doesn't have to round-
+  // trip to GET /orders/:id to render the tracking pane.
+  const shipment = isCod ? await loadShipmentForOrder(id) : null;
   // Order placed event. For COD this is the final settled state — fire
   // both placed + paid so the buyer's WhatsApp / push reflects reality.
   await enqueueNotification({
@@ -535,17 +550,10 @@ router.post("/orders", async (req, res) => {
         orderId: id,
       },
     }).catch(() => undefined);
-    // Pay-on-collection orders are auto-confirmed at order placement —
-    // they bypass the gateway webhook that normally triggers
-    // finalizeOrderAfterPayment, so we kick the dispatch pipeline here.
-    // This ensures a shipment row + (for Box) a reservation tied to the
-    // order's pickup OTP are created consistently with prepaid orders.
-    await dispatchShipmentForOrder(id).catch((err) =>
-      logger.error({ err: (err as Error).message, orderId: id }, "cod_dispatch_failed"),
-    );
   }
   res.status(201).json({
     ...order,
+    shipment,
     paymentIntent: {
       id: intent.id,
       reference: intent.reference,

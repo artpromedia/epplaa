@@ -499,6 +499,7 @@ export interface PlaceOrderResponse {
   /** @nullable */
   paidAtIso?: string | null;
   createdAtIso: string;
+  shipment?: Shipment | null;
   paymentIntent: PlaceOrderResponsePaymentIntent;
 }
 

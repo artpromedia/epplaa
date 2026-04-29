@@ -2595,6 +2595,13 @@ components:
         paymentIntentId: { type: ["string", "null"] }
         paidAtIso: { type: ["string", "null"] }
         createdAtIso: { type: string }
+        # Populated for cash-on-collection orders, where the dispatch
+        # pipeline runs inline at order placement so the client can
+        # render the tracking pane without a follow-up GET. Null for
+        # prepaid orders (which are dispatched after the gateway
+        # webhook fires) and for any COD order whose dispatch failed
+        # — the order is still placed and an admin can retry.
+        shipment: { oneOf: [ { $ref: "#/components/schemas/Shipment" }, { type: "null" } ] }
         paymentIntent:
           type: object
           required: [id, reference, gateway, status]
