@@ -49,7 +49,7 @@ export function AdminShell({ children }: { children: ReactNode }) {
           <img
             src={epplaaLogo}
             alt="Epplaa"
-            className="h-7 w-auto"
+            className="h-[3.281rem] w-auto"
             data-testid="img-brand-logo"
           />
           <div className="leading-tight border-l border-sidebar-border pl-3">
@@ -111,7 +111,7 @@ export function AdminShell({ children }: { children: ReactNode }) {
       <div className="flex-1 min-w-0 flex flex-col">
         <header className="md:hidden border-b border-border bg-background px-4 py-3 flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <img src={epplaaLogo} alt="Epplaa" className="h-5 w-auto" />
+            <img src={epplaaLogo} alt="Epplaa" className="h-[2.344rem] w-auto" />
             <span className="text-xs font-semibold text-muted-foreground border-l border-border pl-2">Admin</span>
           </div>
           <UserButton afterSignOutUrl="/sign-in" />

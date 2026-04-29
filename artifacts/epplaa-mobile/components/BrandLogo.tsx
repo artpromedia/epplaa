@@ -20,9 +20,9 @@ interface BrandLogoProps {
 }
 
 const SIZES = {
-  sm: { height: 22 },
-  md: { height: 34 },
-  lg: { height: 48 },
+  sm: { height: 41 },
+  md: { height: 64 },
+  lg: { height: 90 },
 } as const;
 
 const ASPECT_RATIO = 1024 / 320;

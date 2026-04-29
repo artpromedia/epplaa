@@ -3,6 +3,7 @@ import { Link, useLocation } from "wouter";
 import { useClerk, useSignIn } from "@clerk/clerk-react";
 import { startOtp, verifyOtp } from "@workspace/api-client-react";
 import { useToast } from "@/hooks/use-toast";
+import epplaaLogo from "@assets/epplaa-logo-color-nobg.png";
 
 type Step = "phone" | "code";
 
@@ -91,8 +92,13 @@ export default function PhoneSignInPage() {
   return (
     <div className="min-h-screen flex flex-col items-center justify-center px-6 py-10 bg-[var(--color-background)]">
       <div className="mb-6 text-center">
-        <h1 className="text-3xl font-black tracking-tight text-[var(--color-primary)]">Epplaa</h1>
-        <p className="text-sm text-[var(--color-muted-foreground)] mt-1">Sign in with your phone</p>
+        <img
+          src={epplaaLogo}
+          alt="Epplaa"
+          className="h-[5.625rem] w-auto mx-auto"
+          data-testid="img-brand-logo"
+        />
+        <p className="text-sm text-[var(--color-muted-foreground)] mt-3">Sign in with your phone</p>
       </div>
 
       <div className="w-full max-w-sm rounded-2xl border border-[var(--color-border)] bg-[var(--color-card)] p-5 space-y-4">

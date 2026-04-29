@@ -2,6 +2,7 @@ import { ReactNode } from "react";
 import { Switch, Route, Router as WouterRouter, Redirect, useLocation } from "wouter";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ClerkProvider, SignedIn, SignedOut, SignIn, useAuth } from "@clerk/clerk-react";
+import epplaaLogo from "@assets/epplaa-logo-color-nobg.png";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Toaster as SonnerToaster } from "@/components/ui/sonner";
@@ -40,7 +41,13 @@ function SignInPage() {
     <div className="min-h-screen w-full flex items-center justify-center bg-muted px-4">
       <div className="w-full max-w-md">
         <div className="text-center mb-6">
-          <h1 className="text-xl font-semibold">Epplaa Admin</h1>
+          <img
+            src={epplaaLogo}
+            alt="Epplaa"
+            className="h-[4.688rem] w-auto mx-auto mb-3"
+            data-testid="img-brand-logo"
+          />
+          <p className="text-sm font-semibold text-foreground">Admin Console</p>
           <p className="text-xs text-muted-foreground mt-1">
             Sign in with your operator account. MFA is required.
           </p>

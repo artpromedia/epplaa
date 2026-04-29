@@ -41,7 +41,7 @@ function SignInPage() {
           <img
             src={epplaaLogo}
             alt="Epplaa"
-            className="h-10 w-auto mx-auto mb-3"
+            className="h-[4.688rem] w-auto mx-auto mb-3"
             data-testid="img-brand-logo"
           />
           <p className="text-sm font-semibold text-foreground">Manufacturers Portal</p>

@@ -10,7 +10,7 @@ export default function SignInPage() {
         <img
           src={epplaaLogo}
           alt="Epplaa"
-          className="h-12 w-auto mx-auto"
+          className="h-[5.625rem] w-auto mx-auto"
           data-testid="img-brand-logo"
         />
         <p className="text-sm text-[var(--color-muted-foreground)] mt-3">Sign in to start shopping live</p>
