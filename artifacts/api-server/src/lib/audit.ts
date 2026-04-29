@@ -4,6 +4,7 @@ import type { Request, Response, NextFunction } from "express";
 import { db, schema } from "./db";
 import { logger } from "./logger";
 import { getUserId } from "./auth";
+import { auditHealthWatcher } from "./subsystemHealth";
 
 interface RecordAuditInput {
   actorId?: string | null;
@@ -184,8 +185,20 @@ export async function recordAudit(input: RecordAuditInput): Promise<void> {
       });
       chainHead = rowHash;
     });
+    // Successful chain-extend: close any in-progress failure streak so
+    // /healthz's `subsystems.auditChain` flips back to healthy and the
+    // duration alert auto-resolves on the next probe iteration. The
+    // watcher cheaply no-ops when there is no streak in progress.
+    auditHealthWatcher.recordSuccess();
   } catch (err) {
     const errorMessage = (err as Error).message;
+    // Open / extend the audit-pipeline failure streak. /healthz exposes
+    // this as `subsystems.auditChain` and `checkHealthzDegraded` pages
+    // on-call when the streak duration exceeds the threshold — closing
+    // the silent-compliance-gap window where every recordAudit was
+    // dead-lettering for many minutes without anyone noticing because
+    // the request path itself never broke.
+    auditHealthWatcher.record();
     logger.error({ err: errorMessage, action: input.action }, "audit_write_failed");
     // Dead-letter the failed event so it is recoverable. We can't link it
     // into the hash chain (that's exactly what just failed), but we can

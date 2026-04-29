@@ -112,3 +112,30 @@ export class SubsystemFailureWatcher {
  * reach the DB", and the probe is meant to surface the latter.
  */
 export const dbHealthWatcher = new SubsystemFailureWatcher();
+
+/**
+ * Singleton watcher for the audit-event pipeline. Driven by every
+ * `recordAudit` call in `lib/audit.ts`: a successful chain-extend
+ * closes any in-progress streak, a failure (caught in audit.ts so
+ * the user-facing request never breaks) opens or extends one.
+ *
+ * Why this matters: `recordAudit` is intentionally best-effort — a
+ * failed audit insert is logged, dead-lettered into `audit_failures`,
+ * and the request that triggered it still succeeds. Without a
+ * dedicated watcher that "best-effort" path can silently swallow a
+ * sustained DB-pressure outage where every audit write is failing
+ * (and every fallback DLQ insert is also failing) for many minutes
+ * before anyone notices, leaving a NDPR/PCI compliance gap that
+ * never trips the existing duration alert. Wiring the streak into
+ * /healthz under `subsystems.auditChain` lets the same probe that
+ * pages on a stuck rate-limit store or DB pool also page on a stuck
+ * audit pipeline — no extra background polling, no separate alert
+ * surface to wire up.
+ *
+ * We do NOT page on a single isolated failure: the
+ * `checkHealthzDegraded` probe only fires once `now - firstFailureAt`
+ * exceeds the duration threshold, so a one-off transient (the kind
+ * `recordAudit` is designed to swallow) self-heals on the next
+ * successful write without ever paging.
+ */
+export const auditHealthWatcher = new SubsystemFailureWatcher();

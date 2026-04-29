@@ -12,7 +12,11 @@ import {
   type SentryDsnStatus,
   type StubFulfillmentEnabledStatus,
 } from "../lib/productionSignals";
-import { dbHealthWatcher, type SubsystemSnapshot } from "../lib/subsystemHealth";
+import {
+  auditHealthWatcher,
+  dbHealthWatcher,
+  type SubsystemSnapshot,
+} from "../lib/subsystemHealth";
 import {
   getRateLimitStoreKind,
   getRateLimitStoreReadyzStatus,
@@ -53,6 +57,12 @@ router.get("/healthz", (_req, res) => {
   // break older callers; the duplication is cheap.
   const rateLimitStatus = getRateLimitStoreStatus();
   const dbStatus: SubsystemSnapshot = dbHealthWatcher.getSnapshot();
+  // `auditChain` mirrors the recordAudit success/failure streak. A
+  // sustained DB-pressure outage that swallows audit writes (the path
+  // that's intentionally best-effort so user requests don't fail) now
+  // surfaces here within seconds and pages on-call via the duration
+  // alert once it stays degraded longer than the configured threshold.
+  const auditStatus: SubsystemSnapshot = auditHealthWatcher.getSnapshot();
   const subsystems: Record<string, SubsystemSnapshot> = {
     // Strip `kind` from the rate-limit snapshot so every subsystem
     // entry has an identical shape — `kind` stays on the top-level
@@ -64,6 +74,7 @@ router.get("/healthz", (_req, res) => {
       lastRecoveredAt: rateLimitStatus.lastRecoveredAt,
     },
     db: dbStatus,
+    auditChain: auditStatus,
   };
   res.json({
     status: "ok",

@@ -21,7 +21,9 @@ vi.mock("../lib/logger", () => ({
   },
 }));
 
-const { dbHealthWatcher } = await import("../lib/subsystemHealth");
+const { auditHealthWatcher, dbHealthWatcher } = await import(
+  "../lib/subsystemHealth"
+);
 const {
   default: rehearsalRouter,
   assertRehearsalKillSwitchSafe,
@@ -43,6 +45,7 @@ beforeEach(() => {
   injectStreakMock.mockReset();
   resetMock.mockReset();
   dbHealthWatcher.__reset();
+  auditHealthWatcher.__reset();
   vi.useFakeTimers();
   vi.setSystemTime(NOW);
 });
@@ -140,6 +143,10 @@ describe("POST /_rehearsal/inject-stuck-degraded — body validation", () => {
   });
 
   it("rejects an unknown subsystem", async () => {
+    // The snake_case spelling is intentionally rejected — the
+    // canonical subsystem name in /healthz is camelCase
+    // (`auditChain`), and rehearsal callers must use the same
+    // spelling so a typo can't silently flip the wrong watcher.
     const res = await request(buildApp())
       .post("/_rehearsal/inject-stuck-degraded")
       .set("X-Rehearsal-Token", VALID_TOKEN)
@@ -201,6 +208,32 @@ describe("POST /_rehearsal/inject-stuck-degraded — happy paths", () => {
       durationMs: 600_000,
     });
     expect(injectStreakMock).toHaveBeenCalledWith(firstFailureAt, 7);
+  });
+
+  it("seeds the auditChain watcher and reflects in the auditHealthWatcher snapshot", async () => {
+    // auditChain is not mocked — we route through the real
+    // SubsystemFailureWatcher singleton in lib/subsystemHealth.ts
+    // and assert via getSnapshot so the rehearsal -> /healthz round
+    // trip is exercised end-to-end. This is the rehearsal hook the
+    // weekly workflow uses to assert the audit-pipeline branch of
+    // the duration alert still pages on-call.
+    const firstFailureAt = NOW - 6 * 60 * 1000; // 6 minutes
+    const res = await request(buildApp())
+      .post("/_rehearsal/inject-stuck-degraded")
+      .set("X-Rehearsal-Token", VALID_TOKEN)
+      .send({ subsystem: "auditChain", firstFailureAt, failureCount: 5 });
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      status: "injected",
+      subsystem: "auditChain",
+      firstFailureAt,
+      failureCount: 5,
+      durationMs: 6 * 60 * 1000,
+    });
+    const snap = auditHealthWatcher.getSnapshot();
+    expect(snap.state).toBe("degraded");
+    expect(snap.firstFailureAt).toBe(firstFailureAt);
+    expect(snap.failureCount).toBe(5);
   });
 
   it("seeds the db watcher and reflects in the dbHealthWatcher snapshot", async () => {
@@ -285,6 +318,10 @@ describe("POST /_rehearsal/clear-stuck-degraded", () => {
   });
 
   it("rejects an unknown subsystem on clear", async () => {
+    // Same camelCase-vs-snake_case rationale as the inject-side
+    // test: `audit_chain` must remain rejected so a typo doesn't
+    // silently no-op a cleanup step and leave staging stuck
+    // degraded.
     const res = await request(buildApp())
       .post("/_rehearsal/clear-stuck-degraded")
       .set("X-Rehearsal-Token", VALID_TOKEN)
@@ -292,6 +329,32 @@ describe("POST /_rehearsal/clear-stuck-degraded", () => {
     expect(res.status).toBe(400);
     expect(res.body.error).toBe("invalid_subsystem");
     expect(resetMock).not.toHaveBeenCalled();
+  });
+
+  it("clears the auditChain watcher (round-trip with inject seeds then clear restores healthy)", async () => {
+    // Same inject -> clear cycle the rehearsal workflow performs
+    // for auditChain. After clear, the snapshot must return to its
+    // pre-rehearsal `healthy` state so we don't leave staging
+    // falsely degraded — a leftover synthetic streak would cause
+    // the per-minute probe workflow to start paging on-call for
+    // real once it crossed the threshold again.
+    await request(buildApp())
+      .post("/_rehearsal/inject-stuck-degraded")
+      .set("X-Rehearsal-Token", VALID_TOKEN)
+      .send({ subsystem: "auditChain", firstFailureAt: NOW - 600_000 });
+    expect(auditHealthWatcher.getSnapshot().state).toBe("degraded");
+
+    const res = await request(buildApp())
+      .post("/_rehearsal/clear-stuck-degraded")
+      .set("X-Rehearsal-Token", VALID_TOKEN)
+      .send({ subsystem: "auditChain" });
+    expect(res.status).toBe(200);
+    expect(auditHealthWatcher.getSnapshot()).toEqual({
+      state: "healthy",
+      failureCount: 0,
+      firstFailureAt: null,
+      lastRecoveredAt: null,
+    });
   });
 });
 

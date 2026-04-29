@@ -403,11 +403,21 @@ The `subsystems` map currently exposes:
   call counts as a heartbeat). A DB pool that's been intermittently
   unreachable for > threshold pages on-call without any extra
   background polling.
+- `auditChain` — fed by every `recordAudit` call in
+  [`lib/audit.ts`](../../artifacts/api-server/src/lib/audit.ts): a
+  successful chain-extend closes any in-progress streak, a failure
+  (caught so the user request never breaks) opens or extends one.
+  This is the watcher that pages on-call when the audit pipeline
+  silently dead-letters writes for many minutes during DB pressure —
+  i.e. when the request path stays green but the
+  compliance-required hash chain is no longer being extended. Same
+  duration-alert envelope as the other two subsystems; no extra
+  polling required because every audited request acts as a
+  heartbeat.
 
-New subsystems (audit chain queue, payment-gateway circuit breakers,
-…) can be added by creating a `SubsystemFailureWatcher` instance and
-including its snapshot in the map; the probe will pick them up
-automatically.
+New subsystems (payment-gateway circuit breakers, …) can be added
+by creating a `SubsystemFailureWatcher` instance and including its
+snapshot in the map; the probe will pick them up automatically.
 
 The page reason names the offending subsystem (e.g. `db degraded for
 540123ms (> threshold 300000ms)`) so on-call doesn't have to re-curl

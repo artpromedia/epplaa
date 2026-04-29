@@ -5,7 +5,7 @@ import {
   detectNonHostnameProductionSignals,
   detectProductionSignals,
 } from "../lib/productionSignals";
-import { dbHealthWatcher } from "../lib/subsystemHealth";
+import { auditHealthWatcher, dbHealthWatcher } from "../lib/subsystemHealth";
 import { __getRedisFailureWatcherForRehearsal } from "../middlewares/apiRateLimit";
 
 /**
@@ -37,12 +37,12 @@ import { __getRedisFailureWatcherForRehearsal } from "../middlewares/apiRateLimi
  * Endpoints (mounted at `/api/_rehearsal/*`):
  *
  *   POST /_rehearsal/inject-stuck-degraded
- *     body: { subsystem: "rateLimitStore" | "db",
+ *     body: { subsystem: "rateLimitStore" | "db" | "auditChain",
  *             firstFailureAt: number (ms epoch),
  *             failureCount?: number (default 1) }
  *
  *   POST /_rehearsal/clear-stuck-degraded
- *     body: { subsystem: "rateLimitStore" | "db" }
+ *     body: { subsystem: "rateLimitStore" | "db" | "auditChain" }
  *
  * Both endpoints return 404 unless `HEALTHZ_REHEARSAL_ENABLED=1`, so
  * the route is invisible in production. When enabled they additionally
@@ -52,9 +52,13 @@ import { __getRedisFailureWatcherForRehearsal } from "../middlewares/apiRateLimi
  * channel. A 401 is returned when the token is missing or wrong.
  */
 
-type SubsystemName = "rateLimitStore" | "db";
+type SubsystemName = "rateLimitStore" | "db" | "auditChain";
 
-const ALLOWED_SUBSYSTEMS: readonly SubsystemName[] = ["rateLimitStore", "db"];
+const ALLOWED_SUBSYSTEMS: readonly SubsystemName[] = [
+  "rateLimitStore",
+  "db",
+  "auditChain",
+];
 
 interface RehearsalGuardConfig {
   enabled: boolean;
@@ -330,6 +334,9 @@ function watcherFor(subsystem: SubsystemName): {
 } {
   if (subsystem === "rateLimitStore") {
     return __getRedisFailureWatcherForRehearsal();
+  }
+  if (subsystem === "auditChain") {
+    return auditHealthWatcher;
   }
   return dbHealthWatcher;
 }

@@ -57,15 +57,96 @@ describe("evaluateHealthz (multi-subsystem)", () => {
       bodyWithSubsystems({
         rateLimitStore: healthy(),
         db: healthy(),
+        auditChain: healthy(),
       }),
       NOW,
       THRESHOLD,
     );
     expect(r.outcome).toBe("healthy");
-    expect(r.subsystem).toBe("db"); // first by name when all healthy
+    // First by name when all healthy. Sorted alphabetically:
+    // auditChain < db < rateLimitStore.
+    expect(r.subsystem).toBe("auditChain");
     expect(r.durationMs).toBeNull();
-    expect(r.subsystems).toHaveLength(2);
+    expect(r.subsystems).toHaveLength(3);
     expect(r.subsystems.every((s) => s.outcome === "healthy")).toBe(true);
+    expect(exitCodeFor(r.outcome)).toBe(0);
+  });
+
+  it("pages and names auditChain when the audit pipeline is stuck degraded and the rest are healthy", () => {
+    // The audit pipeline has been stuck for 4 minutes — the
+    // recordAudit() failure-streak watcher has been reporting
+    // degraded since then with no recovery, which means the
+    // compliance-required hash chain is silently dead-lettering or
+    // worse, dropping rows entirely. The duration alert must page
+    // and name `auditChain` so on-call doesn't have to re-curl
+    // /healthz to know which subsystem to triage. This is the
+    // end-to-end "audit pipeline stuck degraded -> /healthz reports
+    // degraded -> probe pages" coverage required by task #65.
+    const r = evaluateHealthz(
+      bodyWithSubsystems({
+        rateLimitStore: healthy(),
+        db: healthy(),
+        auditChain: degraded(NOW - 240_000, 42),
+      }),
+      NOW,
+      THRESHOLD,
+    );
+    expect(r.outcome).toBe("page");
+    expect(r.subsystem).toBe("auditChain");
+    expect(r.durationMs).toBe(240_000);
+    expect(r.reason).toContain("auditChain degraded for 240000ms");
+    expect(r.reason).toContain("threshold 60000ms");
+    expect(exitCodeFor(r.outcome)).toBe(2);
+    // Per-subsystem detail is preserved so the page body shows the
+    // healthy siblings too — important when triaging whether the
+    // audit pipeline failure is correlated with DB pressure.
+    const auditEval = r.subsystems.find((s) => s.name === "auditChain")!;
+    const dbEval = r.subsystems.find((s) => s.name === "db")!;
+    expect(auditEval.outcome).toBe("page");
+    expect(dbEval.outcome).toBe("healthy");
+  });
+
+  it("pages with auditChain named first when audit and rate-limit are both page-worthy and audit's streak is longer", () => {
+    // A correlated outage: the DB is fine but both the audit
+    // pipeline AND the rate-limit Redis store are stuck. The audit
+    // streak is longer so it wins primary-name placement; the
+    // reason still lists every offender so on-call sees both
+    // failures at once and doesn't accidentally close the incident
+    // after fixing only one.
+    const r = evaluateHealthz(
+      bodyWithSubsystems({
+        rateLimitStore: degraded(NOW - 90_000),
+        db: healthy(),
+        auditChain: degraded(NOW - 300_000, 27),
+      }),
+      NOW,
+      THRESHOLD,
+    );
+    expect(r.outcome).toBe("page");
+    expect(r.subsystem).toBe("auditChain");
+    expect(r.durationMs).toBe(300_000);
+    expect(r.reason).toContain("multiple subsystems page-worthy");
+    expect(r.reason).toContain("auditChain degraded for 300000ms");
+    expect(r.reason).toContain("rateLimitStore degraded for 90000ms");
+  });
+
+  it("does not page when auditChain has been degraded only briefly (under threshold)", () => {
+    // A short-lived audit-pipeline blip — the kind a single failed
+    // insert produces — must NOT page. The duration alert is
+    // designed to ignore one-off transients that recordAudit's DLQ
+    // is built to absorb; only a *sustained* outage should escalate.
+    const r = evaluateHealthz(
+      bodyWithSubsystems({
+        rateLimitStore: healthy(),
+        db: healthy(),
+        auditChain: degraded(NOW - 15_000),
+      }),
+      NOW,
+      THRESHOLD,
+    );
+    expect(r.outcome).toBe("below_threshold");
+    expect(r.subsystem).toBe("auditChain");
+    expect(r.durationMs).toBe(15_000);
     expect(exitCodeFor(r.outcome)).toBe(0);
   });
 

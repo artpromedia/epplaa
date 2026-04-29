@@ -66,7 +66,9 @@ vi.mock("../lib/logger", () => ({
   },
 }));
 
-const { dbHealthWatcher } = await import("../lib/subsystemHealth");
+const { auditHealthWatcher, dbHealthWatcher } = await import(
+  "../lib/subsystemHealth"
+);
 const { default: healthRouter, getReadyzConfigBlock } = await import("./health");
 const { __resetProductionEnvCacheForTests } = await import(
   "../lib/productionSignals"
@@ -123,6 +125,7 @@ beforeEach(() => {
   };
   storeKindMock = "redis";
   dbHealthWatcher.__reset();
+  auditHealthWatcher.__reset();
   clearProductionConfigEnv();
   __resetProductionEnvCacheForTests();
 });
@@ -162,9 +165,59 @@ describe("GET /healthz (liveness)", () => {
         firstFailureAt: null,
         lastRecoveredAt: null,
       },
+      auditChain: {
+        state: "healthy",
+        failureCount: 0,
+        firstFailureAt: null,
+        lastRecoveredAt: null,
+      },
     });
     expect(dbExecuteMock).not.toHaveBeenCalled();
     expect(pingRedisMock).not.toHaveBeenCalled();
+  });
+
+  it("surfaces a degraded audit pipeline streak in subsystems.auditChain when recordAudit has been failing", async () => {
+    // The audit-chain watcher is fed by recordAudit success/failure
+    // in lib/audit.ts. When DB pressure causes a sustained run of
+    // failed audit writes, the in-process watcher accumulates a
+    // streak that /healthz must surface — otherwise the
+    // duration alert can't see the compliance gap. We exercise the
+    // watcher directly here (audit.ts is unit-covered in its own
+    // file) and assert /healthz round-trips the snapshot under the
+    // canonical `auditChain` key.
+    const FIRST_FAILURE_AT = 1_700_000_000_000;
+    auditHealthWatcher.__injectStreak(FIRST_FAILURE_AT, 17);
+
+    const res = await request(buildApp()).get("/healthz");
+    expect(res.status).toBe(200);
+    expect(res.body.subsystems.auditChain).toEqual({
+      state: "degraded",
+      failureCount: 17,
+      firstFailureAt: FIRST_FAILURE_AT,
+      lastRecoveredAt: null,
+    });
+    // Sibling subsystems are unaffected — the audit pipeline is the
+    // only one degraded, the duration alert pages naming exactly it.
+    expect(res.body.subsystems.rateLimitStore.state).toBe("healthy");
+    expect(res.body.subsystems.db.state).toBe("healthy");
+  });
+
+  it("clears the audit pipeline streak in subsystems.auditChain after a successful recordAudit", async () => {
+    // Recovery path: a sustained outage that has been paging on-call
+    // must self-heal once the next audit write succeeds, so the
+    // duration alert auto-resolves without manual intervention.
+    auditHealthWatcher.record(1_700_000_000_000);
+    auditHealthWatcher.record(1_700_000_005_000);
+    expect(auditHealthWatcher.getSnapshot().state).toBe("degraded");
+
+    auditHealthWatcher.recordSuccess(1_700_000_010_000);
+    const res = await request(buildApp()).get("/healthz");
+    expect(res.body.subsystems.auditChain).toEqual({
+      state: "healthy",
+      failureCount: 0,
+      firstFailureAt: null,
+      lastRecoveredAt: 1_700_000_010_000,
+    });
   });
 
   it("reflects degraded → recovered transitions in rateLimitStore (legacy + subsystems map)", async () => {
