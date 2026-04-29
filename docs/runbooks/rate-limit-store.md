@@ -436,3 +436,82 @@ When the rehearsal workflow fails, walk the steps top-down:
 | `Forward 5 page events to the rehearsal Sentry project` | `HEALTHZ_REHEARSAL_SENTRY_DSN` is wrong/expired, or the rehearsal project was deleted/renamed. | Sentry dashboard -> alerts-rehearsal project settings -> Client Keys (DSN). |
 | `Verify Sentry ingested the rehearsal events` | (a) Sentry is dropping/scrubbing events - check the Sentry stats page for the rehearsal project. (b) The `event:read` scope is missing on the auth token. (c) **Fingerprint dedup broken**: if the failure message says "expected ... 1 issue, saw 5", the per-subsystem fingerprint stopped collapsing iterations - verify nothing renamed `rate_limit_store_stuck_degraded_rehearsal` (rateLimitStore matrix entry) or `stuck_degraded_rehearsal_db` (db matrix entry), and that no new Sentry inbound filter or processor is forcing per-event grouping. The failing matrix entry's job name names the subsystem so you know which fingerprint to check. (d) **Tag stripped**: if the failure says "ingested event tags mismatched", Sentry's PII scrubber or a new `Tag Filter` rule is dropping `alert` / `subsystem` / `rehearsal` — or the expected per-subsystem tag values for the failing matrix entry have drifted from the production pager rule. The on-call page body for production would also be missing those tags. (e) **probe_output stripped**: if the failure says "event ... has no probe_output extra", Sentry's PII scrubber or a project rule is stripping the `--extra probe_output` payload. The on-call page body is composed FROM that extra (the probe JSON line with subsystem / streak duration / threshold / firstFailureAt), so production pages would arrive with no actionable detail. | Sentry project settings -> Data Scrubbing AND Alerts -> Issue alerts in the rehearsal project. The matched event/issue ID is surfaced in the workflow run summary so you can open the offending event directly. |
 | `Clear synthetic streak` | Staging is unreachable. Manually POST `clear-stuck-degraded` with the subsystem named in the failing matrix entry's job (`rateLimitStore` or `db`) before leaving - otherwise the per-minute probe workflow against staging will start paging for real for that subsystem. The `if: always()` guard means this step runs even if everything before it failed; if **this** step is the failure, the synthetic streak for THIS matrix entry's subsystem is still live on staging. | Re-run with the same token from your shell, e.g. `curl -X POST .../clear-stuck-degraded -H "X-Rehearsal-Token: $TOKEN" --data '{"subsystem":"db"}'`. |
+
+### Daily rehearsal-notify-webhook liveness probe (`probe-rehearsal-notify-webhook.yml`)
+
+The weekly rehearsal's two `Notify chat ...` steps run with
+`continue-on-error: true` so a broken webhook can't block the
+rehearsal itself. That is the right tradeoff for the rehearsal --
+but it leaves a detection gap: a webhook URL that gets rotated on,
+say, Monday isn't observed until the *following* Sunday's rehearsal
+goes to post and silently 404s, by which point on-call has lost up
+to ~7 days of chat heads-ups. The yellow-warning step hides in the
+weekly run summary and is easy to miss.
+
+To shorten that window from ~7 days to ~24h, a separate workflow
+([`.github/workflows/probe-rehearsal-notify-webhook.yml`](../../.github/workflows/probe-rehearsal-notify-webhook.yml))
+runs daily at 16:23 UTC and quietly verifies the webhook is still
+accepting requests, *without* posting a real message into the
+destination channel.
+
+| Aspect | Where it lives |
+| --- | --- |
+| Workflow file | [`.github/workflows/probe-rehearsal-notify-webhook.yml`](../../.github/workflows/probe-rehearsal-notify-webhook.yml) |
+| Cadence | Daily at 16:23 UTC, plus `workflow_dispatch:` for ad-hoc verification (e.g. immediately after rotating the webhook URL) |
+| What it sends | A single HTTP `GET` against `secrets.HEALTHZ_REHEARSAL_NOTIFY_WEBHOOK`. A `GET` is used deliberately so no real message is posted to the destination channel -- Slack/Teams treat *any* `POST` as a real chat message regardless of body. |
+| How it interprets the response | Slack incoming webhooks AND Teams workflow webhooks both return `405 Method Not Allowed` for `GET` against a *valid* URL. So `200`/`204`/`405` = alive (probe passes); `404`/`410` = the URL was rotated/revoked (Slack: `no_service` body after a webhook is revoked; Teams returns `404` once the workflow trigger expires); `401`/`403` = embedded credential rejected; `5xx` or curl-level network/DNS/TLS error = transient or platform problem. Anything other than alive fails the probe and pages. |
+| Pager channel | On a non-alive response the workflow exits non-zero. With `secrets.HEALTHZ_PROBE_SENTRY_DSN` configured (recommended -- the probe reuses the same DSN as the per-minute `check-healthz-degraded` workflow so the page lands in the same on-call routing), it also calls `sentry-cli send-event --level fatal --tag subsystem:rehearsal_notify --tag alert:rehearsal_notify_webhook_dead --fingerprint rehearsal_notify_webhook_dead`. The fingerprint groups repeated daily failures (the webhook stays broken until someone fixes it) into a single Sentry issue so on-call gets one page, not one per daily run. |
+| Page body | The probe's JSON line (`{outcome, reason, channel, http_code, curl_exit}`) is forwarded as `extra.probe_output`, the truncated platform response body as `extra.response_body`, and the workflow run URL as `extra.workflow_run`. On-call sees the failing channel + HTTP code + Slack/Teams error string without re-curling anything. |
+| Backstop | Even with `HEALTHZ_PROBE_SENTRY_DSN` unset, the workflow itself exits non-zero on a non-alive response, which triggers GitHub's standard "Failed workflow run" notification to repo watchers. |
+| Heartbeat | The probe is wrapped with `sentry-cli monitors run probe-rehearsal-notify-webhook`, identical pattern to `check-healthz-degraded`. A Sentry Cron monitor with slug `probe-rehearsal-notify-webhook` (configured in the Sentry UI -- daily schedule, generous check-in margin) pages on missed check-ins, which is the only signal that survives the workflow being silently disabled / GH Actions outages / schedule drift. |
+| Kill switch | Reuses `vars.HEALTHZ_REHEARSAL_ENABLED` -- toggling the rehearsal off also silences this probe (otherwise we'd page daily about a webhook that nothing is trying to use). |
+| Degrade-safe gating | If `secrets.HEALTHZ_REHEARSAL_NOTIFY_WEBHOOK` itself is unset, the job logs a warning and exits 0 -- if the rehearsal isn't configured to post chat heads-ups, there's nothing to liveness-probe and we shouldn't be permanently red. |
+
+**Required Sentry Cron monitor configuration** (one-time, Sentry UI
+-> **Crons -> Add Monitor**). Same shape as the
+`check-healthz-degraded` monitor in the table earlier; only the
+slug, schedule, and runtime/margin differ:
+
+| Setting | Value | Why |
+| --- | --- | --- |
+| Slug | `probe-rehearsal-notify-webhook` | Must match the slug in the workflow's `sentry-cli monitors run ...` invocation. |
+| Schedule type | Crontab | Mirrors the GH Actions `schedule:` cadence. |
+| Schedule | `23 16 * * *` | Same cron expression as the GH Actions schedule, so Sentry expects exactly one check-in per day. |
+| Timezone | `UTC` | GH Actions schedules run in UTC. |
+| Check-in margin | `30` minutes | Generous enough to absorb runner queue time and tolerate the daily tick slipping a bit. The probe itself completes in seconds, so the only realistic delay source is GH Actions scheduling. |
+| Max runtime | `5` minutes | The workflow's `timeout-minutes: 5` mirrors this; anything longer means the runner hung. |
+| Failure issue threshold | `1` | Page on the first missed daily check-in -- there's no "noisy" failure mode for "the daily probe stopped running." |
+| Recovery threshold | `1` | Resolve the issue as soon as the next daily check-in arrives. |
+| Environment | `production` | The workflow always passes `--environment production`. |
+| Owner / on-call | api-server / rate-limit owners | Same on-call as the rest of this alerting chain so a webhook rotation surfaces in the same channel as the per-minute probe and the weekly rehearsal. |
+
+#### Interpreting a failed daily probe
+
+When this workflow fires the `rehearsal_notify_webhook_dead`
+Sentry issue (or the GitHub failed-run notification when Sentry
+forwarding isn't configured), the page body's `extra.probe_output`
+JSON line tells you which class of failure it is. Map the HTTP
+code to the fix:
+
+| HTTP code | Likely cause | Fix |
+| --- | --- | --- |
+| `404` | The webhook URL was rotated or revoked. Slack invalidates incoming webhooks when the parent app is reinstalled, uninstalled, or the channel the webhook posts to is deleted/archived. Teams workflow trigger URLs expire on their own schedule. The Slack response body is usually `no_service`. | **Slack:** open the workspace's *Apps -> [your app] -> Incoming Webhooks*, re-issue the webhook for the same channel, and update `secrets.HEALTHZ_REHEARSAL_NOTIFY_WEBHOOK`. **Teams:** open *Workflows -> When a Teams webhook request is received*, regenerate the trigger URL, and update the secret. Then trigger this workflow via `workflow_dispatch:` to confirm the new URL is alive without waiting until tomorrow. |
+| `410` | The platform explicitly retired the URL (rare; usually only after extended inactivity or an explicit revocation). | Same as `404`. |
+| `401` / `403` | The URL is reachable but the embedded credential is no longer accepted. Most often happens when the Slack workspace tightens app permissions or the Teams workflow's identity is revoked. | Re-issue the webhook the same way as for `404`/`410`. Don't try to "fix" the credential on the URL itself -- Slack/Teams treat the URL as a single opaque secret. |
+| `5xx` | Slack/Teams platform error. Usually transient. | Wait for the next daily tick; if it repeats, check the platform's status page. The page fingerprint dedupes repeated days into one issue, so the page won't get noisier if the platform has a multi-day outage. |
+| `0` (curl-level failure) | DNS / TLS / network issue from the GitHub Actions runner. Almost always transient. | Wait for the next daily tick. If it repeats with a stable curl error code (visible in the page body's `curl_exit` field), and the platform's own status page is green, the URL may have moved hosts -- re-issue the webhook to be safe. |
+| Anything else | Unexpected response. The page body's `response_body` extra is truncated to 512 bytes for the first half-kilobyte of context. | Hit the URL with `curl -i -X GET "$HEALTHZ_REHEARSAL_NOTIFY_WEBHOOK"` from a trusted shell to see the full response, then decide whether to re-issue the webhook or escalate to the platform. |
+
+After fixing the webhook, trigger the workflow manually
+(**Actions -> Probe rehearsal notify webhook (daily) -> Run
+workflow**) to confirm it now reports green; that also resolves the
+Sentry issue automatically on the next successful check-in.
+
+If the page is the Sentry Cron monitor itself firing
+(`probe-rehearsal-notify-webhook` *missed check-in*) rather than the
+`rehearsal_notify_webhook_dead` issue, the workflow itself stopped
+running -- check **Actions -> Probe rehearsal notify webhook (daily)**
+to confirm the workflow isn't disabled, and look for GH Actions
+incidents. This is the same shape of page as the
+`check-healthz-degraded` cron-monitor failure described earlier in
+this document.

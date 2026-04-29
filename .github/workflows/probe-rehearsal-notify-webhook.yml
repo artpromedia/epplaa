@@ -1,0 +1,352 @@
+name: Probe rehearsal notify webhook (daily)
+
+# Quietly verifies that secrets.HEALTHZ_REHEARSAL_NOTIFY_WEBHOOK is
+# still accepting requests on a daily cadence so a Slack-app reinstall
+# or an expired Teams workflow URL surfaces within ~24h instead of
+# waiting until the following Sunday's rehearsal silently fails to
+# post its heads-up.
+#
+# Why this workflow exists (see docs/runbooks/rate-limit-store.md
+# Step 5 -> "Daily rehearsal-notify-webhook liveness probe"):
+# the weekly `rehearse-healthz-degraded` workflow's chat heads-up
+# steps run with `continue-on-error: true` so a broken webhook can't
+# block the rehearsal itself. That degrades safely for the rehearsal,
+# but leaves a gap: a webhook that got rotated on Monday isn't
+# observed until Sunday's rehearsal goes to post and silently 404s.
+# Up to ~7 days of broken chat heads-ups can elapse before anyone
+# notices the missing #ops message. A daily liveness probe shortens
+# that window to ~24h.
+#
+# What it does: a single HTTP GET against the webhook URL. Slack
+# incoming webhooks AND Teams workflow webhooks both return
+# `405 Method Not Allowed` (with a small JSON body explaining the
+# allowed method) when the URL is *valid* but called with the wrong
+# verb. An invalid / rotated / revoked URL returns `404` (Slack body
+# `no_service` after a webhook is revoked, Teams returns 404 once the
+# workflow trigger expires) or `410`. So a GET cleanly distinguishes
+# alive-but-rotated from alive-and-healthy without ever posting a
+# real message into the destination channel:
+#
+#   200 / 204 / 405  -> webhook alive            (probe exit 0)
+#   400 / 401 / 403 /
+#   404 / 410        -> webhook rotated/revoked  (probe exit 1, pages)
+#   5xx / network    -> transient or platform    (probe exit 1, pages)
+#
+# A GET is deliberately preferred over a POST because Slack/Teams
+# treat *any* POST (regardless of body) as a real chat message --
+# sending one daily creates noise in the destination channel and
+# trains operators to ignore it. Quietly verifying in-place is the
+# whole point of the task this workflow exists to solve.
+#
+# Required repo configuration (Settings -> Secrets and variables ->
+# Actions). The workflow degrades safely when these are missing -- see
+# the `if:` gate and the `Verify config` step.
+#
+#   vars.HEALTHZ_REHEARSAL_ENABLED              -- must equal "1" to
+#                                                  opt in. Reuses the
+#                                                  same kill switch as
+#                                                  the weekly rehearsal
+#                                                  so toggling the
+#                                                  rehearsal off also
+#                                                  silences this probe
+#                                                  (otherwise we'd page
+#                                                  daily about a webhook
+#                                                  that nothing is
+#                                                  trying to use).
+#   secrets.HEALTHZ_REHEARSAL_NOTIFY_WEBHOOK    -- the webhook URL the
+#                                                  weekly rehearsal
+#                                                  posts to. When
+#                                                  unset, the job
+#                                                  short-circuits with
+#                                                  a warning -- if the
+#                                                  rehearsal isn't
+#                                                  configured to post
+#                                                  to chat, there's
+#                                                  nothing to verify.
+#   vars.HEALTHZ_REHEARSAL_NOTIFY_CHANNEL       -- cosmetic channel
+#                                                  label (e.g. `#ops`)
+#                                                  included in log
+#                                                  output and in the
+#                                                  Sentry event so the
+#                                                  destination is
+#                                                  obvious without
+#                                                  inspecting the
+#                                                  webhook URL.
+#                                                  Defaults to `#ops`.
+#
+# Optional pager forwarding (recommended -- otherwise on-call only sees
+# the failure via GitHub's "Failed workflow run" mail):
+#
+#   secrets.HEALTHZ_PROBE_SENTRY_DSN            -- DSN sentry-cli posts
+#                                                  the page event to.
+#                                                  Reused from the
+#                                                  per-minute probe
+#                                                  workflow so the
+#                                                  page lands in the
+#                                                  same on-call routing
+#                                                  as
+#                                                  `rate_limit_store_stuck_degraded`
+#                                                  -- a broken chat
+#                                                  path is part of the
+#                                                  same alerting chain.
+#   vars.SENTRY_ORG, vars.SENTRY_PROJECT        -- Sentry destination
+#                                                  metadata reused
+#                                                  from the release
+#                                                  workflow.
+#
+# Heartbeat / Sentry Cron monitor:
+#   The probe is wrapped with `sentry-cli monitors run
+#   probe-rehearsal-notify-webhook --environment production -- ...`
+#   so a stopped/disabled workflow itself pages via missed Sentry Cron
+#   check-ins. Same pattern as `check-healthz-degraded.yml`. The
+#   monitor (slug `probe-rehearsal-notify-webhook`, daily schedule)
+#   is configured in the Sentry UI -- see the runbook for required
+#   values.
+#
+# Manual ad-hoc runs are supported via workflow_dispatch -- useful
+# after rotating the webhook URL or to verify the page path end-to-end
+# without waiting for the next daily tick.
+
+on:
+  schedule:
+    # 16:23 UTC daily -- off-peak relative to the Sunday 04:17 UTC
+    # rehearsal, and the odd-minute offset prevents pile-up with any
+    # other top-of-the-hour cron job in this repo. Daily cadence is
+    # the explicit goal of the task this workflow exists for; twice-
+    # daily would catch rotations a bit faster but Slack/Teams
+    # webhook rotations aren't a per-hour event class, so daily is
+    # the right tradeoff between detection latency and noise.
+    - cron: "23 16 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  # Cap at one running + one pending so an unusually slow runner
+  # can't fan out into a backlog of overlapping daily probes.
+  group: probe-rehearsal-notify-webhook
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    name: GET rehearsal notify webhook and assert it's still alive
+    if: ${{ vars.HEALTHZ_REHEARSAL_ENABLED == '1' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    env:
+      NOTIFY_WEBHOOK: ${{ secrets.HEALTHZ_REHEARSAL_NOTIFY_WEBHOOK }}
+      NOTIFY_CHANNEL: ${{ vars.HEALTHZ_REHEARSAL_NOTIFY_CHANNEL || '#ops' }}
+      SENTRY_DSN: ${{ secrets.HEALTHZ_PROBE_SENTRY_DSN }}
+      SENTRY_ORG: ${{ vars.SENTRY_ORG }}
+      SENTRY_PROJECT: ${{ vars.SENTRY_PROJECT }}
+
+    steps:
+      # sentry-cli is a single static binary; fetching it inline keeps
+      # the workflow self-contained and avoids any pnpm/Node setup
+      # cost for what is otherwise a single curl + a few asserts.
+      # When SENTRY_DSN is unset we still install it -- the wrapper
+      # branch below is the only consumer and it's a no-op then.
+      - name: Install sentry-cli
+        run: curl -sL https://sentry.io/get-cli/ | INSTALL_DIR=/usr/local/bin sh
+
+      - name: Verify required config is present
+        run: |
+          set -e
+          if [ -z "$NOTIFY_WEBHOOK" ]; then
+            # No webhook configured means the weekly rehearsal isn't
+            # posting to chat at all -- nothing to liveness-probe.
+            # Surface as a warning + green run rather than a failure,
+            # so the workflow isn't permanently red just because the
+            # rehearsal opted out of chat heads-ups.
+            echo "::warning::secrets.HEALTHZ_REHEARSAL_NOTIFY_WEBHOOK is not set; the weekly rehearsal isn't posting chat heads-ups, so there's nothing to liveness-probe. Skipping."
+            echo "WEBHOOK_CONFIGURED=0" >> "$GITHUB_ENV"
+          else
+            echo "WEBHOOK_CONFIGURED=1" >> "$GITHUB_ENV"
+          fi
+
+      - name: GET webhook (with Sentry Cron heartbeat) and page on non-alive response
+        if: ${{ env.WEBHOOK_CONFIGURED == '1' }}
+        run: |
+          # Materialise the probe body as a temp script so it can be
+          # invoked either directly (no Sentry DSN -> no heartbeat) or
+          # wrapped by `sentry-cli monitors run` (DSN configured ->
+          # Sentry Cron monitor records `in_progress` at start and
+          # `ok`/`error` at finish, and pages on missed check-ins
+          # independent of the in-loop send-event path or GitHub's
+          # workflow-failure notification). Same pattern as the
+          # per-minute probe in check-healthz-degraded.yml.
+          #
+          # Heredoc terminator is quoted (PROBE) so nothing inside is
+          # expanded at heredoc time -- env vars expand at runtime
+          # against the env inherited from this step.
+          cat > "$RUNNER_TEMP/probe.sh" <<'PROBE'
+          #!/usr/bin/env bash
+          set +e
+          # -sS: silent body, but show errors. -L: follow redirects in
+          # case the webhook host moves them. -m 10: bound the request
+          # so a hung TCP connection can't burn the timeout budget.
+          # We want both the HTTP code and the body for diagnostics
+          # (Slack/Teams put a useful machine-readable error in the
+          # body when the URL is rotated, e.g. `no_service`).
+          resp=$(curl -sS -L -m 10 -o /tmp/probe_body \
+            -w '%{http_code}' \
+            -X GET "$NOTIFY_WEBHOOK")
+          curl_exit=$?
+          code="$resp"
+          body=$(cat /tmp/probe_body 2>/dev/null || true)
+          # Truncate the body for log/Sentry payloads so a chatty
+          # platform error page doesn't blow up the step output.
+          body_short=$(printf '%s' "$body" | head -c 512)
+          echo "GET ${NOTIFY_CHANNEL} webhook -> HTTP ${code} (curl exit ${curl_exit})"
+          echo "body (truncated to 512B): ${body_short}"
+
+          # Curl-level failure (network, DNS, TLS) -- treat as alive=no.
+          if [ "$curl_exit" -ne 0 ]; then
+            outcome="page"
+            reason="curl exited ${curl_exit} (network / DNS / TLS) -- the webhook host is unreachable from a GitHub Actions runner. Most often a transient platform blip; if it repeats tomorrow, investigate Slack/Teams status page or the URL itself."
+          else
+            case "$code" in
+              200|204|405)
+                # 200/204: some webhooks reply OK to GET (rare).
+                # 405 Method Not Allowed: Slack incoming webhooks AND
+                # Teams workflow webhooks both return this for GET on
+                # a *valid* URL -- the URL is wired up correctly, it
+                # just doesn't accept GET. That's exactly what we
+                # want: alive-but-not-posting.
+                outcome="ok"
+                reason="webhook alive (HTTP ${code})"
+                ;;
+              *)
+                outcome="page"
+                # Distinguish the common rotation responses so the
+                # page body tells on-call which runbook step to start
+                # from.
+                case "$code" in
+                  404)
+                    reason="HTTP 404 -- webhook URL rotated or revoked. Slack invalidates incoming webhooks when the parent app is reinstalled; Teams workflow trigger URLs expire on a schedule. Body: ${body_short}"
+                    ;;
+                  410)
+                    reason="HTTP 410 Gone -- webhook explicitly retired by the platform. Body: ${body_short}"
+                    ;;
+                  401|403)
+                    reason="HTTP ${code} -- webhook auth rejected. The URL is reachable but the embedded credential is no longer accepted. Body: ${body_short}"
+                    ;;
+                  5*)
+                    reason="HTTP ${code} -- platform 5xx. Likely transient; investigate if it repeats. Body: ${body_short}"
+                    ;;
+                  *)
+                    reason="HTTP ${code} -- unexpected response. Body: ${body_short}"
+                    ;;
+                esac
+              ;;
+            esac
+          fi
+
+          # Always emit a single JSON line on stdout (mirrors the
+          # check-healthz-degraded probe convention) so the GH log
+          # has a structured summary that's easy to grep across runs.
+          json_line=$(jq -nc \
+            --arg outcome "$outcome" \
+            --arg reason "$reason" \
+            --arg channel "$NOTIFY_CHANNEL" \
+            --argjson code "${code:-0}" \
+            --argjson curl_exit "$curl_exit" \
+            '{outcome: $outcome, reason: $reason, channel: $channel, http_code: $code, curl_exit: $curl_exit}')
+          printf '%s\n' "$json_line"
+
+          # Persist for the run-summary step.
+          printf '%s\n' "$json_line" > "$RUNNER_TEMP/probe_output.json"
+
+          if [ "$outcome" = "page" ]; then
+            echo "::error::rehearsal notify webhook is not alive: ${reason}"
+            if [ -n "$SENTRY_DSN" ]; then
+              # Forward to Sentry as a fatal-level event so the page
+              # lands in the same on-call routing as the rest of the
+              # rehearsal alert chain. Fingerprint groups repeated
+              # daily failures (until the webhook is fixed) into a
+              # single Sentry issue so on-call gets one page, not one
+              # per daily run.
+              #
+              # `set +e` above ensures a sentry-cli failure (DSN typo,
+              # network blip) doesn't mask the underlying probe
+              # failure -- the workflow still exits 1 below.
+              sentry-cli send-event \
+                --message "rehearsal_notify_webhook_dead (HTTP ${code}, channel ${NOTIFY_CHANNEL})" \
+                --level fatal \
+                --tag "subsystem:rehearsal_notify" \
+                --tag "alert:rehearsal_notify_webhook_dead" \
+                --tag "channel:${NOTIFY_CHANNEL}" \
+                --tag "http_code:${code}" \
+                --tag "scheduler:github-actions" \
+                --tag "workflow:probe-rehearsal-notify-webhook" \
+                --fingerprint "rehearsal_notify_webhook_dead" \
+                --extra "probe_output=${json_line}" \
+                --extra "response_body=${body_short}" \
+                --extra "workflow_run=https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+                || echo "::warning::sentry-cli send-event failed (Sentry forwarder error, not the webhook itself); relying on GitHub workflow-failure notification as the backstop"
+            else
+              echo "::warning::HEALTHZ_PROBE_SENTRY_DSN not configured; relying on GitHub workflow-failure notification as the only page channel for this run"
+            fi
+            # Surface the failing JSON line in the run summary so the
+            # GitHub failed-run notification body is useful even
+            # without clicking through to logs.
+            {
+              echo "## Rehearsal notify webhook probe FAILED"
+              echo ""
+              echo "Channel: ${NOTIFY_CHANNEL}"
+              echo "HTTP code: ${code}"
+              echo "Reason: ${reason}"
+              echo ""
+              echo '```json'
+              printf '%s\n' "$json_line"
+              echo '```'
+              echo ""
+              echo "Runbook: docs/runbooks/rate-limit-store.md -- *Daily rehearsal-notify-webhook liveness probe*."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          PROBE
+          chmod +x "$RUNNER_TEMP/probe.sh"
+
+          if [ -n "$SENTRY_DSN" ]; then
+            # Cron-monitor heartbeat. `sentry-cli monitors run` posts
+            # an `in_progress` check-in before exec'ing the wrapped
+            # command and an `ok`/`error` check-in afterwards based on
+            # the wrapped command's exit code. The Sentry Cron monitor
+            # with slug `probe-rehearsal-notify-webhook` (configured
+            # in the Sentry UI to expect a daily check-in; see the
+            # runbook for required values) pages on-call when an
+            # expected check-in fails to arrive within its check-in
+            # margin -- the only signal that survives the scheduler
+            # itself going away (workflow disabled, GH Actions
+            # outage, schedule silently delayed for hours).
+            #
+            # The wrapper preserves the wrapped command's exit code,
+            # so a non-zero probe still fails the workflow step and
+            # the GitHub "Failed workflow run" notification still
+            # fires as a backstop.
+            sentry-cli monitors run \
+              --environment production \
+              probe-rehearsal-notify-webhook \
+              -- "$RUNNER_TEMP/probe.sh"
+          else
+            echo "::warning::HEALTHZ_PROBE_SENTRY_DSN not configured; cron-monitor heartbeat is disabled -- a stopped/disabled workflow will go unnoticed until the next manual review"
+            "$RUNNER_TEMP/probe.sh"
+          fi
+
+      - name: Summarise probe in run summary (success path)
+        if: ${{ success() && env.WEBHOOK_CONFIGURED == '1' }}
+        run: |
+          {
+            echo "## Rehearsal notify webhook probe OK"
+            echo ""
+            echo "Channel: ${NOTIFY_CHANNEL}"
+            if [ -f "$RUNNER_TEMP/probe_output.json" ]; then
+              echo ""
+              echo '```json'
+              cat "$RUNNER_TEMP/probe_output.json"
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
