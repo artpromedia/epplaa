@@ -300,6 +300,102 @@ will say `outcome: probe_error`, not `outcome: overdue`. Treat that
 as a probe-side bug to fix in `scripts/src/checkRateLimitOptOutSunsets.ts`,
 not a deploy-side incident.
 
+## PR-time inventory check
+
+The
+[`check-rate-limit-opt-out-pr-inventory.yml`](../../.github/workflows/check-rate-limit-opt-out-pr-inventory.yml)
+GitHub Actions workflow runs on every pull request to `main` and
+**fails the PR** when a deploy-config file in the same PR newly sets
+`RATE_LIMIT_STORE_ALLOW_MEMORY_IN_PRODUCTION="1"` inside a
+`[services.production.*.env]` table without an accompanying edit to
+this inventory file.
+
+Why it exists (task #116): until this gate shipped, the only thing
+that caught the failure mode "operator set the opt-out env var on a
+deploy but forgot to add a row here" was the runtime
+page-on-unknown-host Sentry rule wired in task #93 — i.e. the deploy
+ships, the warn fires from the new host, the page-on-unknown-host
+rule matches (because this inventory is missing the row), and on-call
+gets paged for what is in fact a sanctioned deploy whose author just
+forgot to do the paperwork. The
+[Drift rehearsal](#drift-rehearsal) section below catches the
+*inverse* case (inventory edited but Sentry rule's hand-pasted regex
+union not refreshed) but it does NOT catch the "env var changed in
+deploy config without a corresponding inventory row" case at PR
+review time. This gate shifts that failure from a runtime page to a
+CI failure the author can fix before merging.
+
+The probe lives at
+[`scripts/src/checkRateLimitOptOutPrInventory.ts`](../../scripts/src/checkRateLimitOptOutPrInventory.ts)
+and can be run locally to verify a planned change before it ships:
+
+```sh
+BASE_REF=origin/main \
+  pnpm --filter @workspace/scripts run check-rate-limit-opt-out-pr-inventory
+```
+
+Exit codes (also documented in the script header):
+
+- `0` — ok. Either no deploy config was touched in the PR, or every
+  touched deploy is in a state that doesn't require an inventory edit
+  (already opted in at BASE, or no longer opted in at HEAD).
+- `1` — probe error (git command failed, a touched file couldn't be
+  read, etc.). The probe itself failed; a human should look rather
+  than treat it as healthy.
+- `2` — fail. At least one touched deploy config newly sets
+  `RATE_LIMIT_STORE_ALLOW_MEMORY_IN_PRODUCTION="1"` AND this
+  inventory file was NOT edited in the same PR.
+
+| Aspect | Where it lives |
+| --- | --- |
+| Trigger | GitHub Actions on every `pull_request` to `main`. |
+| Probe command | `pnpm --filter @workspace/scripts run check-rate-limit-opt-out-pr-inventory` (the same CLI you can run locally). |
+| Kill switch | Repo variable `vars.RATE_LIMIT_OPT_OUT_PR_CHECK_ENABLED`. The job is gated on this equalling `"1"`; when unset (or any other value) the workflow no-ops on every PR. Use this if the deploy-config layout drifts in a way the scanner can no longer parse and the gate would start producing false positives. Re-enable as soon as the parser is updated. |
+| Pass-through cases (NOT flagged) | (1) PR removes the env var, or sets it to anything other than `"1"`. (2) PR touches a deploy config but the env var was already `"1"` at BASE and is still `"1"` at HEAD (i.e. some other env in the same file changed). (3) PR removes the env var AND removes the inventory row in the same change — the inventory file IS touched, so the gate trivially passes. |
+| Failure remediation | Add a row to the `Active opt-outs` table above naming the deploy, an anchored hostname regex, the owner, the reason, the opted-out-since date, and an expected sunset. Push the row in the same PR as the env-var change and the gate flips green. |
+
+### How to legitimately silence the gate
+
+There are two sanctioned ways to silence this gate. Both are
+auditable through their normal channels (a repo-variable change
+shows up in the GitHub audit log; a paired inventory edit shows up
+in the PR diff itself).
+
+1. **Edit the inventory in the same PR.** This is the canonical
+   path: any edit to
+   `docs/runbooks/rate-limit-store-opt-outs.md` flips the gate
+   green. The "graduating off opt-out" workflow (remove the env var
+   from the deploy AND remove the inventory row in the same PR) is
+   the textbook example — the inventory file is touched as part of
+   the row removal, so the gate passes naturally with no extra
+   ceremony.
+2. **Toggle the repo-variable kill switch.** Set
+   `vars.RATE_LIMIT_OPT_OUT_PR_CHECK_ENABLED` to anything other
+   than `"1"` in
+   *Settings -> Secrets and variables -> Actions -> Variables*. The
+   workflow is gated on `if: vars.RATE_LIMIT_OPT_OUT_PR_CHECK_ENABLED == '1'`,
+   so flipping the variable disables the gate on every PR until it
+   is set back to `"1"`. Use this only when the deploy-config
+   layout has drifted in a way the scanner can no longer parse and
+   the gate is producing false positives — log the rationale in
+   the PR that motivated the toggle and re-enable as soon as the
+   parser is updated.
+
+If you find yourself reaching for the kill switch for any other
+reason, you are likely either (a) trying to ship an opt-out without
+the audit row this inventory exists to keep — don't, or (b) hitting
+a real bug in the scanner — file an issue and patch
+`scripts/src/checkRateLimitOptOutPrInventory.ts` instead of disabling
+the gate.
+
+The gate itself is unit-covered in
+[`scripts/src/checkRateLimitOptOutPrInventory.test.ts`](../../scripts/src/checkRateLimitOptOutPrInventory.test.ts)
+(scanner edge cases, decision matrix, and the CLI entrypoint paths
+including missing-BASE_REF, git-failure, no-deploys-touched,
+newly-opted-in-without-inventory-edit, newly-opted-in-with-inventory-edit,
+already-opted-in, graduating-off-opt-out, newly-added-deploy-config,
+and the `DEPLOY_CONFIG_PATHS` override).
+
 ## Drift rehearsal
 
 The auto-sync workflow above is the proactive guard. The drift

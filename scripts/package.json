@@ -6,6 +6,7 @@
   "scripts": {
     "hello": "tsx ./src/hello.ts",
     "check-rate-limit-opt-out-sunsets": "tsx ./src/checkRateLimitOptOutSunsets.ts",
+    "check-rate-limit-opt-out-pr-inventory": "tsx ./src/checkRateLimitOptOutPrInventory.ts",
     "check-sentry-monitors": "tsx ./src/checkSentryMonitorsInSync.ts",
     "check-sentry-sync-credentials": "tsx ./src/checkSentrySyncCredentials.ts",
     "check-sentry-issue-alert-credentials": "tsx ./src/checkSentryIssueAlertSyncCredentials.ts",

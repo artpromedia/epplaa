@@ -227,6 +227,18 @@ rule, etc). Two complementary safety nets close that gap:
   misconfigured, or where an operator hand-edited the rule in the
   Sentry UI.
 
+A separate PR-time gate
+([`check-rate-limit-opt-out-pr-inventory.yml`](../../.github/workflows/check-rate-limit-opt-out-pr-inventory.yml),
+task #116) closes the *paired-change* gap from the other side: it
+fails any pull request which sets
+`RATE_LIMIT_STORE_ALLOW_MEMORY_IN_PRODUCTION="1"` on a deploy config
+without also editing the inventory file in the same change, so a
+missing inventory row is caught at PR review time rather than as a
+runtime page from the page-on-unknown-host rule. See
+[`rate-limit-store-opt-outs.md`](./rate-limit-store-opt-outs.md)
+"PR-time inventory check" for the gate's wiring and the kill-switch
+repo variable.
+
 Datadog / log aggregator: equivalent saved queries on the same two
 message tags, monitored at `count > 0 last 5 minutes`. The warn-tag
 query should be split into two saved queries the same way the Sentry

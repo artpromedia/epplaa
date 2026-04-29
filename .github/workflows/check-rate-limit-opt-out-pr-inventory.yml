@@ -1,0 +1,153 @@
+name: Rate-limit opt-out inventory PR check
+
+# PR-time CI gate that fails any PR which adds or modifies a deploy
+# config to set `RATE_LIMIT_STORE_ALLOW_MEMORY_IN_PRODUCTION="1"` in
+# its production env without an accompanying edit to the inventory at
+# `docs/runbooks/rate-limit-store-opt-outs.md`.
+#
+# Why this workflow exists (task #116, see
+# docs/runbooks/rate-limit-store-opt-outs.md "PR-time inventory
+# check"):
+# Until this gate shipped, the only thing that caught the failure
+# mode "operator set the opt-out env var on a deploy but forgot to
+# add a row to the inventory" was the runtime page-on-unknown-host
+# Sentry rule wired in task #93 — i.e. the deploy ships, the warn
+# fires from the new host, the page-on-unknown-host rule matches
+# (because the inventory is missing the row), and on-call gets paged
+# for what is in fact a sanctioned deploy whose author just forgot
+# to do the paperwork. The weekly drift rehearsal added in task #98
+# catches the *inverse* case (inventory edited but Sentry rule's
+# hand-pasted regex union not refreshed) but it does NOT catch the
+# "env var changed in deploy config without a corresponding inventory
+# row" case at PR review time.
+#
+# This workflow shifts that failure from a runtime page to a CI
+# failure the author can fix before merging. It runs as its own
+# workflow (rather than a step in `.github/workflows/ci.yml`) so the
+# repo variable kill switch below can disable it independently of the
+# rest of CI if the deploy-config layout drifts in a way the scanner
+# can no longer parse.
+#
+# Required repo configuration (Settings -> Secrets and variables ->
+# Actions). The workflow degrades safely when the kill switch is
+# missing or set to anything other than "1" — see the `if:` gate.
+#
+#   vars.RATE_LIMIT_OPT_OUT_PR_CHECK_ENABLED  — must equal "1" to
+#                                               enable the gate. Acts
+#                                               as a kill switch so
+#                                               the rate-limit owners
+#                                               can silence the gate
+#                                               (e.g. when the
+#                                               deploy-config layout
+#                                               changes incompatibly
+#                                               and the scanner needs
+#                                               an update before it
+#                                               can be re-enabled).
+#                                               When unset, this
+#                                               workflow no-ops on
+#                                               every PR — there is
+#                                               no Sentry / chat
+#                                               heads-up because PR
+#                                               feedback already
+#                                               surfaces in the
+#                                               GitHub Checks UI.
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  # Allow a fresh push to a PR to cancel an in-flight gate run; the
+  # gate is fast, deterministic, and doesn't have side effects, so
+  # cancelling stale runs saves runner time.
+  group: rate-limit-opt-out-pr-inventory-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Block PR if a deploy newly opts out without an inventory edit
+    if: ${{ vars.RATE_LIMIT_OPT_OUT_PR_CHECK_ENABLED == '1' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Need the full history (or at least enough to reach the
+          # PR base) so `git diff base...head` and `git show base:path`
+          # both succeed in the check script.
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Run PR-time inventory check
+        id: probe
+        env:
+          # Use the resolved SHAs from the PR event payload rather
+          # than the symbolic `origin/${{ github.base_ref }}` ref so
+          # the gate is unaffected by any later push to the base
+          # branch between checkout and the check.
+          BASE_REF: ${{ github.event.pull_request.base.sha }}
+          HEAD_REF: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set +e
+          out=$(pnpm --silent --filter @workspace/scripts run check-rate-limit-opt-out-pr-inventory 2>probe.stderr)
+          code=$?
+          set -e
+          printf '%s\n' "$out"
+          printf '%s\n' "$out" > probe.stdout
+          if [ -s probe.stderr ]; then
+            echo "::warning::probe stderr"
+            cat probe.stderr
+          fi
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          if [ "$code" -eq 0 ]; then
+            echo "ok — no newly-opted-in deploy lacks an inventory edit"
+            exit 0
+          fi
+          if [ "$code" -eq 2 ]; then
+            echo "::error::A deploy in this PR newly sets RATE_LIMIT_STORE_ALLOW_MEMORY_IN_PRODUCTION=\"1\" without an accompanying edit to docs/runbooks/rate-limit-store-opt-outs.md. Add a row to the inventory in the same PR (deploy name, hostname regex, owner, reason, opted-out since, expected sunset). See docs/runbooks/rate-limit-store-opt-outs.md \"PR-time inventory check\" for the silence path if this PR genuinely shouldn't touch the inventory."
+            exit 2
+          fi
+          echo "::error::probe error (exit $code) — see stderr above"
+          exit "$code"
+
+      - name: Summarise gate outcome in the run summary
+        if: ${{ always() }}
+        env:
+          PROBE_EXIT: ${{ steps.probe.outputs.exit_code }}
+        run: |
+          {
+            echo "## Rate-limit opt-out inventory PR check"
+            echo ""
+            echo "- Inventory file: \`docs/runbooks/rate-limit-store-opt-outs.md\`"
+            echo "- Probe exit code: \`${PROBE_EXIT:-not-run}\`"
+            echo "- PR base: \`${{ github.event.pull_request.base.sha }}\`"
+            echo "- PR head: \`${{ github.event.pull_request.head.sha }}\`"
+            echo ""
+            if [ -f probe.stdout ]; then
+              echo "Probe output:"
+              echo '```json'
+              cat probe.stdout
+              echo '```'
+            fi
+            if [ -s probe.stderr ]; then
+              echo ""
+              echo "Probe stderr:"
+              echo '```'
+              cat probe.stderr
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
