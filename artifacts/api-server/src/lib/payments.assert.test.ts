@@ -108,6 +108,35 @@ describe("assertPaymentProviderConfiguredForProduction — production payment ga
     expect(log.calls).toEqual([]);
   });
 
+  it("reports `[set-but-empty]` sentinel (not `null`) when the env var is present but whitespace-only", () => {
+    // Whitespace-only values are a common operator typo — distinguishing
+    // them from "unset" in the warn payload helps the on-call engineer
+    // tell at a glance whether the env var is missing entirely or
+    // present with a blank value (e.g. accidental clearing in the
+    // secrets manager). Mirrors the convention from sibling asserts
+    // (okhi.ts, mfa.ts, internalApiKey.ts, termii.ts, clerkProxyMiddleware.ts):
+    // a whitespace-only string is reported as `"[set-but-empty]"`,
+    // while an env var that is genuinely unset is reported as `null`.
+    const log = buildWarnSink();
+    const result = assertPaymentProviderConfiguredForProduction(
+      {
+        NODE_ENV: "production",
+        PAYSTACK_SECRET_KEY: "   ",
+        FLUTTERWAVE_WEBHOOK_HASH: "  ",
+        // FLUTTERWAVE_SECRET_KEY intentionally absent — should report null.
+      },
+      log,
+    );
+    expect(result.ok).toBe(false);
+    const [obj] = log.calls[0]!;
+    expect(obj).toMatchObject({
+      paystack_secret_key: "[set-but-empty]",
+      flutterwave_secret_key: null,
+      flutterwave_webhook_hash: "[set-but-empty]",
+      missing: ["PAYSTACK_SECRET_KEY", "FLUTTERWAVE_SECRET_KEY"],
+    });
+  });
+
   it("does NOT echo secret values on warn", () => {
     const log = buildWarnSink();
     const sentinelPaystack = "sk_live_SECRETxxxxxxxxxxxxxxxx";

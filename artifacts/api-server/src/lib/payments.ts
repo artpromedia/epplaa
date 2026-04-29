@@ -68,12 +68,22 @@ export function assertPaymentProviderConfiguredForProduction(
 ): PaymentProviderConfigOutcome {
   const productionSignals = detectNonHostnameProductionSignals(env);
   if (productionSignals.length === 0) return { ok: true };
-  const paystack = (env.PAYSTACK_SECRET_KEY ?? "").trim();
-  const flutterwave = (env.FLUTTERWAVE_SECRET_KEY ?? "").trim();
-  const flutterwaveHash = (env.FLUTTERWAVE_WEBHOOK_HASH ?? "").trim();
+  const rawPaystack = env.PAYSTACK_SECRET_KEY;
+  const rawFlutterwave = env.FLUTTERWAVE_SECRET_KEY;
+  const rawFlutterwaveHash = env.FLUTTERWAVE_WEBHOOK_HASH;
+  const paystack = (rawPaystack ?? "").trim();
+  const flutterwave = (rawFlutterwave ?? "").trim();
+  const flutterwaveHash = (rawFlutterwaveHash ?? "").trim();
   const hasPaystack = paystack !== "";
   const hasFlutterwave = flutterwave !== "";
   const flutterwaveOnly = !hasPaystack && hasFlutterwave;
+  // Sentinel matches the convention from sibling asserts (okhi.ts,
+  // mfa.ts, internalApiKey.ts, termii.ts, clerkProxyMiddleware.ts):
+  // `null` = env var unset, `"[set-but-empty]"` = env var present but
+  // whitespace-only (typo / accidental blank), `"[set]"` = real value.
+  // The actual secret value is NEVER surfaced.
+  const slot = (ok: boolean, raw: string | undefined): string | null =>
+    ok ? "[set]" : raw !== undefined && raw !== "" ? "[set-but-empty]" : null;
   if (hasPaystack || hasFlutterwave) {
     if (flutterwaveOnly && flutterwaveHash === "") {
       // Charges would work, webhook verification would silently
@@ -95,9 +105,9 @@ export function assertPaymentProviderConfiguredForProduction(
           node_env: env.NODE_ENV,
           replit_deployment: env.REPLIT_DEPLOYMENT,
           deployment_environment: env.DEPLOYMENT_ENVIRONMENT,
-          paystack_secret_key: hasPaystack ? "[set]" : null,
-          flutterwave_secret_key: hasFlutterwave ? "[set]" : null,
-          flutterwave_webhook_hash: null,
+          paystack_secret_key: slot(hasPaystack, rawPaystack),
+          flutterwave_secret_key: slot(hasFlutterwave, rawFlutterwave),
+          flutterwave_webhook_hash: slot(false, rawFlutterwaveHash),
           missing: ["FLUTTERWAVE_WEBHOOK_HASH"],
           production_signals: productionSignals.map((s) => s.signal),
         },
@@ -125,9 +135,9 @@ export function assertPaymentProviderConfiguredForProduction(
       node_env: env.NODE_ENV,
       replit_deployment: env.REPLIT_DEPLOYMENT,
       deployment_environment: env.DEPLOYMENT_ENVIRONMENT,
-      paystack_secret_key: null,
-      flutterwave_secret_key: null,
-      flutterwave_webhook_hash: null,
+      paystack_secret_key: slot(false, rawPaystack),
+      flutterwave_secret_key: slot(false, rawFlutterwave),
+      flutterwave_webhook_hash: slot(false, rawFlutterwaveHash),
       missing: ["PAYSTACK_SECRET_KEY", "FLUTTERWAVE_SECRET_KEY"],
       production_signals: productionSignals.map((s) => s.signal),
     },
