@@ -221,6 +221,85 @@ The auto-syncer is unit-covered in
 filter location, decision matrix, GET / PUT request shape, full
 end-to-end through `main()`).
 
+## Responding to an overdue sunset page
+
+When the daily sweep above pages on-call (Sentry alert
+`alert:rate_limit_opt_out_sunset_overdue`, fingerprint
+`rate_limit_opt_out_sunset_overdue`), the page body's
+`extra.probe_output` JSON line names the offending row(s) verbatim:
+`deployName`, `owner`, `expectedSunset`, and `daysOverdue`. Use that
+to route, then pick one of the two responses below. Don't silence,
+snooze, or reassign the Sentry issue without a corresponding inventory
+change — the issue auto-resolves on the next clean daily run, so a
+legitimate fix needs no extra Sentry click.
+
+### Option A — extend the sunset (the deploy still legitimately needs
+the opt-out)
+
+Use this when Redis is in flight but not yet wired, the deploy is
+scheduled for retirement on a known date, or another concrete
+follow-up is in motion. "We haven't gotten to it" is **not** a valid
+extension reason — open a follow-up issue and pick a real date.
+
+1. Open a PR that, in the same commit:
+   - Updates the row's `Expected sunset` cell to a new ISO date in
+     the future. Keep the date short (typically 30–60 days out, never
+     more than a quarter); the whole point of this inventory is that
+     opt-outs don't sit forever.
+   - Appends a one-line `why extended` note to the row's `Notes`
+     cell, dated with today's ISO date. Example:
+     `2026-04-29: extended +30d, Redis cluster provisioned, wiring PR #1234`.
+     Don't overwrite previous extension notes — append, so the audit
+     trail of how many times this row has been extended stays in the
+     file.
+2. Self-review: if this is the **third or more** extension on the
+   same row, escalate to the row's owner team's lead instead of just
+   merging. Repeated extensions usually mean the underlying Redis
+   wiring isn't actually being prioritised, and quietly extending
+   again hides that from leadership. Note the escalation in the PR
+   description.
+3. Merge the PR. The next daily sweep (≤24h) will see the new
+   sunset and exit 0; the existing Sentry issue auto-resolves on
+   that clean run. If you want immediate confirmation, trigger
+   `check-rate-limit-opt-out-sunsets` via `workflow_dispatch:` and
+   verify the run is green before walking away.
+
+### Option B — remove the opt-out (Redis is wired or the deploy is
+gone)
+
+Follow [_When an opted-out deploy graduates to Redis_](#when-an-opted-out-deploy-graduates-to-redis)
+below. Same expectation: drop the env var on the deploy AND delete
+the row in the same change so the next sweep run goes green.
+
+### Acknowledging the page
+
+The Sentry issue's status is the source of truth for whether the
+incident is being worked, not a chat ack. Acknowledge by:
+
+1. **In Sentry**: assign the issue to yourself (or the on-call
+   engineer who's actually picking it up) so a parallel responder
+   doesn't double-up. Don't change the status to `resolved`
+   manually — see step 3.
+2. **In the inventory**: open the PR for option A or B above
+   within the same on-call shift. Link the PR back from the Sentry
+   issue's comments so a later auditor can trace the fix from the
+   page.
+3. **After the fix merges**: leave the Sentry issue alone. The
+   probe's fingerprint reuses the same Sentry issue across every
+   daily tick, so the next clean run (exit 0) auto-resolves it. A
+   manual `resolved` click before the inventory PR merges is the
+   one thing not to do — the next morning's tick will reopen the
+   same issue and the audit trail looks like the page bounced
+   instead of being acted on.
+
+If the page is a false positive (probe bug, inventory schema drift
+that the parser misread, etc.), exit code 1 (`probe_error`) fires a
+distinct Sentry path that does **not** use the
+`rate_limit_opt_out_sunset_overdue` fingerprint — so the page body
+will say `outcome: probe_error`, not `outcome: overdue`. Treat that
+as a probe-side bug to fix in `scripts/src/checkRateLimitOptOutSunsets.ts`,
+not a deploy-side incident.
+
 ## Drift rehearsal
 
 The auto-sync workflow above is the proactive guard. The drift
