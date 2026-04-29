@@ -4,7 +4,12 @@ import { logger } from "../logger";
 import { newSafeId } from "../ids";
 import { channels } from "./registry";
 import { resolveChannelsForEvent } from "./prefs";
-import type { ChannelKind, EventType, NotificationMessage } from "./types";
+import type {
+  ChannelKind,
+  EventType,
+  NotificationChannel,
+  NotificationMessage,
+} from "./types";
 
 const MAX_ATTEMPTS = 6;
 const BACKOFF_MS = [60_000, 5 * 60_000, 30 * 60_000, 2 * 3600_000, 6 * 3600_000, 24 * 3600_000];
@@ -17,6 +22,40 @@ const PROCESSING_LEASE_MS = 15 * 60_000;
 // well under the lease window. With this cap and the lease above, even
 // pessimistic per-send latency (~3s) keeps the tail row inside the lease.
 const CLAIM_BATCH_SIZE = 50;
+
+/**
+ * Test-only injection point for the channel adapter used by the
+ * sms/whatsapp branch of `drainOutbox`. The exactly-once / lease-recovery
+ * tests need a deterministic per-row counting sink that can simulate
+ * slow sends without going to a real provider; this seam lets the test
+ * substitute a custom send function while the production path keeps
+ * resolving adapters via the registry as before.
+ *
+ * Pass `null` to clear. Production code MUST NOT call this.
+ */
+export type OutboxTestChannelResolver = (
+  kind: ChannelKind,
+  pushKind?: "fcm" | "web",
+) => NotificationChannel;
+let _channelResolverOverrideForTests: OutboxTestChannelResolver | null = null;
+export function __setOutboxChannelResolverForTests(
+  resolver: OutboxTestChannelResolver | null,
+): void {
+  _channelResolverOverrideForTests = resolver;
+}
+function resolveChannel(
+  kind: ChannelKind,
+  pushKind?: "fcm" | "web",
+): NotificationChannel {
+  return _channelResolverOverrideForTests
+    ? _channelResolverOverrideForTests(kind, pushKind)
+    : channels.for(kind, pushKind);
+}
+// Re-export the constants so tests can pin assertions to the values
+// they were designed against and fail loudly if production tightens
+// the lease without updating the test guarantees.
+export const __OUTBOX_PROCESSING_LEASE_MS = PROCESSING_LEASE_MS;
+export const __OUTBOX_CLAIM_BATCH_SIZE = CLAIM_BATCH_SIZE;
 
 interface EnqueueArgs {
   userId: string;
@@ -159,7 +198,7 @@ export async function drainOutbox(): Promise<{ delivered: number; failed: number
       }
       let anyOk = false;
       for (const t of tokens) {
-        const adapter = channels.for("push", t.kind === "fcm" ? "fcm" : "web");
+        const adapter = resolveChannel("push", t.kind === "fcm" ? "fcm" : "web");
         // Web push adapter expects the JSON-serialized PushSubscription as
         // `to`. We persist endpoint/p256dh/auth as discrete columns and
         // rebuild the subscription envelope here so the unique key on
@@ -211,7 +250,7 @@ export async function drainOutbox(): Promise<{ delivered: number; failed: number
         delivered++;
         continue;
       }
-      const adapter = channels.for("email");
+      const adapter = resolveChannel("email");
       const result = await adapter.send({ to: u.email, title, body, url, payload });
       if (result.ok) {
         delivered++;
@@ -226,7 +265,7 @@ export async function drainOutbox(): Promise<{ delivered: number; failed: number
       continue;
     }
 
-    const adapter = channels.for(ch);
+    const adapter = resolveChannel(ch);
     const result = await adapter.send({ to, title, body, url, payload });
     if (result.ok) {
       delivered++;
