@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { eq, desc, sql } from "drizzle-orm";
+import { eq, and, desc, sql } from "drizzle-orm";
 import { db, schema } from "../lib/db";
 import { requireUserId } from "../lib/auth";
 import { forYouProducts, trendingStreams } from "../lib/recommender";
@@ -36,13 +36,41 @@ router.post("/recently-viewed/:productId", async (req, res) => {
   const userId = requireUserId(req, res);
   if (!userId) return;
   const productId = req.params.productId;
-  await db
-    .insert(schema.recentlyViewedTable)
-    .values({ userId, productId })
-    .onConflictDoUpdate({
-      target: [schema.recentlyViewedTable.userId, schema.recentlyViewedTable.productId],
-      set: { viewedAt: new Date() },
-    });
+  // Persist the view for the For-You "viewed-category" boost (+15 in
+  // recommender.ts) and bump the global popularity counter that feeds the
+  // smaller "view_count" component of the same score. We only increment
+  // products.view_count on the user's *first* view of this product so
+  // refreshing the detail page can't inflate popularity; subsequent views
+  // simply touch the viewedAt timestamp so recency ordering stays correct.
+  // `onConflictDoNothing().returning()` yields an empty array when a row
+  // already existed, which is the signal we use to gate the increment.
+  // Both writes run inside a single transaction so we never leave the
+  // recently_viewed row written without the matching popularity bump (or
+  // vice versa) if the second statement fails — that mismatch would let
+  // the +15 category boost fire while the +5 popularity component lags.
+  await db.transaction(async (tx) => {
+    const inserted = await tx
+      .insert(schema.recentlyViewedTable)
+      .values({ userId, productId })
+      .onConflictDoNothing()
+      .returning({ userId: schema.recentlyViewedTable.userId });
+    if (inserted.length > 0) {
+      await tx
+        .update(schema.productsTable)
+        .set({ viewCount: sql`${schema.productsTable.viewCount} + 1` })
+        .where(eq(schema.productsTable.id, productId));
+    } else {
+      await tx
+        .update(schema.recentlyViewedTable)
+        .set({ viewedAt: new Date() })
+        .where(
+          and(
+            eq(schema.recentlyViewedTable.userId, userId),
+            eq(schema.recentlyViewedTable.productId, productId),
+          ),
+        );
+    }
+  });
   res.json(await listRecentlyViewed(userId));
 });
 
