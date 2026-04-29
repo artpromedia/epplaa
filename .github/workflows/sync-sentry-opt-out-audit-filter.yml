@@ -1,0 +1,336 @@
+name: Sync Sentry rate-limit opt-out audit filter from inventory
+
+# Auto-sync the rate-limit-store opt-out inventory at
+# `docs/runbooks/rate-limit-store-opt-outs.md` into the Sentry alert
+# rules wired off the `rate_limit_store_memory_in_production_via_opt_out`
+# warn tag (audit-notification + page-on-unknown-host). Closes the
+# proactive side of task #108 — the weekly drift rehearsal in
+# `rehearse-rate-limit-opt-out-inventory.yml` remains as
+# defence-in-depth in case this workflow is paused, mis-credentialed,
+# or somebody hand-edits a rule in the Sentry UI between syncs.
+#
+# This file pairs with:
+#   - scripts/src/syncSentryOptOutAuditFilter.ts (the syncer)
+#   - docs/runbooks/rate-limit-store.md            (Wire alerts section)
+#   - docs/runbooks/rate-limit-store-opt-outs.md   (Auto-sync + Drift
+#                                                  rehearsal sections)
+#
+# Why two modes:
+#   - `pull_request` triggers a CHECK_ONLY=1 run that GETs both
+#     Sentry rules and fails the PR loudly with exit 2 if either
+#     rule's `hostname:` filter `value` no longer matches the
+#     inventory union. Never writes — the PR author sees the drift
+#     and decides to either land the PR (post-merge auto-sync will
+#     update the rule) or fix the divergence in the Sentry UI first.
+#   - `push` to main and the daily backstop schedule trigger an
+#     auto-sync run that PUTs the inventory union into both rules.
+#     Only the `hostname:` filter `value` is overwritten; every
+#     other field on each rule (name, actions, owners, frequency,
+#     other filters/conditions) is round-tripped verbatim from the
+#     GET response, so PagerDuty / Slack routing operators added in
+#     the Sentry UI is preserved across syncs.
+#
+# Required repo configuration (Settings -> Secrets and variables ->
+# Actions). The workflow degrades safely when these are missing —
+# see the `if:` gate and the `Verify required config is present`
+# step.
+#
+#   vars.RATE_LIMIT_OPT_OUT_AUTO_SYNC_ENABLED   — must equal "1" to
+#                                                 opt in. Acts as a
+#                                                 kill switch — set
+#                                                 to anything else
+#                                                 to silence the
+#                                                 workflow without
+#                                                 removing the file.
+#   vars.SENTRY_ORG                             — Sentry org SLUG
+#                                                 (reused from the
+#                                                 release workflow
+#                                                 and the drift
+#                                                 rehearsal).
+#   vars.SENTRY_PROJECT                         — Sentry project
+#                                                 SLUG hosting the
+#                                                 two issue alert
+#                                                 rules.
+#   vars.RATE_LIMIT_OPT_OUT_AUDIT_RULE_ID       — numeric ID of the
+#                                                 "audit notification
+#                                                 (inventoried hosts)"
+#                                                 issue alert rule.
+#                                                 Reused from the
+#                                                 drift rehearsal.
+#   vars.RATE_LIMIT_OPT_OUT_PAGE_RULE_ID        — numeric ID of the
+#                                                 "page on unknown
+#                                                 host (uninventoried
+#                                                 hosts)" issue alert
+#                                                 rule. Reused from
+#                                                 the drift rehearsal.
+#
+#   secrets.RATE_LIMIT_OPT_OUT_SENTRY_AUTH_TOKEN
+#                                               — Sentry auth token
+#                                                 with `alerts:read`
+#                                                 AND `alerts:write`
+#                                                 scope on the
+#                                                 project. The drift
+#                                                 rehearsal only
+#                                                 needs `alerts:read`,
+#                                                 so a deployment
+#                                                 that wants the
+#                                                 rehearsal but not
+#                                                 the auto-sync can
+#                                                 keep the
+#                                                 read-only token.
+#   secrets.RATE_LIMIT_OPT_OUT_SENTRY_DSN       — DSN sentry-cli
+#                                                 posts auto-sync
+#                                                 failure / probe
+#                                                 error events to.
+#                                                 Routed to the
+#                                                 rate-limit owners.
+#                                                 Reused from the
+#                                                 drift rehearsal.
+#
+# Optional chat heads-up on a failure — same secrets the drift
+# rehearsal already documents:
+#
+#   secrets.RATE_LIMIT_OPT_OUT_NOTIFY_WEBHOOK   — Incoming webhook
+#                                                 URL.
+#   vars.RATE_LIMIT_OPT_OUT_NOTIFY_CHANNEL      — Cosmetic channel
+#                                                 label.
+
+on:
+  pull_request:
+    paths:
+      - "docs/runbooks/rate-limit-store-opt-outs.md"
+      - "scripts/src/syncSentryOptOutAuditFilter.ts"
+      - "scripts/src/syncSentryOptOutAuditFilter.test.ts"
+      - "scripts/src/checkRateLimitOptOutSunsets.ts"
+      - ".github/workflows/sync-sentry-opt-out-audit-filter.yml"
+  push:
+    branches: [main]
+    paths:
+      - "docs/runbooks/rate-limit-store-opt-outs.md"
+      - "scripts/src/syncSentryOptOutAuditFilter.ts"
+      - "scripts/src/checkRateLimitOptOutSunsets.ts"
+      - ".github/workflows/sync-sentry-opt-out-audit-filter.yml"
+  schedule:
+    # Daily backstop at 04:17 UTC — off-peak, a few minutes before
+    # the existing weekly `rehearse-healthz-degraded.yml` slot. The
+    # auto-sync should normally be triggered by a push to main, but
+    # the daily run catches the case where:
+    #   - somebody hand-edited the rule in the Sentry UI (we re-
+    #     assert the inventory union)
+    #   - a previous push event ran into a transient Sentry 5xx and
+    #     never retried
+    # The workflow is idempotent: if the rules already match, it
+    # exits 0 with `outcome: in_sync` and writes nothing.
+    - cron: "17 4 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  # At most one auto-sync at a time — never overlap a PR check, a
+  # push-after-merge sync, and the daily backstop. Cancelling
+  # in-progress runs would leave the rule half-PUT, so we queue
+  # instead.
+  group: sync-sentry-opt-out-audit-filter
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: Auto-sync (push/schedule) or check-only (PR) the inventory union
+    if: ${{ vars.RATE_LIMIT_OPT_OUT_AUTO_SYNC_ENABLED == '1' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+
+    env:
+      SENTRY_ORG: ${{ vars.SENTRY_ORG }}
+      SENTRY_PROJECT: ${{ vars.SENTRY_PROJECT }}
+      RATE_LIMIT_OPT_OUT_AUDIT_RULE_ID: ${{ vars.RATE_LIMIT_OPT_OUT_AUDIT_RULE_ID }}
+      RATE_LIMIT_OPT_OUT_PAGE_RULE_ID: ${{ vars.RATE_LIMIT_OPT_OUT_PAGE_RULE_ID }}
+      SENTRY_AUTH_TOKEN: ${{ secrets.RATE_LIMIT_OPT_OUT_SENTRY_AUTH_TOKEN }}
+      SENTRY_DSN: ${{ secrets.RATE_LIMIT_OPT_OUT_SENTRY_DSN }}
+      NOTIFY_WEBHOOK: ${{ secrets.RATE_LIMIT_OPT_OUT_NOTIFY_WEBHOOK }}
+      NOTIFY_CHANNEL: ${{ vars.RATE_LIMIT_OPT_OUT_NOTIFY_CHANNEL || '#rate-limit-owners' }}
+      INVENTORY_PATH: ${{ github.workspace }}/docs/runbooks/rate-limit-store-opt-outs.md
+      RUN_ID_TAG: ${{ github.run_id }}-${{ github.run_attempt }}
+      # PR runs read-only; everything else writes.
+      CHECK_ONLY: ${{ github.event_name == 'pull_request' && '1' || '' }}
+      RUN_MODE: ${{ github.event_name == 'pull_request' && 'check-only' || 'auto-sync' }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Install sentry-cli
+        # Only needed for failure forwarding. Cheap to install
+        # unconditionally and keeps the failure path identical to
+        # the drift rehearsal's.
+        run: curl -sL https://sentry.io/get-cli/ | INSTALL_DIR=/usr/local/bin sh
+
+      - name: Verify required config is present
+        run: |
+          set -e
+          missing=()
+          [ -n "$SENTRY_ORG" ] || missing+=("vars.SENTRY_ORG")
+          [ -n "$SENTRY_PROJECT" ] || missing+=("vars.SENTRY_PROJECT")
+          [ -n "$RATE_LIMIT_OPT_OUT_AUDIT_RULE_ID" ] || missing+=("vars.RATE_LIMIT_OPT_OUT_AUDIT_RULE_ID")
+          [ -n "$RATE_LIMIT_OPT_OUT_PAGE_RULE_ID" ] || missing+=("vars.RATE_LIMIT_OPT_OUT_PAGE_RULE_ID")
+          [ -n "$SENTRY_AUTH_TOKEN" ] || missing+=("secrets.RATE_LIMIT_OPT_OUT_SENTRY_AUTH_TOKEN")
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::error::missing required config: ${missing[*]}"
+            exit 1
+          fi
+          echo "ok ($RUN_MODE mode)"
+
+      - name: Run syncer and capture exit code
+        id: sync
+        run: |
+          set +e
+          # Capture stdout (the structured JSON report — last line)
+          # AND the exit code so the failure-forwarding step has the
+          # same shape as the drift rehearsal's.
+          out=$(pnpm --silent --filter @workspace/scripts run sync-sentry-opt-out-audit-filter 2>sync.stderr)
+          code=$?
+          set -e
+          printf '%s\n' "$out"
+          printf '%s\n' "$out" > sync.stdout
+          if [ -s sync.stderr ]; then
+            echo "::warning::sync stderr (probe / error path)"
+            cat sync.stderr
+          fi
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          # Map exit codes to friendly messages for the workflow log.
+          case "$code" in
+            0)
+              echo "ok ($RUN_MODE) — every rule already matches the inventory or was synced"
+              exit 0
+              ;;
+            2)
+              if [ "$RUN_MODE" = "check-only" ]; then
+                echo "::error::PR drift detected — re-run the auto-sync workflow on main after merge, or update the Sentry rule in the UI to match the inventory before merging this PR"
+              else
+                echo "::error::auto-sync failed — at least one Sentry rule PUT returned non-2xx; the rule is still drifting from the inventory"
+              fi
+              exit 2
+              ;;
+            *)
+              echo "::error::probe error (exit $code) — see stderr above"
+              exit "$code"
+              ;;
+          esac
+
+      - name: Forward failure to Sentry as a fatal page
+        # Only on push/schedule/workflow_dispatch failures. PR-time
+        # CHECK_ONLY drift is surfaced via the failed PR check, NOT
+        # via a Sentry page — we don't want to wake on-call every
+        # time an inventory PR is opened with stale rule state.
+        if: ${{ always() && steps.sync.outputs.exit_code != '0' && github.event_name != 'pull_request' && env.SENTRY_DSN != '' }}
+        env:
+          SYNC_EXIT: ${{ steps.sync.outputs.exit_code }}
+        run: |
+          set +e
+          run_url="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          if [ "$SYNC_EXIT" = "2" ]; then
+            alert_tag="rate_limit_opt_out_audit_filter_sync_failed"
+            level="fatal"
+            msg="rate-limit opt-out auto-sync failed — Sentry rule PUT did not take effect; the rule is still drifting from the inventory"
+          else
+            alert_tag="rate_limit_opt_out_audit_filter_sync_probe_error"
+            level="error"
+            msg="rate-limit opt-out auto-sync had a probe error (could not decide drift vs in_sync vs synced)"
+          fi
+          out=$(cat sync.stdout 2>/dev/null || true)
+          err=$(cat sync.stderr 2>/dev/null || true)
+          # Per-outcome fingerprint so all reruns of the same
+          # condition collapse onto a single Sentry issue (the
+          # rate-limit owners get one page, not one per cron tick).
+          sentry-cli send-event \
+            --message "$msg (exit $SYNC_EXIT)" \
+            --level "$level" \
+            --tag "subsystem:rate_limit" \
+            --tag "alert:${alert_tag}" \
+            --tag "exit_code:$SYNC_EXIT" \
+            --tag "scheduler:github-actions" \
+            --tag "workflow:sync-sentry-opt-out-audit-filter" \
+            --fingerprint "$alert_tag" \
+            --extra "sync_output=$out" \
+            --extra "sync_stderr=$err" \
+            --extra "exit_code=$SYNC_EXIT" \
+            --extra "workflow_run=$run_url" \
+            || echo "::warning::sentry-cli send-event failed (forwarder error, not the syncer itself)"
+
+      - name: Notify chat about auto-sync failure
+        # Only on push/schedule failures (not PR check-only drift —
+        # the PR check is the heads-up there). A failed run is rare
+        # and noteworthy; a clean run is silent.
+        if: ${{ always() && steps.sync.outputs.exit_code != '0' && github.event_name != 'pull_request' && env.NOTIFY_WEBHOOK != '' }}
+        continue-on-error: true
+        env:
+          SYNC_EXIT: ${{ steps.sync.outputs.exit_code }}
+        run: |
+          set +e
+          run_url="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          if [ "$SYNC_EXIT" = "2" ]; then
+            emoji=":rotating_light:"
+            verb="AUTO-SYNC FAILED"
+            detail="The auto-syncer couldn't PUT the inventory union into one or both Sentry rules. The rule is still drifting from \`docs/runbooks/rate-limit-store-opt-outs.md\` — fix the cause (Sentry API auth, rule body shape, etc) and re-run the workflow via \`workflow_dispatch:\`. Until then, opt-outs added on the inventory PR may not be reflected in the alert filter."
+          else
+            emoji=":warning:"
+            verb="PROBE ERROR"
+            detail="The auto-syncer couldn't decide drift vs in_sync vs synced (file read, Sentry GET error, missing hostname filter, flipped match mode). Walk the failing step in the workflow run."
+          fi
+          text=$(printf '%s\n%s\n%s' \
+            "${emoji} *Rate-limit opt-out auto-sync: ${verb}* (${NOTIFY_CHANNEL}, run \`${RUN_ID_TAG}\`)" \
+            "${detail}" \
+            "Workflow run: ${run_url}")
+          payload=$(jq -nc --arg text "$text" '{text: $text}')
+          code=$(curl -sS -o /tmp/notify_resp -w '%{http_code}' \
+            -X POST -H 'Content-Type: application/json' \
+            --data "$payload" "$NOTIFY_WEBHOOK" || echo "000")
+          body=$(cat /tmp/notify_resp 2>/dev/null || true)
+          if [ "$code" != "200" ] && [ "$code" != "204" ]; then
+            echo "::warning::notify webhook returned HTTP $code (body: $body)"
+            exit 1
+          fi
+          echo "auto-sync heads-up posted to ${NOTIFY_CHANNEL} (HTTP $code)"
+
+      - name: Summarise sync in run summary
+        if: ${{ always() }}
+        env:
+          SYNC_EXIT: ${{ steps.sync.outputs.exit_code }}
+        run: |
+          {
+            echo "## Rate-limit opt-out auto-sync"
+            echo ""
+            echo "- Mode: \`${RUN_MODE}\` (event: \`${{ github.event_name }}\`)"
+            echo "- Inventory file: \`docs/runbooks/rate-limit-store-opt-outs.md\`"
+            echo "- Audit-notification rule id: \`${RATE_LIMIT_OPT_OUT_AUDIT_RULE_ID}\`"
+            echo "- Page-on-unknown-host rule id: \`${RATE_LIMIT_OPT_OUT_PAGE_RULE_ID}\`"
+            echo "- Sync exit code: \`${SYNC_EXIT:-not-run}\`"
+            echo "- Run-id tag: \`${RUN_ID_TAG}\`"
+            echo ""
+            if [ -f sync.stdout ]; then
+              echo "Sync output:"
+              echo '```json'
+              cat sync.stdout
+              echo '```'
+            fi
+            if [ -s sync.stderr ]; then
+              echo ""
+              echo "Sync stderr:"
+              echo '```'
+              cat sync.stderr
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

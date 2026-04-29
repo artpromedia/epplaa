@@ -132,18 +132,101 @@ require updating the parser and the matching test cases in the same
 change so the probe doesn't silently start treating the new shape as
 malformed.
 
+## Auto-sync
+
+The Sentry rules above used to be configured by hand: an operator
+pasted the union of every `HOSTNAME (regex match)` row into each
+rule's `hostname:` filter (positive `re` for the audit-notification
+rule, negated `nre` for the page-on-unknown-host rule) in the same
+change that adds a row to this file. The hand-paste was the single
+point of failure in the alerting chain — if a canary deploy got a
+new hostname suffix, or somebody updated this inventory but forgot
+the Sentry rule, on-call got paged for a deploy that was actually
+sanctioned (or, worse, a real misuse on a stale inventory hostname
+got silently absorbed by the audit-notification rule).
+
+The
+[`sync-sentry-opt-out-audit-filter.yml`](../../.github/workflows/sync-sentry-opt-out-audit-filter.yml)
+GitHub Actions workflow (task #108) closes that gap. It runs the
+`scripts/src/syncSentryOptOutAuditFilter.ts` syncer in two modes:
+
+- **PR-time check (`CHECK_ONLY=1`).** On every PR that changes this
+  file, the workflow GETs both Sentry rules, computes the inventory
+  union from this file using the same `parseInventoryTable` parser
+  the sunset sweep uses, and fails the PR with exit 2 if either
+  rule's `hostname:` filter `value` no longer matches. It never
+  writes in this mode — it only flags drift so the author can re-run
+  the auto-sync after merge (or update the rule in the Sentry UI
+  themselves before re-pushing the PR).
+- **Auto-sync (default mode).** On a push to `main` that touched
+  this file (and on a daily schedule as a backstop), the workflow
+  PUTs the inventory union into each rule's `hostname:` filter.
+  Only the `hostname:` filter `value` is owned by the syncer —
+  every other field on the rule (name, actions, owners, frequency,
+  the filter's `id` / `match` / other fields, the rest of the
+  filters and conditions arrays) is round-tripped verbatim from the
+  GET response, so PagerDuty / Slack routing the operator added in
+  the Sentry UI is preserved.
+
+Operator implications:
+
+1. **Adding / removing an opt-out is a one-step change.** Edit this
+   file, open a PR. The PR-time check tells you whether the rules
+   will need updating; the post-merge auto-sync does the update.
+   You no longer hand-paste the union into the Sentry UI.
+2. **The match mode (`re` vs `nre`) is checked, never auto-flipped.**
+   A flipped mode is treated as a probe error (exit 1) and surfaced
+   to the rate-limit owners — the syncer can't safely guess whether
+   the audit rule should suddenly start paging or the page rule
+   should go quiet. Fix it in the Sentry UI manually if it ever
+   diverges.
+3. **The empty-inventory state writes a sentinel.** When this file
+   has no active opt-outs (only the `_(none)_` placeholder row),
+   the syncer writes the regex `^__no_inventoried_opt_outs__$`
+   (overridable via `EMPTY_INVENTORY_PLACEHOLDER`) into both rules'
+   `hostname:` filter. Sentry's filter `value` field can't be
+   blanked, and a stale union from a previous active state would
+   silently rot in the rule, so the sentinel is the safest choice:
+   the audit rule never fires (no inventoried hosts to audit) and
+   the page rule fires for any warn-emitting host (which is the
+   right outcome — somebody set the opt-out env var on a deploy
+   that isn't on the inventory).
+4. **The auto-sync workflow uses the same Sentry creds as the drift
+   rehearsal**, plus `alerts:write` on the auth token. See the
+   workflow file for the exact required `vars` / `secrets` list.
+
+Local dry-run + check-only:
+
+```sh
+# Dry-run auto-sync against a real Sentry project — useful when
+# verifying a planned inventory change before opening the PR.
+SENTRY_ORG=epplaa SENTRY_PROJECT=api-server \
+RATE_LIMIT_OPT_OUT_AUDIT_RULE_ID=… RATE_LIMIT_OPT_OUT_PAGE_RULE_ID=… \
+SENTRY_AUTH_TOKEN=… DRY_RUN=1 \
+  pnpm --filter @workspace/scripts run sync-sentry-opt-out-audit-filter
+
+# Same, but in PR-style "fail loudly on drift, never write" mode.
+… CHECK_ONLY=1 \
+  pnpm --filter @workspace/scripts run sync-sentry-opt-out-audit-filter
+```
+
+The script's exit codes mirror `checkRateLimitOptOutSunsets.ts`:
+`0 = in sync / synced / dry-run completed`, `1 = probe error
+(missing config, parse failure, Sentry GET failure, missing or
+flipped hostname filter)`, `2 = drift detected (CHECK_ONLY) or
+PUT failed (auto-sync)`. Both `1` and `2` page on-call.
+
+The auto-syncer is unit-covered in
+`scripts/src/syncSentryOptOutAuditFilter.test.ts` (parser, hostname
+filter location, decision matrix, GET / PUT request shape, full
+end-to-end through `main()`).
+
 ## Drift rehearsal
 
-The Sentry rules above are configured by hand: an operator pastes
-the union of every `HOSTNAME (regex match)` row into each rule's
-`hostname:` filter (positive `re` for the audit-notification rule,
-negated `nre` for the page-on-unknown-host rule) in the same change
-that adds a row to this file. That hand-pasted union is the single
-point of failure in the alerting chain — if a canary deploy gets a
-new hostname suffix, or somebody updates this inventory but forgets
-the Sentry rule, on-call gets paged for a deploy that was actually
-sanctioned (or, worse, a real misuse on a stale inventory hostname
-gets silently absorbed by the audit-notification rule).
+The auto-sync workflow above is the proactive guard. The drift
+rehearsal below is the defence-in-depth one — it catches the case
+where auto-sync was paused, mis-credentialed, or somebody hand-
+edited a rule in the Sentry UI between syncs.
 
 The
 [`rehearse-rate-limit-opt-out-inventory.yml`](../../.github/workflows/rehearse-rate-limit-opt-out-inventory.yml)
@@ -194,12 +277,17 @@ When this rehearsal pages, fix the drift in the same change:
 
 1. Open both Sentry rules and the inventory file side-by-side.
 2. Decide which side is correct — usually the inventory is the
-   source of truth and the Sentry filter is stale (e.g. a previous
-   add/remove change forgot to update the rule). Re-paste the union
-   of every `HOSTNAME (regex match)` cell, joined with `|`, into
-   each rule's `hostname:` filter `value` field. Keep the audit
-   rule on `match: re` and the page rule on `match: nre`.
-3. Re-run the workflow via `workflow_dispatch:` and confirm it
+   source of truth and the Sentry filter is stale (e.g. the
+   auto-sync workflow above was paused or had its credentials
+   rotated, or somebody hand-edited the rule in the Sentry UI).
+   The fast path is to re-trigger the auto-sync workflow via
+   `workflow_dispatch:` on
+   [`sync-sentry-opt-out-audit-filter.yml`](../../.github/workflows/sync-sentry-opt-out-audit-filter.yml);
+   if that's blocked, hand-paste the union of every `HOSTNAME
+   (regex match)` cell, joined with `|`, into each rule's
+   `hostname:` filter `value` field. Keep the audit rule on
+   `match: re` and the page rule on `match: nre`.
+3. Re-run this workflow via `workflow_dispatch:` and confirm it
    exits 0 (in_sync) before resolving the Sentry issue.
 
 ## When an opted-out deploy graduates to Redis

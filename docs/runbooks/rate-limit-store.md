@@ -176,10 +176,11 @@ Sentry wiring:
     (e.g. `hostname:[/^api-canary-[a-z0-9]+$/, /^internal-admin-[a-z0-9]+$/]`).
     Routed to the rate-limit owners channel as a **notification (not
     a page)** — this is the routine audit signal that confirms the
-    inventory matches what's actually in production. Update the
-    `hostname:` filter union in the same change that adds a row to
-    the inventory file (so the new opt-out doesn't immediately page
-    on-call via the second alert below).
+    inventory matches what's actually in production. The `hostname:`
+    filter `value` is **owned by the auto-syncer** at
+    `scripts/src/syncSentryOptOutAuditFilter.ts` (see "Auto-sync"
+    below) — operators no longer hand-paste it; landing the inventory
+    PR is sufficient to update the rule.
   - **Page on unknown host (uninventoried hosts).** Filter the warn
     tag AND `hostname:` does NOT match any inventory row. Routed to
     the rate-limit on-call rotation as a **page** at the same
@@ -189,22 +190,42 @@ Sentry wiring:
     isn't sanctioned by the inventory — treat it as a misuse and
     walk the inventory file's "Notes" section. The page body should
     include the warn payload's `hostname` so on-call knows which
-    deploy to track down without re-grepping logs.
+    deploy to track down without re-grepping logs. The `hostname:`
+    filter (`nre` mode) on this rule is **also owned by the
+    auto-syncer** below.
 
-Because the `hostname:` filter on these two rules is hand-pasted in
-the same change that adds a row to the inventory file, drift between
-the two is the alerting chain's single point of failure (a sanctioned
-canary deploy with a new hostname suffix would page on-call as
-"unknown host", a deploy graduated off the opt-out would still be
-silently absorbed by the audit-notification rule, etc). The weekly
-[`rehearse-rate-limit-opt-out-inventory.yml`](../../.github/workflows/rehearse-rate-limit-opt-out-inventory.yml)
-GitHub Actions workflow asserts the regex set in each rule's
-`hostname:` filter matches the union of every `HOSTNAME (regex
-match)` row in the inventory and pages the rate-limit owners on any
-drift — see
-[`rate-limit-store-opt-outs.md`](./rate-limit-store-opt-outs.md)
-"Drift rehearsal" for the rehearsal's wiring and required repo
-configuration.
+Because the `hostname:` filter on these two rules used to be
+hand-pasted in the same change that adds a row to the inventory
+file, drift between the two was the alerting chain's single point
+of failure (a sanctioned canary deploy with a new hostname suffix
+would page on-call as "unknown host", a deploy graduated off the
+opt-out would still be silently absorbed by the audit-notification
+rule, etc). Two complementary safety nets close that gap:
+
+- **Auto-sync (proactive, task #108).** The
+  [`sync-sentry-opt-out-audit-filter.yml`](../../.github/workflows/sync-sentry-opt-out-audit-filter.yml)
+  GitHub Actions workflow runs on every PR that touches
+  `docs/runbooks/rate-limit-store-opt-outs.md` (in `CHECK_ONLY=1`
+  mode — it fails the PR loudly on drift without writing) AND
+  shortly after a merge to `main` (in auto-sync mode — it PUTs the
+  inventory union into both Sentry rules' `hostname:` filter,
+  preserving every other field). Operators no longer hand-paste
+  the union; landing the inventory PR is sufficient to update the
+  rule. See
+  [`rate-limit-store-opt-outs.md` § Auto-sync](./rate-limit-store-opt-outs.md#auto-sync)
+  for the workflow's wiring, required repo configuration, and
+  fallback procedure.
+- **Drift rehearsal (defence-in-depth, task #98).** The weekly
+  [`rehearse-rate-limit-opt-out-inventory.yml`](../../.github/workflows/rehearse-rate-limit-opt-out-inventory.yml)
+  GitHub Actions workflow asserts the regex set in each rule's
+  `hostname:` filter matches the union of every `HOSTNAME (regex
+  match)` row in the inventory and pages the rate-limit owners on
+  any drift — see
+  [`rate-limit-store-opt-outs.md` § Drift rehearsal](./rate-limit-store-opt-outs.md#drift-rehearsal)
+  for the rehearsal's wiring and required repo configuration. This
+  catches the case where the auto-sync workflow itself was paused,
+  misconfigured, or where an operator hand-edited the rule in the
+  Sentry UI.
 
 Datadog / log aggregator: equivalent saved queries on the same two
 message tags, monitored at `count > 0 last 5 minutes`. The warn-tag

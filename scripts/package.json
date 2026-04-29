@@ -11,6 +11,7 @@
     "check-sentry-issue-alert-credentials": "tsx ./src/checkSentryIssueAlertSyncCredentials.ts",
     "sync-sentry-monitors": "tsx ./src/syncSentryMonitors.ts",
     "sync-sentry-issue-alerts": "tsx ./src/syncSentryIssueAlerts.ts",
+    "sync-sentry-opt-out-audit-filter": "tsx ./src/syncSentryOptOutAuditFilter.ts",
     "print-log-aggregator-alerts": "tsx ./src/printLogAggregatorAlerts.ts",
     "test": "vitest run --passWithNoTests",
     "test:sentry-integration": "vitest run --passWithNoTests src/syncSentryMonitors.integration.test.ts",
