@@ -121,6 +121,20 @@ keys off the inventory: a warn from a host listed there is a routine
 audit notification, a warn from any other host pages on-call as a
 suspected misuse.
 
+Each row's `Expected sunset` date is also enforced by a daily
+GitHub Actions sweep
+([`.github/workflows/check-rate-limit-opt-out-sunsets.yml`](../../.github/workflows/check-rate-limit-opt-out-sunsets.yml),
+backed by the CLI at
+[`scripts/src/checkRateLimitOptOutSunsets.ts`](../../scripts/src/checkRateLimitOptOutSunsets.ts))
+that re-parses the inventory once a day and pages on-call (Sentry
+fatal, alert tag `rate_limit_opt_out_sunset_overdue`) when a row's
+sunset has slipped into the past. Until that workflow shipped (task
+#97), the sunset dates were enforced by the honour system only — a
+single missed sunset meant a production deploy could keep running on
+the bypassable per-process bucket indefinitely. See
+[`rate-limit-store-opt-outs.md` § Scheduled sunset sweep](./rate-limit-store-opt-outs.md#scheduled-sunset-sweep)
+for the cadence, page-body shape, and exit-code contract.
+
 ### Wire alerts
 
 **Wire a Sentry / log-aggregator alert on the

@@ -1,0 +1,221 @@
+name: Rate-limit opt-out sunset sweep (daily)
+
+# Runs the `check-rate-limit-opt-out-sunsets` CLI probe against the
+# inventory at `docs/runbooks/rate-limit-store-opt-outs.md` once a day
+# and pages on-call (via Sentry, level=fatal) when any row's
+# `Expected sunset` date has slipped into the past.
+#
+# Why this workflow exists (task #97):
+# The opt-out inventory is the canonical list of production deploys
+# that have set `RATE_LIMIT_STORE_ALLOW_MEMORY_IN_PRODUCTION=1` to
+# bypass the boot-time hard failure in
+# `docs/runbooks/rate-limit-store.md`. Each row carries an "Expected
+# sunset" date by which the opt-out is supposed to be removed (Redis
+# wired or deploy retired). Until this workflow shipped, the only
+# enforcement of those sunsets was the honour system — there was
+# nothing in CI or scheduled jobs that re-read the inventory and
+# shouted when a sunset date had slipped into the past.
+#
+# A single missed sunset means a production deploy keeps running on
+# the bypassable per-process bucket indefinitely, which is exactly the
+# regression the inventory exists to prevent.
+#
+# Cadence: daily at 13:00 UTC. The check is cheap (parses a markdown
+# file in the repo, no network) and the underlying signal — a sunset
+# date crossing midnight — only changes once a day, so per-minute /
+# per-hour cadence would be wasted runner time. Daily also keeps the
+# page firing rate bounded: if a sunset slips, on-call gets one page
+# per day until the row is fixed, not one per scheduler tick.
+#
+# Required repo variables / secrets (configured in the GitHub repo
+# Settings → Secrets and variables → Actions):
+#
+#   vars.OPT_OUT_SUNSET_PROBE_ENABLED         — must equal "1" to opt
+#                                               in. Acts as a kill
+#                                               switch — set to anything
+#                                               else to silence the
+#                                               workflow without
+#                                               removing the file. The
+#                                               Sentry Cron monitor
+#                                               will then page on
+#                                               missed check-ins, which
+#                                               is intentional:
+#                                               disabling the probe
+#                                               should be a deliberate
+#                                               decision.
+#   vars.SENTRY_ORG, vars.SENTRY_PROJECT      — Sentry destination.
+#                                               Reused from the other
+#                                               rate-limit probes so
+#                                               on-call sees these
+#                                               events in the same
+#                                               project.
+#   secrets.OPT_OUT_SUNSET_SENTRY_DSN         — DSN used by sentry-cli
+#                                               to post the page event
+#                                               AND to send Sentry Cron
+#                                               monitor check-ins. May
+#                                               be the same DSN as the
+#                                               api-server so the alert
+#                                               lands in the same
+#                                               project; kept as a
+#                                               separate secret so you
+#                                               can rotate it
+#                                               independently of the
+#                                               runtime DSN.
+#
+# When secrets/vars are missing the workflow degrades safely:
+#   - OPT_OUT_SUNSET_PROBE_ENABLED != "1"     -> job is skipped
+#                                                entirely. The Sentry
+#                                                Cron monitor will then
+#                                                page on missed
+#                                                check-ins.
+#   - OPT_OUT_SUNSET_SENTRY_DSN missing       -> Sentry forwarding AND
+#                                                the cron-monitor
+#                                                heartbeat are skipped,
+#                                                but the workflow still
+#                                                fails on non-zero
+#                                                probe exit so on-call
+#                                                still sees the failure
+#                                                in GitHub via the
+#                                                "Failed workflow run"
+#                                                notification.
+
+on:
+  schedule:
+    # 13:00 UTC every day — chosen to land during business hours in
+    # Lagos (14:00 WAT) and London (13:00 GMT / 14:00 BST) so the
+    # owner team can act on a fresh page without overnight delay.
+    - cron: "0 13 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  # Cap to one running + at most one pending so a slow run can't fan
+  # out into a backlog of overlapping invocations. The cron tick is
+  # daily so we don't expect overlap; this is belt-and-braces for the
+  # workflow_dispatch + cron combination.
+  group: check-rate-limit-opt-out-sunsets
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    name: Run opt-out sunset sweep
+    if: ${{ vars.OPT_OUT_SUNSET_PROBE_ENABLED == '1' }}
+    runs-on: ubuntu-latest
+    # Generous headroom for a slow runner — the probe itself is cheap
+    # (markdown parse, no network) so anything beyond a few minutes
+    # means the runner hung.
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # sentry-cli is a single static binary; fetching it inline keeps
+      # the workflow self-contained without adding a workspace dep.
+      # If Sentry isn't configured we never invoke it.
+      - name: Install sentry-cli
+        run: curl -sL https://sentry.io/get-cli/ | INSTALL_DIR=/usr/local/bin sh
+
+      - name: Sweep the opt-out inventory with cron-monitor heartbeat
+        env:
+          SENTRY_DSN: ${{ secrets.OPT_OUT_SUNSET_SENTRY_DSN }}
+          SENTRY_ORG: ${{ vars.SENTRY_ORG }}
+          SENTRY_PROJECT: ${{ vars.SENTRY_PROJECT }}
+        run: |
+          # Materialise the probe as a temp script so it can be invoked
+          # either directly (no Sentry DSN -> no heartbeat coverage) or
+          # wrapped by `sentry-cli monitors run` (DSN configured ->
+          # Sentry Cron monitor records `in_progress` at start +
+          # `ok`/`error` at finish, AND pages on missed check-ins
+          # independent of the in-loop send-event path or the GitHub
+          # workflow-failure notification).
+          #
+          # Quoted-terminator heredoc so nothing inside expands at
+          # heredoc time — env vars expand at runtime.
+          cat > "$RUNNER_TEMP/probe.sh" <<'PROBE'
+          #!/usr/bin/env bash
+          set +e
+          run_url="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          out=$(pnpm --silent --filter @workspace/scripts run check-rate-limit-opt-out-sunsets 2>&1)
+          code=$?
+          # Always echo the probe's structured line into the GH log
+          # so operators can see the full output even on success.
+          printf '%s\n' "$out"
+          if [ "$code" -eq 0 ]; then
+            exit 0
+          fi
+          echo "::error::probe exited $code"
+          if [ -n "$SENTRY_DSN" ]; then
+            # Forward to Sentry as a fatal-level message. The
+            # fingerprint groups all invocations of this alert into a
+            # single Sentry issue so on-call gets one page per
+            # outstanding incident, not one per cron tick.
+            #
+            # `set +e` above ensures a sentry-cli failure (DSN typo,
+            # network blip) doesn't change the workflow's exit code —
+            # we still want the GitHub failed-workflow notification
+            # to fire as a backstop.
+            sentry-cli send-event \
+              --message "rate_limit_opt_out_sunset_overdue (probe exit $code)" \
+              --level fatal \
+              --tag "subsystem:rate_limit" \
+              --tag "alert:rate_limit_opt_out_sunset_overdue" \
+              --tag "exit_code:$code" \
+              --tag "scheduler:github-actions" \
+              --tag "workflow:check-rate-limit-opt-out-sunsets" \
+              --fingerprint "rate_limit_opt_out_sunset_overdue" \
+              --extra "probe_output=$out" \
+              --extra "exit_code=$code" \
+              --extra "workflow_run=$run_url" \
+              || echo "::warning::sentry-cli send-event failed (Sentry forwarder error, not the probe itself)"
+          else
+            echo "::warning::OPT_OUT_SUNSET_SENTRY_DSN not configured; relying on GitHub workflow-failure notification"
+          fi
+          # Failure summary so the GitHub failed-run notification body
+          # is useful even without clicking through to logs. The
+          # probe's JSON line already names the offending deploy +
+          # owner so on-call can route the nudge from the page body
+          # alone.
+          {
+            echo "## Rate-limit opt-out sunset sweep failed"
+            echo ""
+            echo "Probe exit code: $code (1 = probe error, 2 = at least one Expected sunset is overdue)"
+            echo ""
+            echo '```json'
+            printf '%s\n' "$out"
+            echo '```'
+            echo ""
+            echo "Inventory: docs/runbooks/rate-limit-store-opt-outs.md"
+            echo "Runbook (alert wiring): docs/runbooks/rate-limit-store.md"
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$code"
+          PROBE
+          chmod +x "$RUNNER_TEMP/probe.sh"
+
+          if [ -n "$SENTRY_DSN" ]; then
+            # Cron-monitor heartbeat — see the matching block in
+            # check-healthz-degraded.yml for the rationale. The
+            # monitor with slug `check-rate-limit-opt-out-sunsets`
+            # is configured in the Sentry UI to expect daily
+            # check-ins and pages on-call when an expected check-in
+            # fails to arrive on time.
+            sentry-cli monitors run \
+              --environment production \
+              check-rate-limit-opt-out-sunsets \
+              -- "$RUNNER_TEMP/probe.sh"
+          else
+            echo "::warning::OPT_OUT_SUNSET_SENTRY_DSN not configured; cron-monitor heartbeat is disabled — a stopped/disabled workflow will go unnoticed until the next manual review"
+            "$RUNNER_TEMP/probe.sh"
+          fi

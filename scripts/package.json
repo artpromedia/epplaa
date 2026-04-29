@@ -5,10 +5,13 @@
   "type": "module",
   "scripts": {
     "hello": "tsx ./src/hello.ts",
+    "check-rate-limit-opt-out-sunsets": "tsx ./src/checkRateLimitOptOutSunsets.ts",
+    "test": "vitest run --passWithNoTests",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "devDependencies": {
     "@types/node": "catalog:",
-    "tsx": "catalog:"
+    "tsx": "catalog:",
+    "vitest": "4.1.5"
   }
 }
