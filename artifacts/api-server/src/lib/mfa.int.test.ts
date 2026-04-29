@@ -292,6 +292,106 @@ d("mfa db integration", () => {
     expect(ids).not.toContain(justOutsideUser);
   });
 
+  it("pruneExpiredMfaChallenges deletes only rows past the grace window and keeps still-valid + recently-expired rows", async () => {
+    const ancientUser = makeUserId();
+    const recentlyExpiredUser = makeUserId();
+    const validUser = makeUserId();
+
+    // Insert directly so we can control `expires_at` precisely.
+    // 1. Long-expired (2 days ago) — should be pruned with the default
+    //    1-day grace.
+    await db.execute(sql`
+      INSERT INTO mfa_challenges (id, user_id, kind, asserted_at, expires_at)
+      VALUES (
+        ${"mfc_test_old_" + crypto.randomBytes(4).toString("hex")},
+        ${ancientUser},
+        'totp',
+        now() - interval '2 days' - interval '15 minutes',
+        now() - interval '2 days'
+      );
+    `);
+    // 2. Recently expired (1 hour ago) — inside the 1-day grace, kept.
+    await db.execute(sql`
+      INSERT INTO mfa_challenges (id, user_id, kind, asserted_at, expires_at)
+      VALUES (
+        ${"mfc_test_recent_" + crypto.randomBytes(4).toString("hex")},
+        ${recentlyExpiredUser},
+        'totp',
+        now() - interval '1 hour' - interval '15 minutes',
+        now() - interval '1 hour'
+      );
+    `);
+    // 3. Still valid (expires 10 minutes in the future) — kept.
+    await db.execute(sql`
+      INSERT INTO mfa_challenges (id, user_id, kind, asserted_at, expires_at)
+      VALUES (
+        ${"mfc_test_valid_" + crypto.randomBytes(4).toString("hex")},
+        ${validUser},
+        'totp',
+        now() - interval '5 minutes',
+        now() + interval '10 minutes'
+      );
+    `);
+
+    const pruned = await mfa.pruneExpiredMfaChallenges();
+    expect(pruned).toBe(1);
+
+    const remaining = await db.execute<{ user_id: string }>(sql`
+      SELECT user_id FROM mfa_challenges
+       WHERE user_id IN (${ancientUser}, ${recentlyExpiredUser}, ${validUser})
+       ORDER BY user_id;
+    `);
+    const ids = remaining.rows.map((r) => r.user_id);
+    expect(ids).not.toContain(ancientUser);
+    expect(ids).toContain(recentlyExpiredUser);
+    expect(ids).toContain(validUser);
+
+    // Idempotent: a second run with the same grace finds nothing.
+    const second = await mfa.pruneExpiredMfaChallenges();
+    expect(second).toBe(0);
+  });
+
+  it("pruneExpiredMfaChallenges honours an explicit grace argument and the documented default", async () => {
+    expect(mfa.DEFAULT_MFA_CHALLENGES_PRUNE_GRACE_MS).toBe(24 * 60 * 60 * 1000);
+
+    const justInsideUser = makeUserId();
+    const justOutsideUser = makeUserId();
+
+    // `justInside` expired 30 minutes ago, `justOutside` expired 90
+    // minutes ago. With a 1-hour grace, only `justOutside` should go.
+    await db.execute(sql`
+      INSERT INTO mfa_challenges (id, user_id, kind, asserted_at, expires_at)
+      VALUES (
+        ${"mfc_test_in_" + crypto.randomBytes(4).toString("hex")},
+        ${justInsideUser},
+        'totp',
+        now() - interval '45 minutes',
+        now() - interval '30 minutes'
+      );
+    `);
+    await db.execute(sql`
+      INSERT INTO mfa_challenges (id, user_id, kind, asserted_at, expires_at)
+      VALUES (
+        ${"mfc_test_out_" + crypto.randomBytes(4).toString("hex")},
+        ${justOutsideUser},
+        'totp',
+        now() - interval '105 minutes',
+        now() - interval '90 minutes'
+      );
+    `);
+
+    const pruned = await mfa.pruneExpiredMfaChallenges(60 * 60 * 1000);
+    expect(pruned).toBe(1);
+
+    const remaining = await db.execute<{ user_id: string }>(sql`
+      SELECT user_id FROM mfa_challenges
+       WHERE user_id IN (${justInsideUser}, ${justOutsideUser});
+    `);
+    const ids = remaining.rows.map((r) => r.user_id);
+    expect(ids).toContain(justInsideUser);
+    expect(ids).not.toContain(justOutsideUser);
+  });
+
   /*
    * --- Low-backup-codes email nudge ---
    *

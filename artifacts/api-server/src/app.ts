@@ -27,7 +27,11 @@ import { initOtel } from "./lib/otel";
 import { refreshFxRates, seedFxRatesIfEmpty } from "./lib/fx";
 import { processDueNdprRequests, requireProcessingNotRestricted } from "./lib/ndpr";
 import { quarterlyResweep, bootstrapAllManufacturerScreenings } from "./lib/sanctions";
-import { nudgeLowBackupCodes, pruneStalePendingMfaEnrollments } from "./lib/mfa";
+import {
+  nudgeLowBackupCodes,
+  pruneExpiredMfaChallenges,
+  pruneStalePendingMfaEnrollments,
+} from "./lib/mfa";
 import { runRetentionSweep } from "./lib/retention";
 import { securityHeaders } from "./middlewares/securityHeaders";
 import { csrfMiddleware } from "./middlewares/csrf";
@@ -248,6 +252,29 @@ function startScheduledJobs(): void {
       );
     }, MFA_PRUNE_INTERVAL_MS);
   }, 75_000);
+  // Prune expired MFA challenges: every 15 minutes delete rows whose
+  // `expires_at` is older than `MFA_CHALLENGES_PRUNE_GRACE_MS` ago
+  // (default 1 day). `recordChallenge` writes one row per successful
+  // TOTP / backup-code assertion with a 15-minute TTL; nothing else
+  // ever deletes them, so the table grows unboundedly without this
+  // sweep. The grace tail keeps a short forensic record after expiry.
+  const MFA_CHALLENGES_PRUNE_INTERVAL_MS = 15 * 60 * 1000;
+  setTimeout(() => {
+    void pruneExpiredMfaChallenges().catch((err) =>
+      logger.error(
+        { err: (err as Error).message },
+        "mfa_challenges_prune_failed",
+      ),
+    );
+    setInterval(() => {
+      void pruneExpiredMfaChallenges().catch((err) =>
+        logger.error(
+          { err: (err as Error).message },
+          "mfa_challenges_prune_failed",
+        ),
+      );
+    }, MFA_CHALLENGES_PRUNE_INTERVAL_MS);
+  }, 90_000);
   // Email a nudge when a seller's TOTP backup codes are running low
   // (fewer than 3 remaining) or have run out. Daily cadence is enough
   // because backup codes are consumed at most a handful of times a year

@@ -384,6 +384,71 @@ export async function pruneStalePendingMfaEnrollments(
   return pruned;
 }
 
+/**
+ * Default forensic-grace window for expired `mfa_challenges`. Anything
+ * whose `expires_at` is older than `now() - <grace>` is removed.
+ *
+ * Why a grace period at all: `hasRecentChallenge()` already filters
+ * with `expires_at > now()`, so any row past its expiry is dead weight
+ * for the recently-asserted check. We keep a short tail (1 day) so an
+ * incident responder reviewing "did this user assert MFA in the last
+ * few hours?" still has the row to look at, even after expiry. Beyond
+ * that, the row is pure storage cost.
+ *
+ * Overridable via the `MFA_CHALLENGES_PRUNE_GRACE_MS` env var (positive
+ * integer milliseconds). Invalid values fall back to the default with
+ * a warning so a typo doesn't silently disable pruning.
+ */
+export const DEFAULT_MFA_CHALLENGES_PRUNE_GRACE_MS = 24 * 60 * 60 * 1000;
+
+function configuredChallengesPruneGraceMs(): number {
+  const raw = process.env.MFA_CHALLENGES_PRUNE_GRACE_MS;
+  if (!raw) return DEFAULT_MFA_CHALLENGES_PRUNE_GRACE_MS;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) {
+    logger.warn(
+      { value: raw },
+      "mfa_challenges_prune_grace_invalid_using_default",
+    );
+    return DEFAULT_MFA_CHALLENGES_PRUNE_GRACE_MS;
+  }
+  return Math.floor(n);
+}
+
+/**
+ * Delete `mfa_challenges` rows whose `expires_at` is older than
+ * `now() - graceMs`. The TTL on a freshly-issued challenge is
+ * `ASSERTION_TTL_MS` (15 min); after that it can no longer satisfy
+ * `hasRecentChallenge()`, so the only reason to keep it around is a
+ * brief forensic tail (default 1 day). Returns the number of rows
+ * pruned and logs the count for observability.
+ *
+ * Single atomic DELETE — safe under concurrent ticks.
+ */
+export async function pruneExpiredMfaChallenges(
+  graceMs: number = configuredChallengesPruneGraceMs(),
+): Promise<number> {
+  const cutoff = new Date(Date.now() - graceMs);
+  const res = await db.execute<{ id: string }>(sql`
+    DELETE FROM mfa_challenges
+     WHERE expires_at < ${cutoff.toISOString()}
+    RETURNING id;
+  `);
+  const pruned = res.rows.length;
+  if (pruned > 0) {
+    logger.info(
+      { pruned, graceMs, cutoff: cutoff.toISOString() },
+      "mfa_challenges_pruned",
+    );
+  } else {
+    logger.debug(
+      { pruned: 0, graceMs, cutoff: cutoff.toISOString() },
+      "mfa_challenges_prune_noop",
+    );
+  }
+  return pruned;
+}
+
 export async function disableMfa(userId: string): Promise<void> {
   await db.execute(sql`
     DELETE FROM mfa_enrollments WHERE user_id = ${userId};
