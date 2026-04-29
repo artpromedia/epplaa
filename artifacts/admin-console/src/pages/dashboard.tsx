@@ -10,6 +10,7 @@ import {
   Wallet,
   Ban,
   Activity,
+  ShieldAlert,
 } from "lucide-react";
 
 const tiles = [
@@ -37,6 +38,43 @@ export default function DashboardPage() {
         >
           You may not have permission to view this dashboard. Ask an admin to
           grant you a moderator, finance_ops, or support role.
+        </div>
+      )}
+
+      {data?.degraded && (
+        <div
+          className="mb-4 flex items-start gap-3 rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive"
+          data-testid="moderation-degraded-banner"
+          role="alert"
+        >
+          <ShieldAlert className="mt-0.5 h-4 w-4 flex-shrink-0" />
+          <div className="space-y-1">
+            <p className="font-medium">
+              Moderation provider is degraded — uploads are NOT being scanned by
+              a real provider.
+            </p>
+            <p>
+              Active provider:{" "}
+              <code className="rounded bg-destructive/10 px-1">
+                {data.moderationProvider ?? "stub"}
+              </code>
+              {data.degradedReason && (
+                <>
+                  . Reason:{" "}
+                  <code
+                    className="rounded bg-destructive/10 px-1"
+                    data-testid="moderation-degraded-banner-reason"
+                  >
+                    {data.degradedReason}
+                  </code>
+                </>
+              )}
+              . Set <code>MODERATION_PROVIDER</code> to <code>hive</code> or{" "}
+              <code>sightengine</code> (with the matching credentials) and
+              redeploy. CSAM coverage requires <code>PHOTODNA_API_KEY</code> in
+              addition.
+            </p>
+          </div>
         </div>
       )}
 

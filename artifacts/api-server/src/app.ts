@@ -31,6 +31,7 @@ import { initOtel } from "./lib/otel";
 import { refreshFxRates, seedFxRatesIfEmpty } from "./lib/fx";
 import { processDueNdprRequests, requireProcessingNotRestricted } from "./lib/ndpr";
 import { quarterlyResweep, bootstrapAllManufacturerScreenings } from "./lib/sanctions";
+import { runModerationProviderHealthCheck } from "./lib/moderation";
 import {
   nudgeLowBackupCodes,
   pruneExpiredMfaChallenges,
@@ -344,6 +345,19 @@ if (process.env.NODE_ENV !== "test") {
       // exist`. The monitor is idempotent on repeat calls so a
       // future caller can't accidentally double-schedule it.
       startAuditDlqMonitor();
+      // Run the moderation provider's connection check and write the
+      // outcome to the audit log. Deferred until after `initAuditChain`
+      // so the audit table is guaranteed to exist when we append; runs
+      // best-effort so a degraded provider doesn't block boot. The
+      // dashboard's `degraded` banner + the warn-tag alert from the
+      // boot-time `assertModerationProviderConfiguredForProduction`
+      // guard are the operator-facing controls.
+      void runModerationProviderHealthCheck().catch((err) =>
+        logger.error(
+          { err: (err as Error).message },
+          "moderation_provider_health_check_failed_unexpectedly",
+        ),
+      );
     })
     .catch((err) =>
       logger.error({ err: (err as Error).message }, "audit_chain_init_failed"),

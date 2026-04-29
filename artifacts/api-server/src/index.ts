@@ -6,6 +6,7 @@ import { assertShipbubbleConfiguredForProduction } from "./lib/fulfillment/shipb
 import { assertCloudflareStreamWebhookConfiguredForProduction } from "./lib/streaming";
 import { assertInternalApiKeyConfiguredForProduction } from "./lib/internalApiKey";
 import { assertMfaEncryptionKeyConfiguredForProduction } from "./lib/mfa";
+import { assertModerationProviderConfiguredForProduction } from "./lib/moderation";
 import { assertTermiiConfiguredForProduction } from "./lib/notifications/termii";
 import { assertPaymentProviderConfiguredForProduction } from "./lib/payments";
 import { assertSentryDsnConfiguredForProduction } from "./lib/sentry";
@@ -204,6 +205,19 @@ assertShipbubbleConfiguredForProduction(process.env, logger);
 // — a deploy that intentionally hasn't migrated off the stub provider
 // shouldn't crash on this. See docs/runbooks/production-secrets.md.
 assertCloudflareStreamWebhookConfiguredForProduction(process.env, logger);
+
+// Boot-time sanity check (task #27): on production-shaped deploys,
+// warn loudly if MODERATION_PROVIDER is unset / `stub`, or if the
+// chosen provider is missing its credentials (HIVE_API_KEY for hive,
+// SIGHTENGINE_API_USER + SIGHTENGINE_API_SECRET for sightengine).
+// Without a real provider every uploaded image, stream poster, and
+// chat message silently falls through to the substring stub — no
+// real CSAM / NSFW / hate / weapons scanning runs. The dashboard
+// surfaces the `degraded` flag, `runModerationProviderHealthCheck`
+// in `app.ts` records the boot probe to the audit log, and the
+// warn-tag `moderation_provider_missing_for_production` is the
+// canonical alert. See docs/runbooks/production-secrets.md.
+assertModerationProviderConfiguredForProduction(process.env, logger);
 
 // Test-only affordance for `src/index.boot.test.ts` (task #92). When set
 // to the exact sentinel value below, the entrypoint exits cleanly AFTER

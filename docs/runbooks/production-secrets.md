@@ -42,6 +42,7 @@ outage.
 | `TERMII_API_KEY` | OTP issuer flips to a dev echo path that returns the OTP code in the API response — phone verification is trivially bypassable and any caller can claim any phone number. | ✅ **Warns at boot** via `assertTermiiConfiguredForProduction` (this runbook). | `lib/notifications/termii.ts`, alert tag `termii_api_key_missing_for_production`. |
 | `PAYSTACK_SECRET_KEY`, `FLUTTERWAVE_SECRET_KEY`, `FLUTTERWAVE_WEBHOOK_HASH` | If neither real gateway is configured, payments fall back to `DevMockGateway` which always returns `{ ok: true }` without touching a real card; if Flutterwave is the only gateway, missing `FLUTTERWAVE_WEBHOOK_HASH` means webhooks cannot be verified (silent settlement loss). | ✅ **Warns at boot** via `assertPaymentProviderConfiguredForProduction` (this runbook). | `lib/payments.ts`, alert tag `payment_provider_missing_for_production`. |
 | `SHIPBUBBLE_API_KEY`, `SHIPBUBBLE_SENDER_CODE`, `SHIPBUBBLE_WEBHOOK_SECRET` | Shipping returns three deterministic stub rates and orders ship under fake tracking numbers; missing webhook secret means inbound tracking events fail signature verification and are silently dropped. | ✅ **Warns at boot** via `assertShipbubbleConfiguredForProduction` (this runbook). | `lib/fulfillment/shipbubble.ts`, alert tag `shipbubble_credentials_missing_for_production`. |
+| `MODERATION_PROVIDER` (+ `HIVE_API_KEY` or `SIGHTENGINE_API_USER`+`SIGHTENGINE_API_SECRET`; optional `PHOTODNA_API_KEY`) | Every uploaded image, stream poster, and chat message silently falls through to a substring-matching stub — no real CSAM / NSFW / hate / weapons scanning happens. The dashboard `degraded` flag is also raised, and `runModerationProviderHealthCheck` records the boot probe to the audit log. | ✅ **Warns at boot** via `assertModerationProviderConfiguredForProduction` (this runbook). | `lib/moderation.ts`, alert tag `moderation_provider_missing_for_production`. |
 | `OKHI_API_KEY`, `OKHI_BRANCH_ID` | Address verification returns a deterministic stub place id with 100% confidence — the verification gate becomes trivially bypassable. The runtime production-signal guard refuses the stub at first call (5xx), but boot looks healthy until then. | ✅ **Warns at boot** via `assertOkHiConfiguredForProduction` (this runbook). | `lib/fulfillment/okhi.ts`, alert tag `okhi_credentials_missing_for_production`. |
 | `CF_STREAM_API_TOKEN`, `CF_STREAM_ACCOUNT_ID` | Live streaming falls back to a deterministic stub provider (no real RTMP ingest, no playable HLS, no recording). Sellers cannot actually go live. | ❌ Silent feature degradation — covered indirectly by the `webhookConfigured` UI badge in the seller go-live page. *Future candidate (lower-severity).* | n/a. |
 | `CF_STREAM_WEBHOOK_SECRET` | When the CF Stream provider IS enabled, the inbound `/api/streaming/webhooks/cloudflare` handler refuses every request with 503 — Cloudflare's "video ready" notifications are dropped and replays never get persisted from real broadcasts. | ✅ **Warns at boot** via `assertCloudflareStreamWebhookConfiguredForProduction` (this runbook). Only fires when `CF_STREAM_API_TOKEN + CF_STREAM_ACCOUNT_ID` are set; stub deploys stay silent. | `lib/streaming.ts`, alert tag `cf_stream_webhook_secret_missing_for_production`. |
@@ -512,6 +513,87 @@ In the log aggregator (backstop):
 - Filter: `source:api-server message:"cf_stream_webhook_secret_missing_for_production"`.
 - Trigger when count > 0 over a 5-minute window.
 - Route to the api-server on-call rotation; severity = sev-2.
+
+### `MODERATION_PROVIDER` (+ `HIVE_API_KEY` / `SIGHTENGINE_API_USER`+`SIGHTENGINE_API_SECRET`; optional `PHOTODNA_API_KEY`)
+
+**What:** `selectProvider()` in
+[`lib/moderation.ts`](../../artifacts/api-server/src/lib/moderation.ts)
+reads `MODERATION_PROVIDER` and chooses one of three implementations:
+
+- `stub` (or unset): substring-matching dev/CI provider. Only matches
+  the literal `FLAG_BLOCK` / `FLAG_REVIEW` test markers and a handful
+  of obvious phrases — every other upload, stream poster, and chat
+  message is treated as `allow`.
+- `hive`: Hive Moderation REST API
+  (`https://api.thehive.ai/api/v2/task/sync`). Requires `HIVE_API_KEY`;
+  scans NSFW / weapons / drugs / hate / gore / CSAM-hash. Image scans
+  fail-CLOSED-to-review on network failure; text scans fail-OPEN
+  (chat would otherwise be unusable on a Hive outage).
+- `sightengine`: Sightengine REST API
+  (`https://api.sightengine.com/1.0/check.json` +
+  `text/check.json`). Requires `SIGHTENGINE_API_USER`,
+  `SIGHTENGINE_API_SECRET`, AND `PHOTODNA_API_KEY` on production.
+  Sightengine does NOT expose the NCMEC hash list, so PhotoDNA is
+  the only CSAM signal when this provider is chosen — the boot
+  guard treats `MODERATION_PROVIDER=sightengine` without
+  `PHOTODNA_API_KEY` as a misconfiguration and emits a distinct
+  warn (`PHOTODNA_API_KEY is unset … Sightengine does not expose
+  the NCMEC hash list`). The dashboard `degraded` flag also flips
+  with `degradedReason = csam_coverage_missing_photodna_required_for_sightengine`.
+
+PhotoDNA (`PHOTODNA_API_KEY`) is layered on top of whichever provider
+is active. When set, every `scanImage` call additionally hits the
+Microsoft PhotoDNA Cloud Service `/v1.0/Match` endpoint — the
+gold-standard NCMEC-aligned hash matcher and the only signal that
+satisfies the South African Films & Publications Act mandatory CSAM
+reporting requirement.
+
+If `MODERATION_PROVIDER` is unset, set to `stub`, set to a value
+whose required credentials are missing, or set to an unimplemented
+value, `selectProvider()` falls back to the substring stub and sets
+`degradedReason` so the admin dashboard shows a prominent red banner
+(`data-testid="moderation-degraded-banner"`).
+
+**Blast radius:** every uploaded image (listings, KYC, profile),
+every video stream poster, every chat message, every report-as-
+"content" trace silently passes the moderation gate. CSAM, NSFW,
+hate, and weapons content reach the marketplace.
+
+**Boot-time signal:** `logger.warn` with message tag
+`moderation_provider_missing_for_production` and a structured
+payload of `{ node_env, replit_deployment, deployment_environment, moderation_provider, hive_api_key_set, sightengine_api_user_set, sightengine_api_secret_set, photodna_api_key_set, production_signals }`.
+None of the secret values are ever logged — the slot is the literal
+boolean `true` / `false` indicating presence.
+
+`runModerationProviderHealthCheck()` (called from
+[`src/app.ts`](../../artifacts/api-server/src/app.ts) after
+`initAuditChain()`) additionally probes the active provider's
+`getHealth()` and writes the outcome to the audit log under action
+`moderation.provider_health_check`. Operators can audit the boot
+state of the moderation pipeline alongside every other compliance
+event.
+
+**Alert wiring (Sentry — primary):**
+
+In Sentry:
+
+- Issue alert: `level:warning message:"moderation_provider_missing_for_production"`.
+- Trigger immediately on first event seen.
+- Route to the api-server on-call rotation; severity = sev-1
+  (regulatory + brand risk: unscanned uploads include CSAM exposure).
+- Annotate with a link back to this runbook.
+
+In the log aggregator (backstop):
+
+- Filter: `source:api-server message:"moderation_provider_missing_for_production"`.
+- Trigger when count > 0 over a 5-minute window.
+- Route to the api-server on-call rotation; severity = sev-1.
+
+In the audit log (forensics):
+
+- Query for `action = 'moderation.provider_health_check'` to see the
+  per-boot health probe outcome (`provider`, `degraded`,
+  `degradedReason`, `health.ok`, `photoDna.ok`, `latencyMs`).
 
 ## What to do when one of these alerts fires
 
