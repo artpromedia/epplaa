@@ -377,17 +377,51 @@ schedule.
 > **Boot-time guard.** As a defense-in-depth backstop to the
 > "staging only" rule above, the api-server entrypoint
 > (`artifacts/api-server/src/index.ts`) refuses to start when
-> `HEALTHZ_REHEARSAL_ENABLED=1` is observed while `NODE_ENV=production`.
-> The check (`assertRehearsalKillSwitchSafe` in
+> `HEALTHZ_REHEARSAL_ENABLED=1` is observed alongside *any* signal
+> that the deploy is reachable as production. The check
+> (`assertRehearsalKillSwitchSafe` in
 > `artifacts/api-server/src/routes/healthzRehearsal.ts`) logs
 > `healthz_rehearsal_kill_switch_on_in_production` and exits 1 before
 > binding the listener, so a copy-paste of staging env vars into a
 > production deploy crash-loops loudly in platform health checks
 > instead of silently exposing `/api/_rehearsal/inject-stuck-degraded`.
-> If you see this error in a production crash log, unset
+>
+> The kill switch trips when **any** of the following production
+> signals are observed alongside `HEALTHZ_REHEARSAL_ENABLED=1`:
+>
+> | Signal | Why it's checked |
+> | --- | --- |
+> | `NODE_ENV=production` | Original signal — the conventional Node.js production marker. |
+> | `REPLIT_DEPLOYMENT=1` | Set by the Replit platform on production deployments (vs. dev workspaces). Catches a deploy that runs with `NODE_ENV` unset or "staging" but is being served as a real Replit production deployment. The check matches the literal string `"1"` only — `"true"`, `"yes"`, etc. do **not** trip it. |
+> | `DEPLOYMENT_ENVIRONMENT=production` | Generic deployment-env env var that some IaC/CD stacks set independently of `NODE_ENV`. Set this on production deploys for an extra backstop that survives `NODE_ENV` drift. The check matches the literal lowercase string `"production"` only — `"Production"`, `"PROD"`, `"prod"`, `"prd"`, etc. do **not** trip it (mirrors how the conventional `NODE_ENV=production` value is also lowercase). If your CD stack writes a different casing, normalise it to lowercase `"production"` at the deploy layer. |
+> | `HOSTNAME` matches `PRODUCTION_HOSTNAME_PATTERN` | Operator-configured regex matched against the container's `HOSTNAME`. The strongest backstop: even if every other env var is wrong, a deploy whose hostname is the real production host (e.g. `api.epplaa.com`) will refuse to boot. |
+>
+> **Configuring the production-hostname pattern.** Set
+> `PRODUCTION_HOSTNAME_PATTERN` on the production api-server deploy to
+> a regex that matches the production container's `HOSTNAME` (and
+> nothing on staging). For the canonical Epplaa production host this
+> is:
+>
+> ```sh
+> PRODUCTION_HOSTNAME_PATTERN='^api\.epplaa\.com$'
+> ```
+>
+> Anchor the pattern (`^…$`) so a partial match on a staging hostname
+> like `api.epplaa.com.staging.internal` doesn't accidentally trip
+> the guard on staging. Multiple production hosts can be unioned with
+> `|` (e.g. `^(api|api-eu|api-apac)\.epplaa\.com$`). The pattern is
+> read once at boot. An invalid regex logs
+> `healthz_rehearsal_invalid_hostname_pattern` and silently disables
+> the hostname check (so a typo doesn't crash an otherwise-correct
+> production boot — the other signals still fire).
+>
+> **If you see this error in a production crash log,** unset
 > `HEALTHZ_REHEARSAL_ENABLED` on that deploy and restart — do **not**
 > work around it by setting `NODE_ENV` to something other than
-> `production`.
+> `production`, or by unsetting `REPLIT_DEPLOYMENT` /
+> `DEPLOYMENT_ENVIRONMENT` / `PRODUCTION_HOSTNAME_PATTERN`. Those
+> signals exist precisely to catch the case where one of them has
+> been misconfigured; weakening them defeats the backstop.
 
 ### Interpreting a failed rehearsal run
 

@@ -82,11 +82,24 @@ function readGuardConfig(): RehearsalGuardConfig {
  * in the alerting channel.
  *
  * To turn that into a *technical* control we additionally fail-fast at
- * boot: if `HEALTHZ_REHEARSAL_ENABLED=1` is observed while
- * `NODE_ENV=production`, the process refuses to start and logs a clear
- * error instructing the operator to unset the kill switch. Staging
- * (NODE_ENV !== "production") is unaffected and continues to opt in
- * normally.
+ * boot: if `HEALTHZ_REHEARSAL_ENABLED=1` is observed alongside *any*
+ * production-only signal, the process refuses to start and logs a
+ * clear error instructing the operator to unset the kill switch.
+ *
+ * Production signals (any one of these is sufficient to trip the guard
+ * when the kill switch is on):
+ *   1. `NODE_ENV=production` — the original signal.
+ *   2. `HOSTNAME` matches the regex in `PRODUCTION_HOSTNAME_PATTERN`
+ *      — operator-configured pattern that names known production
+ *      hostnames. Backstops a deploy that runs with `NODE_ENV=staging`
+ *      (or unset) but is reachable as the real production host.
+ *   3. `REPLIT_DEPLOYMENT=1` — set by the Replit platform on
+ *      production deployments (vs. dev workspaces).
+ *   4. `DEPLOYMENT_ENVIRONMENT=production` — generic deployment-env
+ *      env var some platforms / IaC stacks set independently of
+ *      `NODE_ENV`.
+ *
+ * Staging hosts (no production signal) continue to opt in normally.
  *
  * This is intentionally checked before the HTTP listener binds so a
  * misconfigured deploy crash-loops loudly in the platform health
@@ -102,28 +115,118 @@ export type RehearsalBootGuardOutcome =
   | { ok: true }
   | { ok: false; reason: string };
 
+interface ProductionSignal {
+  /** Short identifier surfaced in the structured log + reason text. */
+  signal: string;
+  /** Human-readable detail (env var name + observed value). */
+  detail: string;
+}
+
+/**
+ * Compile the production-hostname regex from `PRODUCTION_HOSTNAME_PATTERN`.
+ * An invalid pattern is treated as if no pattern were configured, but
+ * we surface a structured warning so the operator notices that the
+ * hostname check is silently disabled. We deliberately do NOT throw
+ * here — a typo in the pattern shouldn't crash an otherwise-correct
+ * production boot (NODE_ENV / REPLIT_DEPLOYMENT etc. would still trip
+ * the guard if the kill switch were on).
+ */
+function compileHostnamePattern(
+  raw: string | undefined,
+  log: { error: (obj: unknown, msg: string) => void },
+): RegExp | null {
+  if (!raw || raw.trim() === "") return null;
+  try {
+    return new RegExp(raw);
+  } catch (err) {
+    log.error(
+      {
+        production_hostname_pattern: raw,
+        err: err instanceof Error ? err.message : String(err),
+      },
+      "healthz_rehearsal_invalid_hostname_pattern: PRODUCTION_HOSTNAME_PATTERN is not a valid regex; hostname check is disabled",
+    );
+    return null;
+  }
+}
+
+function detectProductionSignals(
+  env: NodeJS.ProcessEnv,
+  log: { error: (obj: unknown, msg: string) => void },
+): ProductionSignal[] {
+  const signals: ProductionSignal[] = [];
+
+  if (env.NODE_ENV === "production") {
+    signals.push({
+      signal: "node_env",
+      detail: "NODE_ENV=production",
+    });
+  }
+
+  if (env.REPLIT_DEPLOYMENT === "1") {
+    signals.push({
+      signal: "replit_deployment",
+      detail: "REPLIT_DEPLOYMENT=1 (Replit production deployment)",
+    });
+  }
+
+  if (env.DEPLOYMENT_ENVIRONMENT === "production") {
+    signals.push({
+      signal: "deployment_environment",
+      detail: "DEPLOYMENT_ENVIRONMENT=production",
+    });
+  }
+
+  const hostnamePattern = compileHostnamePattern(
+    env.PRODUCTION_HOSTNAME_PATTERN,
+    log,
+  );
+  const hostname = env.HOSTNAME;
+  if (
+    hostnamePattern &&
+    typeof hostname === "string" &&
+    hostname !== "" &&
+    hostnamePattern.test(hostname)
+  ) {
+    signals.push({
+      signal: "hostname",
+      detail: `HOSTNAME=${hostname} matches PRODUCTION_HOSTNAME_PATTERN=${env.PRODUCTION_HOSTNAME_PATTERN}`,
+    });
+  }
+
+  return signals;
+}
+
 export function assertRehearsalKillSwitchSafe(
   env: NodeJS.ProcessEnv,
   log: { error: (obj: unknown, msg: string) => void },
 ): RehearsalBootGuardOutcome {
   const enabled = env.HEALTHZ_REHEARSAL_ENABLED === "1";
-  const isProduction = env.NODE_ENV === "production";
-  if (enabled && isProduction) {
-    const reason =
-      "HEALTHZ_REHEARSAL_ENABLED=1 must never be set when NODE_ENV=production. " +
-      "The /api/_rehearsal/* injector is staging-only — see " +
-      "docs/runbooks/rate-limit-store.md (Automated weekly rehearsal). " +
-      "Unset HEALTHZ_REHEARSAL_ENABLED on this deploy and restart.";
-    log.error(
-      {
-        node_env: env.NODE_ENV,
-        healthz_rehearsal_enabled: env.HEALTHZ_REHEARSAL_ENABLED,
-      },
-      `healthz_rehearsal_kill_switch_on_in_production: ${reason}`,
-    );
-    return { ok: false, reason };
-  }
-  return { ok: true };
+  if (!enabled) return { ok: true };
+
+  const signals = detectProductionSignals(env, log);
+  if (signals.length === 0) return { ok: true };
+
+  const signalDetails = signals.map((s) => s.detail).join("; ");
+  const reason =
+    "HEALTHZ_REHEARSAL_ENABLED=1 must never be set on a production deploy. " +
+    `Detected production signal(s): ${signalDetails}. ` +
+    "The /api/_rehearsal/* injector is staging-only — see " +
+    "docs/runbooks/rate-limit-store.md (boot-time guard). " +
+    "Unset HEALTHZ_REHEARSAL_ENABLED on this deploy and restart.";
+  log.error(
+    {
+      node_env: env.NODE_ENV,
+      hostname: env.HOSTNAME,
+      production_hostname_pattern: env.PRODUCTION_HOSTNAME_PATTERN,
+      replit_deployment: env.REPLIT_DEPLOYMENT,
+      deployment_environment: env.DEPLOYMENT_ENVIRONMENT,
+      healthz_rehearsal_enabled: env.HEALTHZ_REHEARSAL_ENABLED,
+      production_signals: signals.map((s) => s.signal),
+    },
+    `healthz_rehearsal_kill_switch_on_in_production: ${reason}`,
+  );
+  return { ok: false, reason };
 }
 
 /**

@@ -487,7 +487,273 @@ describe("assertRehearsalKillSwitchSafe — boot-time guard", () => {
     expect(obj).toMatchObject({
       node_env: "production",
       healthz_rehearsal_enabled: "1",
+      production_signals: ["node_env"],
     });
     expect(msg).toMatch(/healthz_rehearsal_kill_switch_on_in_production/);
+  });
+
+  // ---------------------------------------------------------------
+  // Hostname / region / deployment-env backstops (task #81).
+  //
+  // The original guard only fired on NODE_ENV=production. A
+  // misconfigured deploy that runs with NODE_ENV=staging (or unset)
+  // AND HEALTHZ_REHEARSAL_ENABLED=1 would silently expose the
+  // injector even though the host is reachable as production. These
+  // tests exercise the additional production signals: an
+  // operator-configured production-hostname regex, the platform-set
+  // REPLIT_DEPLOYMENT flag, and a generic DEPLOYMENT_ENVIRONMENT
+  // env var.
+  // ---------------------------------------------------------------
+
+  it("allows boot on a staging hostname when PRODUCTION_HOSTNAME_PATTERN is configured", () => {
+    // The hostname check is opt-in: an operator configures the
+    // regex of *production* hostnames, and any host that doesn't
+    // match (e.g. staging) is allowed. Verify a staging hostname is
+    // not falsely tripped by a well-formed pattern.
+    const log = buildLogSink();
+    const result = assertRehearsalKillSwitchSafe(
+      {
+        NODE_ENV: "staging",
+        HEALTHZ_REHEARSAL_ENABLED: "1",
+        HOSTNAME: "api.staging.epplaa.com",
+        PRODUCTION_HOSTNAME_PATTERN: "^api\\.epplaa\\.com$",
+      },
+      log,
+    );
+    expect(result.ok).toBe(true);
+    expect(log.calls).toEqual([]);
+  });
+
+  it("REJECTS boot when HOSTNAME matches PRODUCTION_HOSTNAME_PATTERN even with NODE_ENV unset", () => {
+    // The whole point of the hostname backstop: NODE_ENV is unset
+    // (or "staging") yet the host is the real production host. The
+    // guard must still fire because the injector would be reachable
+    // on a real production URL.
+    const log = buildLogSink();
+    const result = assertRehearsalKillSwitchSafe(
+      {
+        HEALTHZ_REHEARSAL_ENABLED: "1",
+        HOSTNAME: "api.epplaa.com",
+        PRODUCTION_HOSTNAME_PATTERN: "^api\\.epplaa\\.com$",
+      },
+      log,
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("unreachable");
+    expect(result.reason).toMatch(/HOSTNAME=api\.epplaa\.com/);
+    expect(result.reason).toMatch(/PRODUCTION_HOSTNAME_PATTERN/);
+    expect(log.calls).toHaveLength(1);
+    const [obj] = log.calls[0]!;
+    expect(obj).toMatchObject({
+      hostname: "api.epplaa.com",
+      production_signals: ["hostname"],
+    });
+  });
+
+  it("REJECTS boot when HOSTNAME matches PRODUCTION_HOSTNAME_PATTERN even with NODE_ENV=staging (operator typo backstop)", () => {
+    // The most adversarial case for a pure NODE_ENV check: a deploy
+    // that's been mislabelled NODE_ENV=staging (e.g. someone typo'd
+    // the env file during a rotation) but is actually serving the
+    // production host. The hostname signal must still trip the guard.
+    const log = buildLogSink();
+    const result = assertRehearsalKillSwitchSafe(
+      {
+        NODE_ENV: "staging",
+        HEALTHZ_REHEARSAL_ENABLED: "1",
+        HOSTNAME: "api.epplaa.com",
+        PRODUCTION_HOSTNAME_PATTERN: "^api\\.epplaa\\.com$",
+      },
+      log,
+    );
+    expect(result.ok).toBe(false);
+  });
+
+  it("hostname check is a no-op when PRODUCTION_HOSTNAME_PATTERN is unset (existing deploys keep working without configuration)", () => {
+    // Backwards-compat: a deploy that hasn't (yet) configured the
+    // hostname pattern must not start failing — it only opts in to
+    // the extra check by setting the env var.
+    const log = buildLogSink();
+    const result = assertRehearsalKillSwitchSafe(
+      {
+        NODE_ENV: "staging",
+        HEALTHZ_REHEARSAL_ENABLED: "1",
+        HOSTNAME: "api.epplaa.com",
+      },
+      log,
+    );
+    expect(result.ok).toBe(true);
+    expect(log.calls).toEqual([]);
+  });
+
+  it("hostname check tolerates a missing HOSTNAME env var", () => {
+    // Some container runtimes don't set HOSTNAME. The check must
+    // not throw — it should just skip the hostname signal and rely
+    // on the other signals.
+    const log = buildLogSink();
+    const result = assertRehearsalKillSwitchSafe(
+      {
+        NODE_ENV: "staging",
+        HEALTHZ_REHEARSAL_ENABLED: "1",
+        PRODUCTION_HOSTNAME_PATTERN: "^api\\.epplaa\\.com$",
+      },
+      log,
+    );
+    expect(result.ok).toBe(true);
+    expect(log.calls).toEqual([]);
+  });
+
+  it("logs an error and disables the hostname check when PRODUCTION_HOSTNAME_PATTERN is an invalid regex", () => {
+    // A typo in the regex (unbalanced bracket) shouldn't crash a
+    // legitimate boot — but we MUST surface the misconfiguration
+    // because it silently disables a defense-in-depth layer the
+    // operator thought they had configured.
+    const log = buildLogSink();
+    const result = assertRehearsalKillSwitchSafe(
+      {
+        NODE_ENV: "staging",
+        HEALTHZ_REHEARSAL_ENABLED: "1",
+        HOSTNAME: "api.epplaa.com",
+        PRODUCTION_HOSTNAME_PATTERN: "[invalid(regex",
+      },
+      log,
+    );
+    expect(result.ok).toBe(true);
+    // One error-level log surfaces the bad pattern; nothing else.
+    expect(log.calls).toHaveLength(1);
+    const [, msg] = log.calls[0]!;
+    expect(msg).toMatch(/healthz_rehearsal_invalid_hostname_pattern/);
+  });
+
+  it("REJECTS boot when REPLIT_DEPLOYMENT=1 (Replit production deployment signal)", () => {
+    // The Replit platform sets REPLIT_DEPLOYMENT=1 on production
+    // deployments (vs. dev workspaces). Even if NODE_ENV is unset
+    // the guard must trip on this signal alone.
+    const log = buildLogSink();
+    const result = assertRehearsalKillSwitchSafe(
+      {
+        HEALTHZ_REHEARSAL_ENABLED: "1",
+        REPLIT_DEPLOYMENT: "1",
+      },
+      log,
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("unreachable");
+    expect(result.reason).toMatch(/REPLIT_DEPLOYMENT=1/);
+    expect(log.calls).toHaveLength(1);
+    const [obj] = log.calls[0]!;
+    expect(obj).toMatchObject({
+      replit_deployment: "1",
+      production_signals: ["replit_deployment"],
+    });
+  });
+
+  it("allows boot when REPLIT_DEPLOYMENT is anything other than '1' (dev workspace)", () => {
+    // In a Replit dev workspace REPLIT_DEPLOYMENT is unset or "0".
+    // Only the literal "1" trips the signal.
+    const log = buildLogSink();
+    for (const bogus of [undefined, "", "0", "true", "yes"]) {
+      const env: NodeJS.ProcessEnv = {
+        NODE_ENV: "development",
+        HEALTHZ_REHEARSAL_ENABLED: "1",
+      };
+      if (bogus !== undefined) env.REPLIT_DEPLOYMENT = bogus;
+      const result = assertRehearsalKillSwitchSafe(env, log);
+      expect(result.ok, `bogus=${String(bogus)}`).toBe(true);
+    }
+    expect(log.calls).toEqual([]);
+  });
+
+  it("REJECTS boot when DEPLOYMENT_ENVIRONMENT=production", () => {
+    // Generic deployment-env env var that some IaC stacks set
+    // independently of NODE_ENV. Trips the guard on its own.
+    const log = buildLogSink();
+    const result = assertRehearsalKillSwitchSafe(
+      {
+        HEALTHZ_REHEARSAL_ENABLED: "1",
+        DEPLOYMENT_ENVIRONMENT: "production",
+      },
+      log,
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("unreachable");
+    expect(result.reason).toMatch(/DEPLOYMENT_ENVIRONMENT=production/);
+    expect(log.calls).toHaveLength(1);
+    const [obj] = log.calls[0]!;
+    expect(obj).toMatchObject({
+      deployment_environment: "production",
+      production_signals: ["deployment_environment"],
+    });
+  });
+
+  it("allows boot when DEPLOYMENT_ENVIRONMENT is staging/preview/etc (not production)", () => {
+    const log = buildLogSink();
+    for (const value of ["staging", "preview", "development", "qa", ""]) {
+      const result = assertRehearsalKillSwitchSafe(
+        {
+          NODE_ENV: "staging",
+          HEALTHZ_REHEARSAL_ENABLED: "1",
+          DEPLOYMENT_ENVIRONMENT: value,
+        },
+        log,
+      );
+      expect(result.ok, `value=${value}`).toBe(true);
+    }
+    expect(log.calls).toEqual([]);
+  });
+
+  it("aggregates multiple production signals into a single structured log so on-call sees every offender at once", () => {
+    // If more than one signal is true (e.g. NODE_ENV=production AND
+    // REPLIT_DEPLOYMENT=1 AND hostname matches), the guard must list
+    // ALL of them in one error so the operator doesn't have to
+    // re-deploy and re-fail to discover the next signal.
+    const log = buildLogSink();
+    const result = assertRehearsalKillSwitchSafe(
+      {
+        NODE_ENV: "production",
+        HEALTHZ_REHEARSAL_ENABLED: "1",
+        HOSTNAME: "api.epplaa.com",
+        PRODUCTION_HOSTNAME_PATTERN: "^api\\.epplaa\\.com$",
+        REPLIT_DEPLOYMENT: "1",
+        DEPLOYMENT_ENVIRONMENT: "production",
+      },
+      log,
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("unreachable");
+    expect(result.reason).toMatch(/NODE_ENV=production/);
+    expect(result.reason).toMatch(/REPLIT_DEPLOYMENT=1/);
+    expect(result.reason).toMatch(/DEPLOYMENT_ENVIRONMENT=production/);
+    expect(result.reason).toMatch(/HOSTNAME=api\.epplaa\.com/);
+    expect(log.calls).toHaveLength(1);
+    const [obj] = log.calls[0]!;
+    expect(obj).toMatchObject({
+      production_signals: [
+        "node_env",
+        "replit_deployment",
+        "deployment_environment",
+        "hostname",
+      ],
+    });
+  });
+
+  it("kill switch off short-circuits all signal detection (no log spam for healthy production deploys)", () => {
+    // The common case: a real production deploy with every
+    // production signal lit but HEALTHZ_REHEARSAL_ENABLED unset.
+    // The guard must return ok with no log output — otherwise every
+    // production boot would emit an error line about the rehearsal
+    // injector, which is just noise.
+    const log = buildLogSink();
+    const result = assertRehearsalKillSwitchSafe(
+      {
+        NODE_ENV: "production",
+        HOSTNAME: "api.epplaa.com",
+        PRODUCTION_HOSTNAME_PATTERN: "^api\\.epplaa\\.com$",
+        REPLIT_DEPLOYMENT: "1",
+        DEPLOYMENT_ENVIRONMENT: "production",
+      },
+      log,
+    );
+    expect(result.ok).toBe(true);
+    expect(log.calls).toEqual([]);
   });
 });
