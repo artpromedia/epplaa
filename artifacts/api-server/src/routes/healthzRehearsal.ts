@@ -5,7 +5,11 @@ import {
   detectNonHostnameProductionSignals,
   detectProductionSignals,
 } from "../lib/productionSignals";
-import { auditHealthWatcher, dbHealthWatcher } from "../lib/subsystemHealth";
+import {
+  auditHealthWatcher,
+  dbHealthWatcher,
+  getPaymentGatewayWatcher,
+} from "../lib/subsystemHealth";
 import { auditDlqHealthWatcher } from "../lib/auditDlqMonitor";
 import { __getRedisFailureWatcherForRehearsal } from "../middlewares/apiRateLimit";
 
@@ -38,12 +42,28 @@ import { __getRedisFailureWatcherForRehearsal } from "../middlewares/apiRateLimi
  * Endpoints (mounted at `/api/_rehearsal/*`):
  *
  *   POST /_rehearsal/inject-stuck-degraded
- *     body: { subsystem: "rateLimitStore" | "db" | "auditChain",
+ *     body: { subsystem: "rateLimitStore" | "db" | "auditChain"
+ *                       | "auditDlq" | "paymentGateway<Name>",
  *             firstFailureAt: number (ms epoch),
  *             failureCount?: number (default 1) }
  *
  *   POST /_rehearsal/clear-stuck-degraded
- *     body: { subsystem: "rateLimitStore" | "db" | "auditChain" }
+ *     body: { subsystem: "rateLimitStore" | "db" | "auditChain"
+ *                       | "auditDlq" | "paymentGateway<Name>" }
+ *
+ * `paymentGateway<Name>` mirrors the dynamic key convention from
+ * `lib/subsystemHealth.ts`'s `paymentGatewaySubsystemKey` helper —
+ * e.g. `paymentGatewayPaystack`, `paymentGatewayFlutterwave`. Each
+ * configured real gateway is registered as its own watcher at
+ * api-server boot (`lib/payments.ts`); the rehearsal feeds the same
+ * registered watcher so the inject -> probe -> clear cycle exercises
+ * the same code path that a real gateway outage would. Gateways
+ * whose secret is not configured on this deploy are NOT registered
+ * (so a synthetic `paymentGatewayDevmock` entry can never be
+ * injected) — the inject endpoint returns 400 with
+ * `unregistered_payment_gateway` in that case so the matrix entry
+ * fails loudly instead of silently no-op'ing against the wrong
+ * watcher.
  *
  * Both endpoints return 404 unless `HEALTHZ_REHEARSAL_ENABLED=1`, so
  * the route is invisible in production. When enabled they additionally
@@ -53,14 +73,33 @@ import { __getRedisFailureWatcherForRehearsal } from "../middlewares/apiRateLimi
  * channel. A 401 is returned when the token is missing or wrong.
  */
 
-type SubsystemName = "rateLimitStore" | "db" | "auditChain" | "auditDlq";
+type FixedSubsystemName =
+  | "rateLimitStore"
+  | "db"
+  | "auditChain"
+  | "auditDlq";
 
-const ALLOWED_SUBSYSTEMS: readonly SubsystemName[] = [
+type SubsystemName = FixedSubsystemName | `paymentGateway${string}`;
+
+const FIXED_SUBSYSTEMS: readonly FixedSubsystemName[] = [
   "rateLimitStore",
   "db",
   "auditChain",
   "auditDlq",
 ];
+
+/**
+ * Match the dynamic `paymentGateway<Name>` keys from
+ * `lib/subsystemHealth.ts`'s `paymentGatewaySubsystemKey` helper.
+ * The first character after `paymentGateway` must be uppercase
+ * (mirrors the camelCase-friendly capitalisation the helper produces)
+ * and the remainder is letters/digits — anything else is rejected
+ * upfront so a typo like `paymentgatewayPaystack` (lowercase g) or
+ * `paymentGateway-paystack` falls through to the standard
+ * `invalid_subsystem` error rather than silently mapping to a
+ * different watcher.
+ */
+const PAYMENT_GATEWAY_SUBSYSTEM_RE = /^paymentGateway[A-Z][A-Za-z0-9]*$/;
 
 interface RehearsalGuardConfig {
   enabled: boolean;
@@ -325,20 +364,42 @@ interface ClearBody {
 
 function parseSubsystem(raw: unknown): SubsystemName | null {
   if (typeof raw !== "string") return null;
-  return ALLOWED_SUBSYSTEMS.includes(raw as SubsystemName)
-    ? (raw as SubsystemName)
-    : null;
+  if (FIXED_SUBSYSTEMS.includes(raw as FixedSubsystemName)) {
+    return raw as FixedSubsystemName;
+  }
+  if (PAYMENT_GATEWAY_SUBSYSTEM_RE.test(raw)) {
+    return raw as `paymentGateway${string}`;
+  }
+  return null;
 }
 
-function watcherFor(subsystem: SubsystemName): {
+interface WatcherHandle {
   __injectStreak(firstFailureAt: number, failureCount: number): void;
   __reset(): void;
-} {
+}
+
+type WatcherResolution =
+  | { ok: true; watcher: WatcherHandle }
+  | { ok: false; status: number; error: string; detail: string };
+
+/**
+ * Convert a parsed `paymentGateway<Name>` subsystem name back to the
+ * lowercase gateway key used by `getPaymentGatewayWatcher` (which
+ * keys off the `GatewayName` strings `"paystack"` / `"flutterwave"`
+ * registered by `lib/payments.ts`). Inverse of
+ * `paymentGatewaySubsystemKey` in lib/subsystemHealth.ts.
+ */
+function gatewayKeyFromSubsystem(subsystem: `paymentGateway${string}`): string {
+  const suffix = subsystem.slice("paymentGateway".length);
+  return suffix.charAt(0).toLowerCase() + suffix.slice(1);
+}
+
+function watcherFor(subsystem: SubsystemName): WatcherResolution {
   if (subsystem === "rateLimitStore") {
-    return __getRedisFailureWatcherForRehearsal();
+    return { ok: true, watcher: __getRedisFailureWatcherForRehearsal() };
   }
   if (subsystem === "auditChain") {
-    return auditHealthWatcher;
+    return { ok: true, watcher: auditHealthWatcher };
   }
   if (subsystem === "auditDlq") {
     // The DLQ watcher is normally driven by the periodic depth poller
@@ -351,9 +412,48 @@ function watcherFor(subsystem: SubsystemName): {
     // poll, not the synthetic rehearsal state, which is the right
     // semantics: the rehearsal is testing the streak-duration page,
     // not the depth measurement itself.
-    return auditDlqHealthWatcher;
+    return { ok: true, watcher: auditDlqHealthWatcher };
   }
-  return dbHealthWatcher;
+  if (subsystem === "db") {
+    return { ok: true, watcher: dbHealthWatcher };
+  }
+  // paymentGateway<Name> — feed the watcher registered by
+  // lib/payments.ts at boot for this gateway. We deliberately do NOT
+  // register a new watcher on demand: the dev-mock fallback gateway
+  // is intentionally unregistered so a permanently-healthy
+  // `paymentGatewayDevmock` /healthz entry can never appear, and
+  // auto-registering here would defeat that. A staging deploy that
+  // wants to rehearse a given gateway must have that gateway's
+  // secret configured (PAYSTACK_SECRET_KEY / FLUTTERWAVE_SECRET_KEY)
+  // so its watcher is registered via the loop in lib/payments.ts.
+  const gateway = gatewayKeyFromSubsystem(subsystem);
+  const watcher = getPaymentGatewayWatcher(gateway);
+  if (!watcher) {
+    return {
+      ok: false,
+      status: 400,
+      error: "unregistered_payment_gateway",
+      detail:
+        `paymentGateway watcher for "${gateway}" is not registered on this ` +
+        "deploy. The watcher is only registered for gateways with their " +
+        "secret configured (PAYSTACK_SECRET_KEY / FLUTTERWAVE_SECRET_KEY) — " +
+        "see lib/payments.ts. Either configure the gateway secret on this " +
+        "staging deploy, or remove the matching matrix entry from " +
+        ".github/workflows/rehearse-healthz-degraded.yml so a non-existent " +
+        "watcher doesn't fail the weekly rehearsal every Sunday.",
+    };
+  }
+  return { ok: true, watcher };
+}
+
+function invalidSubsystemDetail(): string {
+  return (
+    `subsystem must be one of: ${FIXED_SUBSYSTEMS.join(", ")}, ` +
+    "or a paymentGateway<Name> entry matching " +
+    "/^paymentGateway[A-Z][A-Za-z0-9]*$/ (e.g. paymentGatewayPaystack, " +
+    "paymentGatewayFlutterwave) — must mirror the /healthz subsystems " +
+    "key produced by paymentGatewaySubsystemKey in lib/subsystemHealth.ts"
+  );
 }
 
 const router: IRouter = Router();
@@ -366,7 +466,7 @@ router.post("/_rehearsal/inject-stuck-degraded", (req, res) => {
   if (!subsystem) {
     res.status(400).json({
       error: "invalid_subsystem",
-      detail: `subsystem must be one of: ${ALLOWED_SUBSYSTEMS.join(", ")}`,
+      detail: invalidSubsystemDetail(),
     });
     return;
   }
@@ -401,8 +501,18 @@ router.post("/_rehearsal/inject-stuck-degraded", (req, res) => {
       ? Math.floor(failureCountRaw)
       : 1;
 
-  const watcher = watcherFor(subsystem);
-  watcher.__injectStreak(firstFailureAt, failureCount);
+  const resolution = watcherFor(subsystem);
+  if (!resolution.ok) {
+    logger.warn(
+      { subsystem, error: resolution.error },
+      "healthz_rehearsal_inject_unresolvable_watcher",
+    );
+    res
+      .status(resolution.status)
+      .json({ error: resolution.error, detail: resolution.detail });
+    return;
+  }
+  resolution.watcher.__injectStreak(firstFailureAt, failureCount);
 
   const durationMs = now - firstFailureAt;
   logger.warn(
@@ -427,12 +537,22 @@ router.post("/_rehearsal/clear-stuck-degraded", (req, res) => {
   if (!subsystem) {
     res.status(400).json({
       error: "invalid_subsystem",
-      detail: `subsystem must be one of: ${ALLOWED_SUBSYSTEMS.join(", ")}`,
+      detail: invalidSubsystemDetail(),
     });
     return;
   }
-  const watcher = watcherFor(subsystem);
-  watcher.__reset();
+  const resolution = watcherFor(subsystem);
+  if (!resolution.ok) {
+    logger.warn(
+      { subsystem, error: resolution.error },
+      "healthz_rehearsal_clear_unresolvable_watcher",
+    );
+    res
+      .status(resolution.status)
+      .json({ error: resolution.error, detail: resolution.detail });
+    return;
+  }
+  resolution.watcher.__reset();
   logger.info({ subsystem }, "healthz_rehearsal_cleared_stuck_degraded");
   res.json({ status: "cleared", subsystem });
 });

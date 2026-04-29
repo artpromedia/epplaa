@@ -21,9 +21,13 @@ vi.mock("../lib/logger", () => ({
   },
 }));
 
-const { auditHealthWatcher, dbHealthWatcher } = await import(
-  "../lib/subsystemHealth"
-);
+const {
+  auditHealthWatcher,
+  dbHealthWatcher,
+  registerPaymentGatewayWatcher,
+  getPaymentGatewayWatcher,
+  __resetPaymentGatewayWatchersForTests,
+} = await import("../lib/subsystemHealth");
 const {
   auditDlqHealthWatcher,
   __resetAuditDlqMonitorForTests,
@@ -51,6 +55,12 @@ beforeEach(() => {
   dbHealthWatcher.__reset();
   auditHealthWatcher.__reset();
   __resetAuditDlqMonitorForTests();
+  // Clear the payment-gateway watcher registry so a previously-
+  // registered gateway from another test (or from a real `lib/payments.ts`
+  // module-init in the same vitest worker) doesn't leak into the
+  // unregistered-gateway assertions below. Tests that need a watcher
+  // re-register it explicitly via `registerPaymentGatewayWatcher`.
+  __resetPaymentGatewayWatchersForTests();
   vi.useFakeTimers();
   vi.setSystemTime(NOW);
 });
@@ -158,7 +168,45 @@ describe("POST /_rehearsal/inject-stuck-degraded — body validation", () => {
       .send({ subsystem: "audit_chain", firstFailureAt: NOW - 1000 });
     expect(res.status).toBe(400);
     expect(res.body.error).toBe("invalid_subsystem");
+    // The error detail must mention BOTH the fixed subsystems AND the
+    // paymentGateway<Name> pattern so a workflow run that mistypes
+    // (e.g. "paymentgatewayPaystack" with a lowercase 'g') gets a
+    // self-explanatory failure annotation pointing at the regex —
+    // not a silent no-op against the wrong watcher.
+    expect(res.body.detail).toMatch(/paymentGateway/);
+    expect(res.body.detail).toMatch(/auditDlq/);
     expect(injectStreakMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects a malformed paymentGateway<Name> spelling so the regex stays strict", async () => {
+    // The dynamic key convention from `paymentGatewaySubsystemKey` in
+    // lib/subsystemHealth.ts capitalises the gateway name (e.g.
+    // `paymentGatewayPaystack`). Common typos that would otherwise
+    // silently route to the wrong watcher (or, worse, be treated as
+    // an "unregistered" gateway and return a misleading error) must
+    // fall through to invalid_subsystem so the workflow annotation
+    // points at the regex/spelling — not at deploy configuration.
+    for (const bad of [
+      "paymentgatewayPaystack", // lowercase 'g' on Gateway
+      "paymentGatewaypaystack", // lowercase first char of gateway name
+      "paymentGateway", // missing gateway name
+      "paymentGateway-paystack", // hyphen
+      "paymentGatewayPaystack ", // trailing whitespace
+    ]) {
+      registerPaymentGatewayWatcher("paystack");
+      const res = await request(buildApp())
+        .post("/_rehearsal/inject-stuck-degraded")
+        .set("X-Rehearsal-Token", VALID_TOKEN)
+        .send({ subsystem: bad, firstFailureAt: NOW - 1000 });
+      expect(res.status, `bad=${bad}`).toBe(400);
+      expect(res.body.error, `bad=${bad}`).toBe("invalid_subsystem");
+    }
+    expect(injectStreakMock).not.toHaveBeenCalled();
+    // The real paystack watcher we registered for the loop must not
+    // have been touched by any of the malformed names.
+    expect(getPaymentGatewayWatcher("paystack")!.getSnapshot().state).toBe(
+      "healthy",
+    );
   });
 
   it("rejects a non-numeric firstFailureAt", async () => {
@@ -284,6 +332,59 @@ describe("POST /_rehearsal/inject-stuck-degraded — happy paths", () => {
     expect(snap.failureCount).toBe(3);
   });
 
+  it("seeds a registered paymentGateway watcher and reflects in its snapshot", async () => {
+    // Mirrors the db/auditDlq round-trip pattern but for the dynamic
+    // paymentGateway<Name> branch. Register the watcher exactly the
+    // way `lib/payments.ts` does on a staging deploy where the
+    // gateway secret is configured, then drive an inject through the
+    // rehearsal endpoint and assert the watcher's snapshot reflects
+    // the synthetic streak — proving the inject reached the same
+    // watcher that /healthz reports on for that gateway.
+    const watcher = registerPaymentGatewayWatcher("paystack");
+    const firstFailureAt = NOW - 7 * 60 * 1000;
+    const res = await request(buildApp())
+      .post("/_rehearsal/inject-stuck-degraded")
+      .set("X-Rehearsal-Token", VALID_TOKEN)
+      .send({
+        subsystem: "paymentGatewayPaystack",
+        firstFailureAt,
+        failureCount: 4,
+      });
+    expect(res.status).toBe(200);
+    expect(res.body.subsystem).toBe("paymentGatewayPaystack");
+    const snap = watcher.getSnapshot();
+    expect(snap.state).toBe("degraded");
+    expect(snap.firstFailureAt).toBe(firstFailureAt);
+    expect(snap.failureCount).toBe(4);
+  });
+
+  it("returns 400 unregistered_payment_gateway when the gateway has no registered watcher", async () => {
+    // The dev-mock fallback gateway is intentionally unregistered so
+    // a permanently-healthy `paymentGatewayDevmock` /healthz entry
+    // can never appear. The rehearsal must NOT auto-register a
+    // watcher on inject (that would defeat the point) — instead it
+    // must fail loudly so the matrix entry surfaces a clear error
+    // pointing operators at either configuring the secret or
+    // removing the matrix entry, rather than silently mutating a
+    // synthetic watcher that /healthz never reports on.
+    const res = await request(buildApp())
+      .post("/_rehearsal/inject-stuck-degraded")
+      .set("X-Rehearsal-Token", VALID_TOKEN)
+      .send({
+        subsystem: "paymentGatewayDevmock",
+        firstFailureAt: NOW - 1_000,
+      });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("unregistered_payment_gateway");
+    expect(res.body.detail).toMatch(/devmock/);
+    expect(res.body.detail).toMatch(/PAYSTACK_SECRET_KEY/);
+    // No registered watcher was touched — devmock has no watcher and
+    // paystack was never registered in this test, so the registry is
+    // still empty.
+    expect(getPaymentGatewayWatcher("devmock")).toBeUndefined();
+    expect(getPaymentGatewayWatcher("paystack")).toBeUndefined();
+  });
+
   it("defaults failureCount to 1 when omitted or non-positive", async () => {
     for (const fc of [undefined, 0, -5, "nope"]) {
       const res = await request(buildApp())
@@ -360,6 +461,7 @@ describe("POST /_rehearsal/clear-stuck-degraded", () => {
       .send({ subsystem: "audit_chain" });
     expect(res.status).toBe(400);
     expect(res.body.error).toBe("invalid_subsystem");
+    expect(res.body.detail).toMatch(/paymentGateway/);
     expect(resetMock).not.toHaveBeenCalled();
   });
 
@@ -390,6 +492,56 @@ describe("POST /_rehearsal/clear-stuck-degraded", () => {
       firstFailureAt: null,
       lastRecoveredAt: null,
     });
+  });
+
+  it("clears a registered paymentGateway watcher (round-trip restores healthy)", async () => {
+    // Same inject -> clear cycle the rehearsal workflow performs for
+    // a payment gateway. After clear, the watcher snapshot must
+    // return to its pre-rehearsal `healthy` state — a leftover
+    // synthetic streak on a real gateway watcher would cause the
+    // per-minute probe to start paging the on-call channel for an
+    // outage that doesn't exist on the live gateway.
+    const watcher = registerPaymentGatewayWatcher("paystack");
+    await request(buildApp())
+      .post("/_rehearsal/inject-stuck-degraded")
+      .set("X-Rehearsal-Token", VALID_TOKEN)
+      .send({
+        subsystem: "paymentGatewayPaystack",
+        firstFailureAt: NOW - 600_000,
+      });
+    expect(watcher.getSnapshot().state).toBe("degraded");
+
+    const res = await request(buildApp())
+      .post("/_rehearsal/clear-stuck-degraded")
+      .set("X-Rehearsal-Token", VALID_TOKEN)
+      .send({ subsystem: "paymentGatewayPaystack" });
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      status: "cleared",
+      subsystem: "paymentGatewayPaystack",
+    });
+    expect(watcher.getSnapshot()).toEqual({
+      state: "healthy",
+      failureCount: 0,
+      firstFailureAt: null,
+      lastRecoveredAt: null,
+    });
+  });
+
+  it("returns 400 unregistered_payment_gateway on clear so cleanup fails loudly for a missing watcher", async () => {
+    // Symmetric to the inject-side guard: if a matrix entry refers
+    // to a gateway that isn't registered on this deploy, the cleanup
+    // step (always-run() in the workflow) must fail loudly with the
+    // same actionable error rather than silently no-op'ing and
+    // leaving the on-call confused about whether the rehearsal
+    // actually cleaned up after itself.
+    const res = await request(buildApp())
+      .post("/_rehearsal/clear-stuck-degraded")
+      .set("X-Rehearsal-Token", VALID_TOKEN)
+      .send({ subsystem: "paymentGatewayDevmock" });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("unregistered_payment_gateway");
+    expect(res.body.detail).toMatch(/devmock/);
   });
 
   it("clears the auditChain watcher (round-trip with inject seeds then clear restores healthy)", async () => {

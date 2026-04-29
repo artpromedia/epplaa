@@ -29,13 +29,24 @@ name: Rehearse stuck-degraded page (staging, weekly)
 # asserts the expected Sentry event lands, and then clears the streak
 # so staging is healthy again.
 #
-# It rehearses both subsystems exposed by `/healthz`'s `subsystems`
-# map — `rateLimitStore` AND `db` — as separate matrix entries with
-# their own per-subsystem Sentry fingerprints (so a regression in one
-# subsystem's pager wiring can't be masked by the other). The matrix
-# entries are serialised (`max-parallel: 1`) so each one has a clean
-# slate when its inject -> probe -> verify -> clear cycle runs — if
-# they overlapped, the probe's "worst offender" pick could
+# It rehearses every subsystem exposed by `/healthz`'s `subsystems`
+# map that has a per-subsystem Sentry pager wired up — currently
+# `rateLimitStore`, `db`, and one entry per registered payment gateway
+# (`paymentGatewayPaystack`, `paymentGatewayFlutterwave`) — as
+# separate matrix entries with their own per-subsystem Sentry
+# fingerprints (so a regression in one subsystem's pager wiring can't
+# be masked by the other). The payment-gateway entries cover the
+# dynamic `paymentGateway<Name>` keys produced by
+# `paymentGatewaySubsystemKey` in `lib/subsystemHealth.ts`; their
+# watchers are registered at api-server boot only when the gateway's
+# secret (PAYSTACK_SECRET_KEY / FLUTTERWAVE_SECRET_KEY) is configured
+# on the staging deploy, so an entry whose secret isn't configured
+# will fail loudly at the inject step (HTTP 400
+# `unregistered_payment_gateway`) rather than silently no-op'ing —
+# see the `Unregistered gateway` runbook entry. The matrix entries
+# are serialised (`max-parallel: 1`) so each one has a clean slate
+# when its inject -> probe -> verify -> clear cycle runs — if they
+# overlapped, the probe's "worst offender" pick could
 # non-deterministically attribute the page to the other subsystem and
 # the per-entry assertion would flake.
 #
@@ -189,6 +200,40 @@ jobs:
             # never collapses with a concurrent `rateLimitStore`
             # outage in Sentry — on-call needs to see both.
             sentry_fingerprint: stuck_degraded_rehearsal_db
+          # Per-payment-gateway entries — one matrix row per registered
+          # gateway watcher. The `paymentGateway<Name>` subsystem name
+          # mirrors the dynamic key produced by
+          # `paymentGatewaySubsystemKey` in `lib/subsystemHealth.ts`
+          # (capitalised first char of the gateway name) so the inject
+          # endpoint targets the same watcher that /healthz reports
+          # under that key. The dev-mock fallback gateway is
+          # intentionally NOT in this matrix — it has no registered
+          # watcher and would 400 with `unregistered_payment_gateway`.
+          # If you add a new real gateway to lib/payments.ts, mirror
+          # it here AND in the runbook coverage table so the new
+          # pager wiring is rehearsed weekly. If you remove a gateway
+          # (or its secret on staging), remove the corresponding
+          # matrix entry first to stop the workflow from failing
+          # every Sunday on a deliberately-unregistered watcher.
+          - subsystem: paymentGatewayPaystack
+            # Sentry tag values for the Paystack pager. Distinct from
+            # the other gateways so on-call routing rules can fan out
+            # per gateway (a Paystack outage and a Flutterwave outage
+            # don't have the same fix path) and we'd notice if one got
+            # silently merged into the other.
+            sentry_subsystem_tag: payment_gateway_paystack
+            sentry_alert_tag: payment_gateway_paystack_stuck_degraded
+            # Distinct fingerprint per gateway so a Paystack outage
+            # never collapses with a concurrent Flutterwave outage in
+            # Sentry — on-call needs to see both, and a regression
+            # that re-merges them would silently halve future pages.
+            sentry_fingerprint: payment_gateway_paystack_stuck_degraded_rehearsal
+          - subsystem: paymentGatewayFlutterwave
+            # Sentry tag values for the Flutterwave pager. Same per-
+            # gateway-distinct rationale as the Paystack entry above.
+            sentry_subsystem_tag: payment_gateway_flutterwave
+            sentry_alert_tag: payment_gateway_flutterwave_stuck_degraded
+            sentry_fingerprint: payment_gateway_flutterwave_stuck_degraded_rehearsal
 
     env:
       STAGING_BASE_URL: ${{ vars.HEALTHZ_REHEARSAL_STAGING_BASE_URL }}
