@@ -245,6 +245,120 @@ check that the probe URL itself isn't the problem (a flaky probe
 endpoint will spam on-call if every blip pages). Disable the probe
 via its env flag instead.
 
+## Post-deploy wire-shape probe
+
+The post-deploy verification step in `.github/workflows/release.yml`
+runs `check-readyz-dependency-probe-wire-shape.yml` alongside the
+existing `check-production-hostname-pattern.yml` and
+`check-readyz-config.yml` gates. The probe polls the deployed
+`/readyz` URL (`vars.READYZ_URL`, reused from the sibling config
+gates) and asserts the per-probe wire-shape fields surfaced for
+each of `clerk`, `paystack`, `flutterwave`:
+
+| Observed `checks.<name>` | Required `failures.<name>` | Required `config.dependencyProbes.<name>.enabled` |
+| ------------------------ | -------------------------- | ------------------------------------------------- |
+| `"skipped"`              | absent                     | `false`                                           |
+| `"ok"`                   | absent                     | `true`                                            |
+| `"failed"`               | non-empty string           | `true`                                            |
+
+For every probe the gate ALSO asserts that
+`config.dependencyProbes.<name>` has shape
+`{ enabled: boolean, url: string, timeoutMs: number }` — a missing
+or wrong-typed field is a route-side regression and escalates to
+`probe_error` (exit 1).
+
+When `failures.<name>` claims a timeout (the string starts with
+`http_probe_timeout_after_`), it MUST match the documented marker
+shape `/^http_probe_timeout_after_\d+ms$/` — uniform with the
+rate-limit redis probe so log-aggregator queries on the prefix
+`*_timeout_after_*ms` work across probe types. A malformed marker
+(e.g. ms suffix dropped) escalates to `probe_error` rather than
+silently passing.
+
+Exit codes (matches `check-readyz-config.yml`):
+
+- `0` — every probe matches the documented wire shape.
+- `1` — probe error: network failure, non-2xx body that won't parse,
+  missing `config.dependencyProbes` block, or a probe field is in an
+  unrecognised shape (response-shape regression — escalate rather
+  than silently treating it as healthy).
+- `2` — page on-call: at least one probe is in a wire-shape-
+  regressed state. The structured stdout line lists every regressed
+  probe with the observed value so the page body identifies the
+  regression without the on-call having to re-run by hand.
+
+The probe accepts both a `200 ready` and a `503 not_ready` body —
+the per-probe blocks are emitted on both paths, so wire-shape
+assertion continues to fire during a downstream outage (the
+worst-possible time to lose the page).
+
+### Maximising assertion coverage in staging
+
+The gate passes when probes report `"skipped"` (the documented
+state when the env flag is unset) — that's intentional, since
+`"skipped"` is a real production state. To exercise every per-state
+branch (skipped + ok + failed), configure your staging deploy to
+**enable all three probes** with real third-party URLs:
+
+```bash
+READYZ_PROBE_CLERK=1
+READYZ_PROBE_PAYSTACK=1
+READYZ_PROBE_FLUTTERWAVE=1
+# Use the actual third-party endpoints documented in the
+# "Configuration" section above so the probe makes a real outbound
+# request and the gate can observe both ok and failed outcomes.
+```
+
+With all three probes enabled, a route-side regression that
+silently swapped `"ok"` for `"healthy"`, or stopped emitting the
+config sub-block, will be caught on the very next run rather than
+the next time a probe was enabled in production.
+
+### Required CI configuration
+
+| Name                                                              | Type   | Required | Purpose                                                                                                |
+| ----------------------------------------------------------------- | ------ | -------- | ------------------------------------------------------------------------------------------------------ |
+| `vars.READYZ_DEPENDENCY_PROBE_WIRE_SHAPE_PROBE_ENABLED`           | var    | yes      | Set to `"1"` to opt in. Acts as a kill switch — set to anything else to silence the workflow.          |
+| `vars.READYZ_URL`                                                 | var    | yes      | Full URL to `/api/readyz` on the production deployment. Reused from the sibling config gates.          |
+| `vars.READYZ_PROBE_TIMEOUT_MS`                                    | var    | no       | Per-request fetch timeout. Defaults to 5000ms.                                                         |
+| `vars.SENTRY_ORG` / `vars.SENTRY_PROJECT`                         | vars   | no       | Sentry destination. Reused from the release workflow.                                                  |
+| `secrets.READYZ_DEPENDENCY_PROBE_WIRE_SHAPE_SENTRY_DSN`           | secret | no       | DSN used by sentry-cli to post the page event AND send Sentry Cron monitor check-ins. When unset, the workflow falls back to the GitHub failed-workflow notification. |
+
+### Re-run triggers
+
+Re-run manually via the `workflow_dispatch` entry on the
+`Readyz dependency-probe wire-shape (post-deploy + cron)` workflow
+after editing:
+
+- `artifacts/api-server/src/lib/dependencyProbes.ts` — the probe
+  source (assertion logic the gate reads on the deployed surface).
+- `artifacts/api-server/src/routes/health.ts` — the probe assembly
+  block. A change to how `checks.<name>` / `failures.<name>` /
+  `config.dependencyProbes.<name>` are populated would surface
+  here.
+- `artifacts/api-server/src/scripts/checkReadyzDependencyProbeWireShape.ts`
+  — the gate itself. Re-run to confirm the new logic still passes
+  on staging before the next deploy.
+
+A 15-minute cron (`*/15 * * * *`) backstops a deploy that bypassed
+the post-deploy gate (e.g. emergency rollback via the platform UI),
+or a wire-shape regression introduced by a dependency upgrade that
+re-shaped the response without changing the route source. The
+Sentry Cron monitor `check-readyz-dependency-probe-wire-shape`
+(configured in the Sentry UI) pages on missed check-ins, so a
+disabled or stuck workflow surfaces independently of the in-loop
+`send-event` path.
+
+### Adding a new dependency probe
+
+When adding a new dependency probe (a fourth name beyond
+`clerk` / `paystack` / `flutterwave`), extend the `PROBES` export
+in `checkReadyzDependencyProbeWireShape.ts`. Its sibling test pins
+the closed set, so a new probe MUST be added to both before this
+gate will pass — the test is intentionally a documentation lock so
+a new probe lands in the runbook, the gate, and the route in
+lockstep.
+
 ## Related runbooks
 
 - [`rate-limit-store.md`](./rate-limit-store.md) — the always-on Redis

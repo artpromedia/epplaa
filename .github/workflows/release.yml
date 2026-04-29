@@ -158,3 +158,36 @@ jobs:
     if: always()
     uses: ./.github/workflows/check-readyz-config.yml
     secrets: inherit
+
+  # /readyz dependency-probe wire-shape probe (Task #122).
+  #
+  # Sibling of the two post-deploy config-check jobs above: polls
+  # the deployed /readyz URL (vars.READYZ_URL) and asserts the
+  # per-probe wire-shape fields (`checks.<name>` / `failures.<name>` /
+  # `config.dependencyProbes.<name>`) for clerk, paystack, and
+  # flutterwave match the contract documented in
+  # `docs/runbooks/readyz-dependency-probes.md`. Where the config-
+  # block gates assert operator-set boot-time values, this gate
+  # asserts the per-probe response shape itself — a route-side
+  # refactor that renamed a checks value, dropped a config field,
+  # or stopped emitting the `http_probe_timeout_after_<n>ms` marker
+  # would slip past unit tests (which stub fetch via `vi.stubGlobal`)
+  # and only show up the next time a probe was enabled in production.
+  #
+  # `needs: sentry-release` matches the sibling post-deploy gates
+  # so all three run after release tagging. `if: always()` ensures
+  # the gate still runs when `sentry-release` is skipped (Sentry
+  # vars unset) or fails — the wire-shape check is independent of
+  # Sentry release tagging and must not be silently bypassed by an
+  # unrelated upstream failure. `secrets: inherit` mirrors the
+  # sibling config-gate jobs so the called workflow can read
+  # `secrets.READYZ_DEPENDENCY_PROBE_WIRE_SHAPE_SENTRY_DSN` for
+  # Sentry forwarding + cron-monitor heartbeat. The full rationale
+  # and the "When to re-run" triggers live in the called workflow's
+  # header comment and the runbook section above.
+  post-deploy-readyz-dependency-probe-wire-shape-check:
+    name: Post-deploy wire-shape check (/readyz dependency probes)
+    needs: sentry-release
+    if: always()
+    uses: ./.github/workflows/check-readyz-dependency-probe-wire-shape.yml
+    secrets: inherit

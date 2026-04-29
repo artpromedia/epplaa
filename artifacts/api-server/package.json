@@ -13,6 +13,7 @@
     "check-production-hostname-pattern": "tsx ./src/scripts/checkProductionHostnamePattern.ts",
     "check-rate-limit-opt-out-inventory-drift": "tsx ./src/scripts/checkRateLimitOptOutInventoryDrift.ts",
     "check-readyz-config": "tsx ./src/scripts/checkReadyzConfig.ts",
+    "check-readyz-dependency-probe-wire-shape": "tsx ./src/scripts/checkReadyzDependencyProbeWireShape.ts",
     "backfill-stream-owners": "tsx ./src/scripts/backfill-stream-owners.ts"
   },
   "dependencies": {
