@@ -12,6 +12,7 @@ import { clerkMiddleware } from "@clerk/express";
 import router from "./routes";
 import webhooksRouter from "./routes/webhooks";
 import fulfillmentWebhooksRouter from "./routes/fulfillmentWebhooks";
+import streamingWebhooksRouter from "./routes/streamingWebhooks";
 import { logger } from "./lib/logger";
 import { CLERK_PROXY_PATH, clerkProxyMiddleware } from "./middlewares/clerkProxyMiddleware";
 import { seedDatabaseIfEmpty } from "./lib/seed";
@@ -59,6 +60,15 @@ app.use(
   "/api/fulfillment/webhooks",
   express.raw({ type: "*/*", limit: "1mb" }),
   fulfillmentWebhooksRouter,
+);
+
+// Cloudflare Stream notification webhook. Same raw-body requirement as
+// payment + carrier webhooks so the HMAC over the exact wire bytes can
+// be verified before the JSON parser reformats them.
+app.use(
+  "/api/streaming/webhooks",
+  express.raw({ type: "*/*", limit: "1mb" }),
+  streamingWebhooksRouter,
 );
 
 // Strict transport + content-security headers. Mounted AFTER raw-body

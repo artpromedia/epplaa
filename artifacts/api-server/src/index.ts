@@ -3,6 +3,7 @@ import { logger } from "./lib/logger";
 import { assertStubFulfillmentSafe } from "./lib/fulfillment/bootGuard";
 import { assertOkHiConfiguredForProduction } from "./lib/fulfillment/okhi";
 import { assertShipbubbleConfiguredForProduction } from "./lib/fulfillment/shipbubble";
+import { assertCloudflareStreamWebhookConfiguredForProduction } from "./lib/streaming";
 import { assertInternalApiKeyConfiguredForProduction } from "./lib/internalApiKey";
 import { assertMfaEncryptionKeyConfiguredForProduction } from "./lib/mfa";
 import { assertTermiiConfiguredForProduction } from "./lib/notifications/termii";
@@ -190,6 +191,19 @@ assertOkHiConfiguredForProduction(process.env, logger);
 // secret inbound tracking events fail signature verification and are
 // silently dropped. See docs/runbooks/production-secrets.md.
 assertShipbubbleConfiguredForProduction(process.env, logger);
+
+// Boot-time sanity check (Task #23): on production-shaped deploys with
+// the Cloudflare Stream provider enabled (CF_STREAM_API_TOKEN +
+// CF_STREAM_ACCOUNT_ID set), warn loudly if CF_STREAM_WEBHOOK_SECRET
+// is unset. Without the shared secret the inbound CF webhook handler
+// refuses every request with 503, so video-ready notifications are
+// dropped and replays never get persisted from real broadcasts (the
+// stop-endpoint poll fallback in lib/replayPersist.ts only catches the
+// case where the recording has already finalized by the time the
+// seller hits stop, which is unreliable). Warning, not a hard failure
+// — a deploy that intentionally hasn't migrated off the stub provider
+// shouldn't crash on this. See docs/runbooks/production-secrets.md.
+assertCloudflareStreamWebhookConfiguredForProduction(process.env, logger);
 
 // Test-only affordance for `src/index.boot.test.ts` (task #92). When set
 // to the exact sentinel value below, the entrypoint exits cleanly AFTER

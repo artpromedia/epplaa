@@ -1,4 +1,5 @@
 import { logger } from "./logger";
+import { detectNonHostnameProductionSignals } from "./productionSignals";
 
 // Cloudflare Stream provider, with a deterministic stub when
 // CF_STREAM_API_TOKEN/CF_STREAM_ACCOUNT_ID aren't set.
@@ -89,6 +90,30 @@ interface CfLiveInputVideosResponse {
   }>;
 }
 
+interface CfVideoResponse {
+  result: {
+    uid: string;
+    duration?: number;
+    thumbnail?: string;
+    playback?: { hls?: string };
+    created?: string;
+    status?: { state?: string };
+    liveInput?: string;
+    meta?: Record<string, unknown>;
+  };
+}
+
+export interface CloudflareVideo {
+  uid: string;
+  hlsUrl: string;
+  thumbnailUrl: string;
+  durationSeconds: number;
+  recordedAt: string;
+  state: string;
+  liveInputUid: string;
+  meta: Record<string, unknown>;
+}
+
 export async function createLiveInput(input: LiveInputCreate): Promise<LiveInput> {
   if (selectProvider() === "stub") return stubLiveInput(input);
   try {
@@ -161,6 +186,34 @@ export async function listRecordedVideos(uid: string): Promise<RecordedVideo[]> 
   }
 }
 
+// Fetch a single VOD by its Cloudflare Stream video uid. Used by the
+// inbound CF Stream webhook handler to pull authoritative status +
+// playback metadata after a "video ready" notification arrives, since
+// the webhook payload itself can race against CF eventually-consistent
+// edges. Returns null when the provider is in stub mode or the lookup
+// fails for any reason — the caller (webhook handler) decides whether
+// that's fatal.
+export async function getCloudflareVideo(videoUid: string): Promise<CloudflareVideo | null> {
+  if (selectProvider() === "stub") return null;
+  try {
+    const data = (await cfFetch(`/stream/${videoUid}`, { method: "GET" })) as CfVideoResponse;
+    const r = data.result;
+    return {
+      uid: r.uid,
+      hlsUrl: r.playback?.hls ?? "",
+      thumbnailUrl: r.thumbnail ?? "",
+      durationSeconds: Math.max(0, Math.floor(Number(r.duration ?? 0))),
+      recordedAt: r.created ?? new Date().toISOString(),
+      state: r.status?.state ?? "",
+      liveInputUid: r.liveInput ?? "",
+      meta: (r.meta ?? {}) as Record<string, unknown>,
+    };
+  } catch (err) {
+    logger.error({ err: (err as Error).message, videoUid }, "cf_stream_get_video_failed");
+    return null;
+  }
+}
+
 export async function deleteLiveInput(uid: string): Promise<void> {
   if (selectProvider() === "stub") return;
   try {
@@ -172,4 +225,63 @@ export async function deleteLiveInput(uid: string): Promise<void> {
 
 export function streamingProvider(): "stub" | "cloudflare" {
   return selectProvider();
+}
+
+/**
+ * Boot-time sanity check (Task #23): on production-shaped deploys with
+ * the Cloudflare provider enabled (CF_STREAM_API_TOKEN +
+ * CF_STREAM_ACCOUNT_ID set), warn loudly if CF_STREAM_WEBHOOK_SECRET
+ * is unset. Without the shared secret the inbound webhook handler
+ * (routes/streamingWebhooks.ts) refuses every request with 503, so
+ * Cloudflare's "video ready" notifications are dropped and replays
+ * never get persisted from real broadcasts. Operators see broken
+ * replays only after the first stream — the boot warn moves the
+ * misconfiguration upstream of the first failure.
+ *
+ * Pure function — takes `env` and a `log` sink so the unit test can
+ * exercise the staging-skipped, stub-skipped, and configured-silent
+ * paths without poisoning `process.env`.
+ */
+export type CloudflareStreamWebhookConfigOutcome =
+  | { ok: true }
+  | { ok: false; reason: string };
+
+export function assertCloudflareStreamWebhookConfiguredForProduction(
+  env: NodeJS.ProcessEnv,
+  log: { warn: (obj: unknown, msg: string) => void },
+): CloudflareStreamWebhookConfigOutcome {
+  const productionSignals = detectNonHostnameProductionSignals(env);
+  if (productionSignals.length === 0) return { ok: true };
+  const apiToken = (env.CF_STREAM_API_TOKEN ?? "").trim();
+  const accountId = (env.CF_STREAM_ACCOUNT_ID ?? "").trim();
+  // Only warn when CF provider is actually enabled — a production deploy
+  // that intentionally hasn't wired Cloudflare Stream yet (stub mode)
+  // shouldn't see a noisy warn for a webhook secret it doesn't need.
+  if (apiToken === "" || accountId === "") return { ok: true };
+  const webhookSecret = (env.CF_STREAM_WEBHOOK_SECRET ?? "").trim();
+  if (webhookSecret !== "") return { ok: true };
+  const signalDetails = productionSignals.map((s) => s.detail).join("; ");
+  const reason =
+    "CF_STREAM_WEBHOOK_SECRET not set on this production deploy. " +
+    "The Cloudflare Stream provider is enabled (CF_STREAM_API_TOKEN + " +
+    "CF_STREAM_ACCOUNT_ID are set) but without the shared secret the " +
+    "inbound /api/streaming/webhooks/cloudflare handler refuses every " +
+    "request with 503, so Cloudflare's video-ready notifications are " +
+    "dropped and replays never get persisted from real broadcasts. " +
+    `Detected production signal(s): ${signalDetails}. ` +
+    "Set the missing env var — see docs/runbooks/production-secrets.md " +
+    "(Cloudflare Stream section).";
+  log.warn(
+    {
+      node_env: env.NODE_ENV,
+      replit_deployment: env.REPLIT_DEPLOYMENT,
+      deployment_environment: env.DEPLOYMENT_ENVIRONMENT,
+      cf_stream_api_token: "[set]",
+      cf_stream_account_id: "[set]",
+      cf_stream_webhook_secret: null,
+      production_signals: productionSignals.map((s) => s.signal),
+    },
+    `cf_stream_webhook_secret_missing_for_production: ${reason}`,
+  );
+  return { ok: false, reason };
 }

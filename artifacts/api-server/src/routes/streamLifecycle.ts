@@ -4,6 +4,7 @@ import { db, schema } from "../lib/db";
 import { requireUserId } from "../lib/auth";
 import { newSafeId } from "../lib/ids";
 import { createLiveInput, rotateStreamKey, streamingProvider } from "../lib/streaming";
+import { cloudflareWebhookConfigured } from "./streamingWebhooks";
 import { currentKycTier } from "../lib/kyc";
 import { sellerSanctionsBlocked } from "../lib/sanctions";
 import { persistReplayForEndedStream } from "../lib/replayPersist";
@@ -418,7 +419,10 @@ router.get("/streams/:streamId/reactions/recent", async (req, res) => {
 });
 
 router.get("/streams/_provider/info", async (_req, res) => {
-  res.json({ provider: streamingProvider() });
+  res.json({
+    provider: streamingProvider(),
+    webhookConfigured: cloudflareWebhookConfigured(),
+  });
 });
 
 function toStreamWithSecrets(row: typeof schema.streamsTable.$inferSelect) {

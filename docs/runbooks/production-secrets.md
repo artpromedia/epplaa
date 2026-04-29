@@ -43,6 +43,8 @@ outage.
 | `PAYSTACK_SECRET_KEY`, `FLUTTERWAVE_SECRET_KEY`, `FLUTTERWAVE_WEBHOOK_HASH` | If neither real gateway is configured, payments fall back to `DevMockGateway` which always returns `{ ok: true }` without touching a real card; if Flutterwave is the only gateway, missing `FLUTTERWAVE_WEBHOOK_HASH` means webhooks cannot be verified (silent settlement loss). | ✅ **Warns at boot** via `assertPaymentProviderConfiguredForProduction` (this runbook). | `lib/payments.ts`, alert tag `payment_provider_missing_for_production`. |
 | `SHIPBUBBLE_API_KEY`, `SHIPBUBBLE_SENDER_CODE`, `SHIPBUBBLE_WEBHOOK_SECRET` | Shipping returns three deterministic stub rates and orders ship under fake tracking numbers; missing webhook secret means inbound tracking events fail signature verification and are silently dropped. | ✅ **Warns at boot** via `assertShipbubbleConfiguredForProduction` (this runbook). | `lib/fulfillment/shipbubble.ts`, alert tag `shipbubble_credentials_missing_for_production`. |
 | `OKHI_API_KEY`, `OKHI_BRANCH_ID` | Address verification returns a deterministic stub place id with 100% confidence — the verification gate becomes trivially bypassable. The runtime production-signal guard refuses the stub at first call (5xx), but boot looks healthy until then. | ✅ **Warns at boot** via `assertOkHiConfiguredForProduction` (this runbook). | `lib/fulfillment/okhi.ts`, alert tag `okhi_credentials_missing_for_production`. |
+| `CF_STREAM_API_TOKEN`, `CF_STREAM_ACCOUNT_ID` | Live streaming falls back to a deterministic stub provider (no real RTMP ingest, no playable HLS, no recording). Sellers cannot actually go live. | ❌ Silent feature degradation — covered indirectly by the `webhookConfigured` UI badge in the seller go-live page. *Future candidate (lower-severity).* | n/a. |
+| `CF_STREAM_WEBHOOK_SECRET` | When the CF Stream provider IS enabled, the inbound `/api/streaming/webhooks/cloudflare` handler refuses every request with 503 — Cloudflare's "video ready" notifications are dropped and replays never get persisted from real broadcasts. | ✅ **Warns at boot** via `assertCloudflareStreamWebhookConfiguredForProduction` (this runbook). Only fires when `CF_STREAM_API_TOKEN + CF_STREAM_ACCOUNT_ID` are set; stub deploys stay silent. | `lib/streaming.ts`, alert tag `cf_stream_webhook_secret_missing_for_production`. |
 | `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY` | Web-push notifications are no-ops. | ❌ Silent feature degradation. *Future candidate (lower-severity).* | n/a. |
 | `SENTRY_RELEASE` | Optional release tag — Sentry events are still captured, just not grouped by release. | n/a (optional). | n/a. |
 
@@ -72,6 +74,7 @@ itself into the structured log payload.
 | Payments (PAYSTACK / FLUTTERWAVE) | `assertPaymentProviderConfiguredForProduction` | [`artifacts/api-server/src/lib/payments.ts`](../../artifacts/api-server/src/lib/payments.ts) | ✅ | `payment_provider_missing_for_production` |
 | OkHi (OKHI_API_KEY + OKHI_BRANCH_ID) | `assertOkHiConfiguredForProduction` | [`artifacts/api-server/src/lib/fulfillment/okhi.ts`](../../artifacts/api-server/src/lib/fulfillment/okhi.ts) | ✅ | `okhi_credentials_missing_for_production` |
 | Shipbubble (API_KEY + SENDER_CODE + WEBHOOK_SECRET) | `assertShipbubbleConfiguredForProduction` | [`artifacts/api-server/src/lib/fulfillment/shipbubble.ts`](../../artifacts/api-server/src/lib/fulfillment/shipbubble.ts) | ✅ | `shipbubble_credentials_missing_for_production` |
+| Cloudflare Stream webhook (CF_STREAM_WEBHOOK_SECRET, when CF_STREAM_API_TOKEN + CF_STREAM_ACCOUNT_ID are set) | `assertCloudflareStreamWebhookConfiguredForProduction` | [`artifacts/api-server/src/lib/streaming.ts`](../../artifacts/api-server/src/lib/streaming.ts) | ✅ | `cf_stream_webhook_secret_missing_for_production` |
 
 Each helper detects production-shape via
 `detectNonHostnameProductionSignals` (any of `NODE_ENV=production`,
@@ -453,6 +456,62 @@ In the log aggregator (backstop):
 - Filter: `source:api-server message:"shipbubble_credentials_missing_for_production"`.
 - Trigger when count > 0 over a 5-minute window.
 - Route to the api-server on-call rotation; severity = sev-1.
+
+### Cloudflare Stream (`CF_STREAM_WEBHOOK_SECRET`, when `CF_STREAM_API_TOKEN` + `CF_STREAM_ACCOUNT_ID` are set)
+
+**What:**
+
+- Without `CF_STREAM_API_TOKEN` + `CF_STREAM_ACCOUNT_ID` the streaming
+  provider falls back to a deterministic stub (no real RTMP ingest, no
+  playable HLS, no recording). This is the dev / staging default and
+  is intentionally tolerated on production-shaped boots — a deploy
+  that hasn't migrated off the stub yet shouldn't see a noisy boot
+  warn for a webhook secret it can't yet use.
+- When the CF Stream provider IS enabled, missing
+  `CF_STREAM_WEBHOOK_SECRET` causes the inbound
+  `/api/streaming/webhooks/cloudflare` handler to refuse every request
+  with `503 webhook_secret_not_configured`. Cloudflare's "video
+  ready" notifications are dropped, so the replay row + `cf_video_uid`
+  + `hls_url` columns on the stream are never persisted. The
+  best-effort poll-on-stop fallback in
+  `lib/replayPersist.ts:persistReplayForEndedStream` only catches the
+  case where the recording has already finalized at CF by the time the
+  seller hits stop, which is unreliable for any non-trivial broadcast.
+- The shared secret is provisioned by calling
+  `PUT /accounts/{account}/stream/webhook` with the public-facing
+  webhook URL — Cloudflare returns the secret string in the response.
+  Store it as `CF_STREAM_WEBHOOK_SECRET` in the deploy's secret
+  store; never commit it.
+
+**Blast radius:** silent loss of every recorded broadcast on a real
+production deploy that has otherwise migrated to the Cloudflare
+provider. The seller and viewer-facing live experience still works,
+so the misconfiguration only surfaces when a buyer tries to watch a
+replay (or never does).
+
+**Boot-time signal:** `logger.warn` with message tag
+`cf_stream_webhook_secret_missing_for_production` and a structured
+payload of `{ node_env, replit_deployment, deployment_environment, cf_stream_api_token, cf_stream_account_id, cf_stream_webhook_secret, production_signals }`.
+None of the secret values are ever logged — `cf_stream_webhook_secret`
+is always `null` (because that's the failure case being warned), and
+`cf_stream_api_token` / `cf_stream_account_id` are reported as `"[set]"`.
+
+**Alert wiring (Sentry — primary):**
+
+In Sentry:
+
+- Issue alert: `level:warning message:"cf_stream_webhook_secret_missing_for_production"`.
+- Trigger immediately on first event seen.
+- Route to the api-server on-call rotation; severity = sev-2
+  (silent feature degradation — replays don't persist, but live
+  ingest still works).
+- Annotate with a link back to this runbook.
+
+In the log aggregator (backstop):
+
+- Filter: `source:api-server message:"cf_stream_webhook_secret_missing_for_production"`.
+- Trigger when count > 0 over a 5-minute window.
+- Route to the api-server on-call rotation; severity = sev-2.
 
 ## What to do when one of these alerts fires
 

@@ -2880,9 +2880,10 @@ components:
         fanout: { type: boolean }
     StreamingProviderInfo:
       type: object
-      required: [provider]
+      required: [provider, webhookConfigured]
       properties:
         provider: { type: string, enum: [stub, cloudflare] }
+        webhookConfigured: { type: boolean }
     StreamWithSecrets:
       type: object
       required: [id, title, hostName, hostAvatar, posterImage, status, isLive, provider, currentViewers, peakViewers, slowModeSeconds, bannedWords]

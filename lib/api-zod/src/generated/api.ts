@@ -279,6 +279,7 @@ export const SellerGoLiveBroadcastResponse = zod.object({
 
 export const GetStreamingProviderInfoResponse = zod.object({
   provider: zod.enum(["stub", "cloudflare"]),
+  webhookConfigured: zod.boolean(),
 });
 
 export const StartStreamParams = zod.object({

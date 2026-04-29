@@ -752,6 +752,7 @@ export const StreamingProviderInfoProvider = {
 
 export interface StreamingProviderInfo {
   provider: StreamingProviderInfoProvider;
+  webhookConfigured: boolean;
 }
 
 export type StreamWithSecretsStatus =
