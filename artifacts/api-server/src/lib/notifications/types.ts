@@ -9,6 +9,15 @@ export interface NotificationMessage {
   body: string;
   url?: string;
   payload?: Record<string, unknown>;
+  /**
+   * Originating outbox event type. Optional so existing callers
+   * (tests, ad-hoc sends) keep working, but the outbox always
+   * populates it so adapters can pick a variant — e.g. the email
+   * adapters render `mfa_activated` and `mfa_backup_codes_regenerated`
+   * with the branded "security alert" template instead of the
+   * default transactional shell.
+   */
+  eventType?: EventType;
 }
 
 export interface SendResult {

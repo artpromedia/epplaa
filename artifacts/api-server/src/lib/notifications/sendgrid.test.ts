@@ -16,6 +16,7 @@ describe("SendGridEmailChannel", () => {
     delete process.env.EMAIL_FROM;
     delete process.env.EMAIL_REPLY_TO;
     delete process.env.EMAIL_LINK_BASE_URL;
+    delete process.env.EMAIL_SUPPORT_ADDRESS;
   });
 
   afterEach(() => {
@@ -76,6 +77,62 @@ describe("SendGridEmailChannel", () => {
     expect(body.content[1].type).toBe("text/html");
     expect(body.content[1].value).toContain("https://epplaa.com/account/security");
     expect(body.content[1].value).toContain("Manage backup codes");
+  });
+
+  it("send() renders mfa_activated with the security variant (alert ribbon, signature, support contact)", async () => {
+    process.env.SENDGRID_API_KEY = "SG.test-key";
+    process.env.EMAIL_LINK_BASE_URL = "https://epplaa.com";
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response("", { status: 202, headers: { "x-message-id": "sg-sec-1" } }),
+    );
+    const r = await new SendGridEmailChannel().send({
+      to: "buyer@example.com",
+      title: "Two-factor sign-in is now on for your account",
+      body: "You've enabled an authenticator app for two-factor sign-in.",
+      url: "/account/security",
+      eventType: "mfa_activated",
+    });
+    expect(r.ok).toBe(true);
+    const body = JSON.parse(String(fetchMock.mock.calls[0]![1]?.body ?? "{}"));
+    const html = body.content[1].value as string;
+    const text = body.content[0].value as string;
+    expect(html).toContain("Security alert");
+    expect(html).toContain("— The Epplaa Security Team");
+    expect(html).toContain('href="mailto:support@epplaa.com"');
+    expect(html).toContain("Review your security settings");
+    expect(html).not.toContain("Manage backup codes");
+    expect(text).toContain("[ SECURITY ALERT ]");
+    expect(text).toContain("— The Epplaa Security Team");
+  });
+
+  it("send() renders mfa_backup_codes_regenerated with the When/IP/Device meta-table", async () => {
+    process.env.SENDGRID_API_KEY = "SG.test-key";
+    process.env.EMAIL_LINK_BASE_URL = "https://epplaa.com";
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response("", { status: 202, headers: { "x-message-id": "sg-sec-2" } }),
+    );
+    const r = await new SendGridEmailChannel().send({
+      to: "buyer@example.com",
+      title: "Your MFA backup codes were regenerated",
+      body: "A fresh set of two-factor backup codes was just generated for your account.",
+      url: "/account/security",
+      eventType: "mfa_backup_codes_regenerated",
+      payload: {
+        ipAddress: "203.0.113.10",
+        userAgent: "Mozilla/5.0 (X11; Linux x86_64)",
+        occurredAt: "2026-04-29T14:32:10.000Z",
+      },
+    });
+    expect(r.ok).toBe(true);
+    const body = JSON.parse(String(fetchMock.mock.calls[0]![1]?.body ?? "{}"));
+    const html = body.content[1].value as string;
+    const text = body.content[0].value as string;
+    expect(html).toContain("2026-04-29 14:32:10 UTC");
+    expect(html).toContain("203.0.113.10");
+    expect(html).toContain("Mozilla/5.0 (X11; Linux x86_64)");
+    expect(text).toContain("When: 2026-04-29 14:32:10 UTC");
+    expect(text).toContain("IP: 203.0.113.10");
+    expect(text).toContain("Device: Mozilla/5.0 (X11; Linux x86_64)");
   });
 
   it("send() returns ok:false with the SendGrid status + first error message on non-2xx", async () => {

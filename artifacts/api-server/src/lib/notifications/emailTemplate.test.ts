@@ -138,6 +138,145 @@ describe("renderEpplaaEmail — branded template renderer", () => {
     expect(out.html).toContain("you can safely ignore it.");
     expect(out.html).toContain("&copy; Epplaa");
   });
+
+  // ---------- security variant ----------
+  // The security variant is shared by `mfa_activated` and
+  // `mfa_backup_codes_regenerated`. These tests pin the contract that
+  // (a) the alert ribbon, meta-table, signature, and support contact
+  // are all present when requested, (b) blank meta-line values are
+  // dropped (so we never render "IP: unknown"), and (c) recipient-
+  // controlled meta-line content is escaped.
+  describe("variant: security", () => {
+    it("renders the Security alert ribbon and amber accent strip", () => {
+      const out = renderEpplaaEmail({
+        title: "Two-factor sign-in is now on for your account",
+        body: "You've enabled an authenticator app.",
+        ctaUrl: "/account/security",
+        linkBaseUrl: "https://epplaa.com",
+        variant: "security",
+        signature: "— The Epplaa Security Team",
+        supportEmail: "support@epplaa.com",
+      });
+      expect(out.html).toContain("Security alert");
+      expect(out.html).toContain("background-color:#fff4e0");
+      expect(out.text).toContain("[ SECURITY ALERT ]");
+    });
+
+    it("renders the security-team signature beneath the CTA", () => {
+      const out = renderEpplaaEmail({
+        title: "Your MFA backup codes were regenerated",
+        body: "A fresh set of backup codes was generated.",
+        ctaUrl: "/account/security",
+        linkBaseUrl: "https://epplaa.com",
+        variant: "security",
+        signature: "— The Epplaa Security Team",
+      });
+      expect(out.html).toContain("— The Epplaa Security Team");
+      expect(out.text).toContain("— The Epplaa Security Team");
+    });
+
+    it("renders the Need help? support contact line in the footer", () => {
+      const out = renderEpplaaEmail({
+        title: "t",
+        body: "b",
+        linkBaseUrl: "https://epplaa.com",
+        variant: "security",
+        supportEmail: "support@epplaa.com",
+      });
+      expect(out.html).toContain('href="mailto:support@epplaa.com"');
+      expect(out.html).toContain("Need help? Contact");
+      expect(out.text).toContain("Need help? Contact support@epplaa.com.");
+    });
+
+    it("omits the support line when the address is malformed (fail-closed)", () => {
+      const out = renderEpplaaEmail({
+        title: "t",
+        body: "b",
+        linkBaseUrl: "https://epplaa.com",
+        variant: "security",
+        supportEmail: "not-an-email",
+      });
+      expect(out.html).not.toContain("Need help? Contact");
+      expect(out.html).not.toContain("mailto:not-an-email");
+    });
+
+    it("renders meta lines as a key/value table and mirrors them in the text part", () => {
+      const out = renderEpplaaEmail({
+        title: "Your MFA backup codes were regenerated",
+        body: "A fresh set of backup codes was generated.",
+        ctaUrl: "/account/security",
+        linkBaseUrl: "https://epplaa.com",
+        variant: "security",
+        metaLines: [
+          { label: "When", value: "2026-04-29 14:32:10 UTC" },
+          { label: "IP", value: "203.0.113.10" },
+          { label: "Device", value: "Mozilla/5.0 (Macintosh)" },
+        ],
+      });
+      expect(out.html).toMatch(/>\s*When\s*<\/td>/);
+      expect(out.html).toContain("2026-04-29 14:32:10 UTC");
+      expect(out.html).toContain("203.0.113.10");
+      expect(out.html).toContain("Mozilla/5.0 (Macintosh)");
+      expect(out.text).toContain("When: 2026-04-29 14:32:10 UTC");
+      expect(out.text).toContain("IP: 203.0.113.10");
+      expect(out.text).toContain("Device: Mozilla/5.0 (Macintosh)");
+    });
+
+    it("drops meta lines whose value is empty/whitespace (no 'unknown' leaks)", () => {
+      const out = renderEpplaaEmail({
+        title: "t",
+        body: "b",
+        linkBaseUrl: "https://epplaa.com",
+        variant: "security",
+        metaLines: [
+          { label: "When", value: "2026-04-29 14:32:10 UTC" },
+          { label: "IP", value: "" },
+          { label: "Device", value: "   " },
+        ],
+      });
+      expect(out.html).toContain("2026-04-29 14:32:10 UTC");
+      expect(out.html).not.toMatch(/>\s*IP\s*</);
+      expect(out.html).not.toMatch(/>\s*Device\s*</);
+      expect(out.text).not.toContain("IP:");
+      expect(out.text).not.toContain("Device:");
+    });
+
+    it("escapes meta-line label/value content (HTML injection through user-agent string)", () => {
+      const out = renderEpplaaEmail({
+        title: "t",
+        body: "b",
+        linkBaseUrl: "https://epplaa.com",
+        variant: "security",
+        metaLines: [
+          { label: "Device", value: '<img src=x onerror="alert(1)">' },
+        ],
+      });
+      expect(out.html).not.toContain('<img src=x');
+      expect(out.html).toContain("&lt;img src=x onerror=&quot;alert(1)&quot;&gt;");
+    });
+
+    it("default variant ignores supportEmail / signature / metaLines (back-compat)", () => {
+      // The nudge email (`mfa_backup_codes_low`) renders the default
+      // variant. Even if some future caller passes security fields by
+      // mistake, the default chrome must not silently start showing
+      // them — that would change a contract the existing snapshot
+      // tests pin.
+      const out = renderEpplaaEmail({
+        title: "Your MFA backup codes are running low",
+        body: "You have 2 backup codes left.",
+        ctaUrl: "/account/security",
+        linkBaseUrl: "https://epplaa.com",
+        // intentionally NOT setting variant — defaults to "default"
+        signature: "should be ignored",
+        supportEmail: "support@epplaa.com",
+        metaLines: [{ label: "IP", value: "1.2.3.4" }],
+      });
+      expect(out.html).not.toContain("Security alert");
+      expect(out.html).not.toContain("should be ignored");
+      expect(out.html).not.toContain("Need help? Contact");
+      expect(out.html).not.toContain("1.2.3.4");
+    });
+  });
 });
 
 describe("resolveCtaUrl — link base resolution + scheme allowlist", () => {

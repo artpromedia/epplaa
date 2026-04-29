@@ -16,6 +16,10 @@ import type {
   NotificationMessage,
 } from "./types";
 
+// `EventType` is imported above for the public `EnqueueArgs.eventType`;
+// reference it again here so the explicit cast we use to retag
+// `row.eventType` (typed as the wider DB column string) is type-safe.
+
 const MAX_ATTEMPTS = 6;
 const BACKOFF_MS = [60_000, 5 * 60_000, 30 * 60_000, 2 * 3600_000, 6 * 3600_000, 24 * 3600_000];
 // If a row sits in `processing` for longer than this it is assumed orphaned
@@ -215,7 +219,14 @@ export async function drainOutbox(): Promise<{ delivered: number; failed: number
                 endpoint: t.endpoint || t.token,
                 keys: { p256dh: t.p256dh, auth: t.auth },
               });
-        const msg: NotificationMessage = { to, title, body, url, payload };
+        const msg: NotificationMessage = {
+          to,
+          title,
+          body,
+          url,
+          payload,
+          eventType: row.eventType as EventType,
+        };
         const result = await adapter.send(msg);
         if (result.ok) {
           anyOk = true;
@@ -271,7 +282,14 @@ export async function drainOutbox(): Promise<{ delivered: number; failed: number
         continue;
       }
       const adapter = resolveChannel("email");
-      const result = await adapter.send({ to: u.email, title, body, url, payload });
+      const result = await adapter.send({
+        to: u.email,
+        title,
+        body,
+        url,
+        payload,
+        eventType: row.eventType as EventType,
+      });
       if (result.ok) {
         delivered++;
         await db
@@ -325,7 +343,14 @@ export async function drainOutbox(): Promise<{ delivered: number; failed: number
     }
 
     const adapter = resolveChannel(ch);
-    const result = await adapter.send({ to, title, body, url, payload });
+    const result = await adapter.send({
+      to,
+      title,
+      body,
+      url,
+      payload,
+      eventType: row.eventType as EventType,
+    });
     if (result.ok) {
       delivered++;
       await db

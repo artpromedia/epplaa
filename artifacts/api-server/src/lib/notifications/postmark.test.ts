@@ -18,6 +18,7 @@ describe("PostmarkEmailChannel", () => {
     delete process.env.EMAIL_FROM;
     delete process.env.EMAIL_REPLY_TO;
     delete process.env.EMAIL_LINK_BASE_URL;
+    delete process.env.EMAIL_SUPPORT_ADDRESS;
     delete process.env.POSTMARK_MESSAGE_STREAM;
   });
 
@@ -108,6 +109,104 @@ describe("PostmarkEmailChannel", () => {
     expect(r.ok).toBe(false);
     expect(r.errorCode).toBe("exception");
     expect(r.errorMessage).toBe("ECONNRESET");
+  });
+
+  it("send() renders mfa_activated with the security variant (ribbon, signature, support contact, security CTA)", async () => {
+    process.env.POSTMARK_API_TOKEN = "pm-token";
+    process.env.EMAIL_LINK_BASE_URL = "https://epplaa.com";
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ MessageID: "abc-1", ErrorCode: 0 }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    const r = await new PostmarkEmailChannel().send({
+      to: "buyer@example.com",
+      title: "Two-factor sign-in is now on for your account",
+      body: "You've enabled an authenticator app for two-factor sign-in.",
+      url: "/account/security",
+      eventType: "mfa_activated",
+    });
+    expect(r.ok).toBe(true);
+    const body = JSON.parse(String(fetchMock.mock.calls[0]![1]?.body ?? "{}"));
+    // Branded security chrome.
+    expect(body.HtmlBody).toContain("Security alert");
+    expect(body.HtmlBody).toContain("— The Epplaa Security Team");
+    // Default support address rendered as a mailto: in the footer.
+    expect(body.HtmlBody).toContain('href="mailto:support@epplaa.com"');
+    // Security-specific CTA label (NOT the nudge's "Manage backup codes").
+    expect(body.HtmlBody).toContain("Review your security settings");
+    expect(body.HtmlBody).not.toContain("Manage backup codes");
+    expect(body.HtmlBody).toContain("https://epplaa.com/account/security");
+    // Plain-text fallback mirrors the security framing.
+    expect(body.TextBody).toContain("[ SECURITY ALERT ]");
+    expect(body.TextBody).toContain("— The Epplaa Security Team");
+    expect(body.TextBody).toContain(
+      "Review your security settings: https://epplaa.com/account/security",
+    );
+    expect(body.TextBody).toContain("Need help? Contact support@epplaa.com.");
+  });
+
+  it("send() renders mfa_backup_codes_regenerated with the When/IP/Device meta-table", async () => {
+    process.env.POSTMARK_API_TOKEN = "pm-token";
+    process.env.EMAIL_LINK_BASE_URL = "https://epplaa.com";
+    process.env.EMAIL_SUPPORT_ADDRESS = "security@epplaa.com";
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ MessageID: "abc-2", ErrorCode: 0 }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    const r = await new PostmarkEmailChannel().send({
+      to: "buyer@example.com",
+      title: "Your MFA backup codes were regenerated",
+      body: "A fresh set of two-factor backup codes was just generated for your account.",
+      url: "/account/security",
+      eventType: "mfa_backup_codes_regenerated",
+      payload: {
+        ipAddress: "203.0.113.10",
+        userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0)",
+        occurredAt: "2026-04-29T14:32:10.000Z",
+      },
+    });
+    expect(r.ok).toBe(true);
+    const body = JSON.parse(String(fetchMock.mock.calls[0]![1]?.body ?? "{}"));
+    // Forensic context surfaced via the meta-table.
+    expect(body.HtmlBody).toContain("2026-04-29 14:32:10 UTC");
+    expect(body.HtmlBody).toContain("203.0.113.10");
+    expect(body.HtmlBody).toContain("Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0)");
+    // Operator-overridden support address makes it through to the footer.
+    expect(body.HtmlBody).toContain('href="mailto:security@epplaa.com"');
+    // Plain-text fallback carries the same meta lines.
+    expect(body.TextBody).toContain("When: 2026-04-29 14:32:10 UTC");
+    expect(body.TextBody).toContain("IP: 203.0.113.10");
+    expect(body.TextBody).toContain("Device: Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0)");
+  });
+
+  it("send() leaves the mfa_backup_codes_low nudge on the default template (no Security alert ribbon)", async () => {
+    // Regression guard: only `mfa_activated` and
+    // `mfa_backup_codes_regenerated` opt into the security variant.
+    // The low-codes nudge MUST stay on the original transactional
+    // shell with the "Manage backup codes" CTA.
+    process.env.POSTMARK_API_TOKEN = "pm-token";
+    process.env.EMAIL_LINK_BASE_URL = "https://epplaa.com";
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ MessageID: "abc-3", ErrorCode: 0 }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    await new PostmarkEmailChannel().send({
+      to: "buyer@example.com",
+      title: "Your MFA backup codes are running low",
+      body: "You have 2 backup codes left.",
+      url: "/account/security",
+      eventType: "mfa_backup_codes_low",
+    });
+    const body = JSON.parse(String(fetchMock.mock.calls[0]![1]?.body ?? "{}"));
+    expect(body.HtmlBody).not.toContain("Security alert");
+    expect(body.HtmlBody).not.toContain("— The Epplaa Security Team");
+    expect(body.HtmlBody).toContain("Manage backup codes");
   });
 
   it("send() respects EMAIL_FROM and EMAIL_REPLY_TO overrides", async () => {

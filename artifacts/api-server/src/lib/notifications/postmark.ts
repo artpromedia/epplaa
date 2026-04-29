@@ -1,5 +1,6 @@
 import { logger } from "../logger";
 import { renderEpplaaEmail } from "./emailTemplate";
+import { decideSecurityEmail } from "./securityEmail";
 import type { ChannelKind, NotificationChannel, NotificationMessage, SendResult } from "./types";
 
 const POSTMARK_BASE = "https://api.postmarkapp.com";
@@ -52,14 +53,20 @@ export class PostmarkEmailChannel implements NotificationChannel {
     const from = process.env.EMAIL_FROM || "Epplaa <noreply@epplaa.com>";
     const replyTo = process.env.EMAIL_REPLY_TO;
     const linkBaseUrl = process.env.EMAIL_LINK_BASE_URL || "https://epplaa.com";
+    const supportEmail = process.env.EMAIL_SUPPORT_ADDRESS || "support@epplaa.com";
     const messageStream = process.env.POSTMARK_MESSAGE_STREAM || "outbound";
 
+    const security = decideSecurityEmail(msg);
     const rendered = renderEpplaaEmail({
       title: msg.title,
       body: msg.body,
       ctaUrl: msg.url ?? null,
-      ctaLabel: pickCtaLabel(msg),
+      ctaLabel: security.isSecurity ? security.ctaLabel : pickCtaLabel(msg),
       linkBaseUrl,
+      variant: security.isSecurity ? "security" : "default",
+      metaLines: security.isSecurity ? security.metaLines : undefined,
+      signature: security.isSecurity ? security.signature : undefined,
+      supportEmail: security.isSecurity ? supportEmail : undefined,
     });
 
     try {
