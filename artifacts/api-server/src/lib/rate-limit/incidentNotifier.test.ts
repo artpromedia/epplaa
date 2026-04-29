@@ -380,6 +380,86 @@ describe("payload builders — pure functions", () => {
     expect(body.payload.source).toBe("prod-7");
   });
 
+  it("uses a per-subsystem dedup_key prefix and Slack title when subsystem is tagged", () => {
+    // The DB watcher (and any other future caller) tags its events
+    // with `subsystem: "db"` so PagerDuty groups DB incidents under
+    // their own `db-degraded:<source>` dedup_key — concurrent DB and
+    // rate-limit outages must open as two distinct PagerDuty
+    // incidents instead of being squashed into one. The Slack title
+    // and PagerDuty summary swap to the subsystem's human label.
+    const dbBody = JSON.parse(
+      buildPagerDutyDegradedPayload(
+        {
+          subsystem: "db",
+          label: "Database",
+          failureCount: 3,
+          firstFailureAt: 1_700_000_000_000,
+          breachedAt: 1_700_000_010_000,
+        },
+        "prod-7",
+        "pd-key",
+      ),
+    ) as {
+      dedup_key: string;
+      payload: {
+        summary: string;
+        component: string;
+        custom_details: Record<string, unknown>;
+      };
+    };
+    expect(dbBody.dedup_key).toBe("db-degraded:prod-7");
+    expect(dbBody.payload.summary).toContain("Database");
+    expect(dbBody.payload.summary).toContain("3 failures");
+    // No "threshold" field in the summary when the event omits it —
+    // the DB watcher pages on a pure healthy↔degraded edge with no
+    // per-minute threshold concept.
+    expect(dbBody.payload.summary).not.toContain("threshold");
+    expect(dbBody.payload.component).toBe("db");
+    expect(dbBody.payload.custom_details).not.toHaveProperty("threshold");
+
+    const dbResolve = JSON.parse(
+      buildPagerDutyRecoveredPayload(
+        {
+          subsystem: "db",
+          label: "Database",
+          durationMs: 30_000,
+          failureCount: 3,
+          recoveredAt: 1_700_000_030_000,
+        },
+        "prod-7",
+        "pd-key",
+      ),
+    ) as { dedup_key: string; event_action: string };
+    // Trigger and resolve must share the same dedup_key so PagerDuty
+    // closes the incident automatically on recovery.
+    expect(dbResolve.dedup_key).toBe("db-degraded:prod-7");
+    expect(dbResolve.event_action).toBe("resolve");
+
+    const slackBody = JSON.parse(
+      buildSlackDegradedPayload(
+        {
+          subsystem: "db",
+          label: "Database",
+          failureCount: 3,
+          firstFailureAt: 1_700_000_000_000,
+          breachedAt: 1_700_000_010_000,
+        },
+        "prod-7",
+      ),
+    ) as {
+      text: string;
+      attachments: Array<{
+        fields: Array<{ title: string; value: string }>;
+      }>;
+    };
+    expect(slackBody.text).toContain("Database DEGRADED");
+    expect(slackBody.text).toContain("prod-7");
+    // No "Threshold (per minute)" Slack field when the event omits
+    // the threshold — the panel just doesn't render that row.
+    const fieldTitles = slackBody.attachments[0]!.fields.map((f) => f.title);
+    expect(fieldTitles).not.toContain("Threshold (per minute)");
+  });
+
   it("buildPagerDutyRecoveredPayload mirrors the trigger dedup_key", () => {
     const trigger = JSON.parse(
       buildPagerDutyDegradedPayload(

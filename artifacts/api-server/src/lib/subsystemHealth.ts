@@ -1,3 +1,9 @@
+import { logger } from "./logger";
+import {
+  WebhookIncidentNotifier,
+  type RateLimitIncidentNotifier,
+} from "./rate-limit/incidentNotifier";
+
 /**
  * Generic subsystem failure-streak watcher used by /healthz.
  *
@@ -100,6 +106,112 @@ export class SubsystemFailureWatcher {
 }
 
 /**
+ * Watcher subclass for the primary Postgres connection. Extends the
+ * base streak watcher with an out-of-band Slack/PagerDuty page on
+ * every healthy↔degraded edge — the same fan-out the rate-limit store
+ * watcher uses, just tagged with `subsystem: "db"` so PagerDuty
+ * groups DB incidents under their own `dedup_key` (`db-degraded:<source>`)
+ * instead of squashing them into the rate-limit incident.
+ *
+ * Why subclass rather than wire the notifier into every
+ * `SubsystemFailureWatcher`: not every subsystem wants to page on the
+ * raw `record()`/`recordSuccess()` edges. The audit-chain watcher,
+ * the retention heartbeat, the per-gateway watchers, and the audit-DLQ
+ * watcher all rely on the duration-based probe in
+ * `scripts/checkHealthzDegraded.ts` to decide when a streak has been
+ * stuck "long enough" to page; firing on every momentary edge would
+ * spam the channel with single-tick blips. The DB and rate-limit
+ * stores are different — they're the foundational backings the API
+ * cannot serve without, so the in-app banner already toasts on every
+ * healthy↔degraded edge and the out-of-band page must follow the
+ * same edge so on-call and the operator agree on whether an incident
+ * occurred.
+ *
+ * The notifier is fire-and-forget: a transport failure is logged and
+ * swallowed so a misbehaving Slack / PagerDuty endpoint cannot pin
+ * the /readyz probe path. Tests inject a stub notifier via the
+ * constructor to assert on the exact sequence of edges.
+ *
+ * `__injectStreak` and `__reset` are inherited unchanged so the
+ * staging-only rehearsal injector (`routes/healthzRehearsal.ts`) can
+ * seed and clear synthetic streaks without firing a real page on the
+ * weekly cron — matching the rate-limit rehearsal path, which also
+ * bypasses `record()`/`recordSuccess()` and therefore the notifier.
+ */
+export class DbHealthWatcher extends SubsystemFailureWatcher {
+  private incidentNotifier: RateLimitIncidentNotifier;
+
+  constructor(opts?: { incidentNotifier?: RateLimitIncidentNotifier }) {
+    super();
+    this.incidentNotifier =
+      opts?.incidentNotifier ?? new WebhookIncidentNotifier();
+  }
+
+  /**
+   * Test-only seam: swap the notifier on a live watcher instance so a
+   * unit test can assert on the exact transition payloads without
+   * recreating the watcher (the production singleton is imported in
+   * many places and re-binding the export would leave callers holding
+   * a stale reference). Not used by production code.
+   */
+  __setNotifierForTests(notifier: RateLimitIncidentNotifier): void {
+    this.incidentNotifier = notifier;
+  }
+
+  override record(now: number = Date.now()): void {
+    const wasHealthy = this.getSnapshot().state === "healthy";
+    super.record(now);
+    if (!wasHealthy) return;
+    // First failure of a brand-new streak — fire the healthy→degraded
+    // page. Try/catch wraps the notifier call so a webhook-transport
+    // bug can't bubble back into the /readyz path; the structured
+    // `readyz_unhealthy` log already records the underlying DB
+    // failure regardless of whether the page lands.
+    const snap = this.getSnapshot();
+    try {
+      this.incidentNotifier.notifyDegraded({
+        subsystem: "db",
+        label: "Database",
+        failureCount: snap.failureCount,
+        firstFailureAt: snap.firstFailureAt ?? now,
+        breachedAt: now,
+      });
+    } catch (notifyErr) {
+      logger.warn(
+        { err: (notifyErr as Error).message },
+        "db_incident_notify_degraded_threw",
+      );
+    }
+  }
+
+  override recordSuccess(now: number = Date.now()): void {
+    const startedAt = this.getSnapshot().firstFailureAt;
+    const failureCount = this.getSnapshot().failureCount;
+    super.recordSuccess(now);
+    if (startedAt === null) return;
+    // Closing edge — fire the degraded→healthy "all clear" page.
+    // PagerDuty's shared `dedup_key` makes a paired resolve a no-op
+    // when no trigger ever fired, so this is safe even for the first
+    // probe success after process start (no preceding outage).
+    const durationMs = Math.max(0, now - startedAt);
+    try {
+      this.incidentNotifier.notifyRecovered({
+        subsystem: "db",
+        label: "Database",
+        durationMs,
+        failureCount,
+        recoveredAt: now,
+      });
+    } catch (notifyErr) {
+      logger.warn(
+        { err: (notifyErr as Error).message },
+        "db_incident_notify_recovered_threw",
+      );
+    }
+  }
+}
+
+/**
  * Singleton watcher for the primary Postgres connection. Driven by the
  * /readyz DB probe — every probe call records either success or
  * failure, which gives the watcher a steady heartbeat without any
@@ -110,8 +222,28 @@ export class SubsystemFailureWatcher {
  * We do NOT also feed this from per-request DB errors: that would
  * conflate "this one query failed" with "the connection pool can't
  * reach the DB", and the probe is meant to surface the latter.
+ *
+ * The watcher additionally pages Slack / PagerDuty on every
+ * healthy↔degraded edge via the shared `WebhookIncidentNotifier` so a
+ * weekend DB outage doesn't sit silent until someone notices the in-app
+ * banner. The dedup key is `db-degraded:<source>` so PagerDuty groups
+ * DB incidents independently from the rate-limit-store incidents
+ * (`rate-limit-store-degraded:<source>`).
  */
-export const dbHealthWatcher = new SubsystemFailureWatcher();
+export const dbHealthWatcher: DbHealthWatcher = new DbHealthWatcher();
+
+/**
+ * Test-only: replace the dbHealthWatcher's notifier so a unit test can
+ * assert on the exact transitions without touching real Slack /
+ * PagerDuty. Thin wrapper over `DbHealthWatcher.__setNotifierForTests`
+ * preserved as a free function so call sites that only have the
+ * singleton imported don't need to also import the class.
+ */
+export function __setDbHealthWatcherNotifierForTests(
+  notifier: RateLimitIncidentNotifier,
+): void {
+  dbHealthWatcher.__setNotifierForTests(notifier);
+}
 
 /**
  * Singleton watcher for the audit-event pipeline. Driven by every

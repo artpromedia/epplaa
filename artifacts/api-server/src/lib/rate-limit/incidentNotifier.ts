@@ -1,28 +1,40 @@
 import { logger } from "../logger";
 
 /**
- * Out-of-band paging for the rate-limit store going degraded.
+ * Out-of-band paging for a backing subsystem going healthy↔degraded.
  *
- * The admin console already shows an in-app toast + sticky banner when
- * `/healthz`'s `rateLimitStore.state` flips to `"degraded"`, but those
- * signals only reach operators who happen to be signed into the console.
- * After-hours / weekend incidents need to go to the on-call rotation
- * directly. This module fans the same healthy↔degraded transitions out
- * to a Slack incoming webhook and/or the PagerDuty Events API so the
- * alert lands in the channel/rotation regardless of whether anyone is
- * looking at the admin console.
+ * Originally written for the rate-limit Redis store (hence the file
+ * path), this notifier is now reused by other backing-service watchers
+ * — most notably `dbHealthWatcher` — that need the same Slack +
+ * PagerDuty fan-out on every healthy↔degraded edge. Each caller
+ * tags its events with a `subsystem` discriminator so PagerDuty
+ * groups its incidents under a separate `dedup_key` (e.g.
+ * `db-degraded:<source>` vs `rate-limit-store-degraded:<source>`)
+ * and the Slack copy names the right panel. The default discriminator
+ * is `"rate-limit-store"` so existing rate-limit callers stay
+ * byte-identical without code changes.
  *
- * Dedupe semantics (matching `RateLimitStoreAlerts` in the admin console):
+ * The admin console already shows in-app toasts + sticky banners when
+ * `/healthz`'s subsystem entries flip to `"degraded"`, but those
+ * signals only reach operators who happen to be signed into the
+ * console. After-hours / weekend incidents (rate-limit Redis going
+ * down on a Sunday, the Postgres pool going unreachable for many
+ * minutes) need to land in the on-call rotation directly. This module
+ * fans the same healthy↔degraded transitions out to a Slack incoming
+ * webhook and/or the PagerDuty Events API so the alert lands in the
+ * channel/rotation regardless of whether anyone is looking at the
+ * admin console.
+ *
+ * Dedupe semantics (matching the in-app banners):
  *   - `notifyDegraded` is invoked exactly once per healthy→degraded
  *     transition by the watcher — i.e. the moment `firstFailureAt`
- *     flips null→non-null. The Sentry `thresholdPerMin` breach
- *     detector is intentionally NOT in this path: the in-app banner
- *     toasts on `prevState !== "degraded"` (which uses the same
- *     `state` field, derived purely from `firstFailureAt`), and the
- *     out-of-band page must follow the same edge so on-call and the
- *     operator agree on whether an incident occurred. Additional
- *     failures inside the same streak — including ones that DO cross
- *     the Sentry breach threshold — never re-page.
+ *     flips null→non-null. For the rate-limit store the per-minute
+ *     Sentry `thresholdPerMin` breach detector is intentionally NOT in
+ *     this path: the in-app banner toasts on `prevState !==
+ *     "degraded"`, and the out-of-band page must follow the same edge
+ *     so on-call and the operator agree on whether an incident
+ *     occurred. Additional failures inside the same streak — including
+ *     ones that DO cross the Sentry breach threshold — never re-page.
  *   - `notifyRecovered` is invoked exactly once per degraded→healthy
  *     transition (every closing streak), mirroring the admin console's
  *     `lastRecoveredAt !== prevRecoveredAt` recovery toast. PagerDuty's
@@ -32,7 +44,11 @@ import { logger } from "../logger";
  *     incidents.
  *
  * Configuration (read at notify time so a hot env-var rotation is picked
- * up by the next incident — matches the readyz-config pattern):
+ * up by the next incident — matches the readyz-config pattern). The
+ * env vars deliberately keep their `RATE_LIMIT_INCIDENT_*` names even
+ * though the notifier now also pages for DB transitions, so reusing
+ * the same Slack channel / PagerDuty service for every subsystem
+ * needs zero new operator config:
  *   - `RATE_LIMIT_INCIDENT_SLACK_WEBHOOK_URL` — full Slack incoming
  *     webhook URL (the URL token is the secret). Unset disables Slack.
  *   - `RATE_LIMIT_INCIDENT_PAGERDUTY_ROUTING_KEY` — PagerDuty Events API
@@ -52,16 +68,86 @@ import { logger } from "../logger";
  *
  * Failures (non-2xx responses, network errors, timeouts) are logged but
  * never thrown back into the caller: the watcher's job is to keep the
- * rate-limit store decision path moving even when the paging transport
- * is itself broken. Sentry already captures the underlying breach via
- * `captureMessage("rate_limit_redis_failure_threshold_breached")`, so a
- * paging-transport outage doesn't lose the incident — it just means the
- * channel/rotation didn't get the duplicate notification.
+ * underlying decision path moving even when the paging transport is
+ * itself broken. Sentry already captures the underlying breach (via
+ * `captureMessage("rate_limit_redis_failure_threshold_breached")` for
+ * the rate-limit store, via the structured `readyz_unhealthy` log for
+ * the DB watcher), so a paging-transport outage doesn't lose the
+ * incident — it just means the channel/rotation didn't get the
+ * duplicate notification.
  */
 
+/**
+ * Default subsystem id used when an event omits one. Kept as the
+ * legacy `"rate-limit-store"` value so existing call sites and the
+ * snapshot in the existing test suite stay byte-identical.
+ */
+const DEFAULT_SUBSYSTEM = "rate-limit-store";
+const DEFAULT_LABEL = "Rate-limit store";
+
+/**
+ * Default Slack footer for a degraded message. Kept identical to the
+ * previous hard-coded copy when the event is for the rate-limit store
+ * so the channel formatting doesn't visibly change for that caller.
+ * For other subsystems we fall back to a generic "investigate the
+ * underlying dependency" line plus the runbooks directory pointer.
+ */
+function defaultDegradedFooter(subsystem: string): string {
+  if (subsystem === DEFAULT_SUBSYSTEM) {
+    return (
+      "Rate-limit store is degrading open. Investigate Redis/backing " +
+      "store before traffic spreads across replicas without a shared " +
+      "quota. See docs/runbooks/rate-limit-store.md."
+    );
+  }
+  if (subsystem === "db") {
+    return (
+      "Postgres connection is unreachable from this replica. Investigate " +
+      "the DB pool, network path, and pgbouncer health before user-facing " +
+      "writes start to fail. See docs/runbooks/."
+    );
+  }
+  return (
+    `${subsystemLabel(subsystem)} is degraded. Investigate the underlying ` +
+    "dependency before user-facing impact spreads. See docs/runbooks/."
+  );
+}
+
+function subsystemLabel(subsystem: string): string {
+  if (subsystem === DEFAULT_SUBSYSTEM) return DEFAULT_LABEL;
+  if (subsystem === "db") return "Database";
+  // Fallback: humanise `kebab-case` → `Title Case` so an unrecognised
+  // subsystem still produces a readable Slack title without anyone
+  // having to update this file before adding a new caller.
+  return subsystem
+    .split(/[-_]/)
+    .filter((s) => s.length > 0)
+    .map((s) => s.charAt(0).toUpperCase() + s.slice(1))
+    .join(" ");
+}
+
 export interface DegradedTransitionEvent {
+  /**
+   * Stable subsystem id used to build PagerDuty's `dedup_key` and the
+   * Slack title. Defaults to `"rate-limit-store"` so existing
+   * rate-limit callers can omit it and stay byte-identical.
+   */
+  subsystem?: string;
+  /**
+   * Optional human label override for the Slack title. Defaults to a
+   * label derived from `subsystem` (e.g. `"Database"` for `"db"`).
+   */
+  label?: string;
   failureCount: number;
-  threshold: number;
+  /**
+   * Optional per-minute breach threshold. Only set by the rate-limit
+   * watcher today (it tracks a rolling 60s breach detector for Sentry
+   * telemetry). Other subsystems — like the DB watcher — page on a
+   * pure healthy↔degraded edge with no per-minute threshold concept,
+   * so they omit this field and the Slack panel just doesn't render
+   * the "Threshold (per minute)" row.
+   */
+  threshold?: number;
   /** ms epoch when the streak began. */
   firstFailureAt: number;
   /** ms epoch when the breach was detected (i.e. now). */
@@ -69,6 +155,8 @@ export interface DegradedTransitionEvent {
 }
 
 export interface RecoveredTransitionEvent {
+  subsystem?: string;
+  label?: string;
   /** Length of the breached streak in ms. */
   durationMs: number;
   /** Number of failures observed during the streak. */
@@ -77,10 +165,19 @@ export interface RecoveredTransitionEvent {
   recoveredAt: number;
 }
 
+/**
+ * Generic out-of-band incident notifier interface. Kept under the
+ * legacy `RateLimitIncidentNotifier` name so existing imports
+ * (`apiRateLimit.ts`, the rate-limit unit tests) stay unchanged; the
+ * new `IncidentNotifier` alias is the recommended name for new
+ * callers that want to make it obvious the notifier isn't rate-limit
+ * specific.
+ */
 export interface RateLimitIncidentNotifier {
   notifyDegraded(event: DegradedTransitionEvent): void;
   notifyRecovered(event: RecoveredTransitionEvent): void;
 }
+export type IncidentNotifier = RateLimitIncidentNotifier;
 
 /**
  * Hard timeout on each webhook POST. Long enough to absorb the typical
@@ -106,6 +203,19 @@ function incidentSource(env: NodeJS.ProcessEnv): string {
   const hostname = env.HOSTNAME;
   if (hostname && hostname.trim() !== "") return hostname.trim();
   return "api-server";
+}
+
+function eventSubsystem(
+  event: { subsystem?: string },
+): string {
+  const raw = (event.subsystem ?? "").trim();
+  return raw === "" ? DEFAULT_SUBSYSTEM : raw;
+}
+
+function eventLabel(event: { subsystem?: string; label?: string }): string {
+  const raw = (event.label ?? "").trim();
+  if (raw !== "") return raw;
+  return subsystemLabel(eventSubsystem(event));
 }
 
 /**
@@ -164,30 +274,28 @@ export function buildSlackDegradedPayload(
   event: DegradedTransitionEvent,
   source: string,
 ): string {
+  const subsystem = eventSubsystem(event);
+  const label = eventLabel(event);
   const startedIso = new Date(event.firstFailureAt).toISOString();
+  const fields: Array<{ title: string; value: string; short: boolean }> = [
+    { title: "Source", value: source, short: true },
+    { title: "Failure count", value: String(event.failureCount), short: true },
+  ];
+  if (typeof event.threshold === "number") {
+    fields.push({
+      title: "Threshold (per minute)",
+      value: String(event.threshold),
+      short: true,
+    });
+  }
+  fields.push({ title: "Streak began", value: startedIso, short: true });
   return JSON.stringify({
-    text: `:rotating_light: Rate-limit store DEGRADED on ${source}`,
+    text: `:rotating_light: ${label} DEGRADED on ${source}`,
     attachments: [
       {
         color: "danger",
-        fields: [
-          { title: "Source", value: source, short: true },
-          {
-            title: "Failure count",
-            value: String(event.failureCount),
-            short: true,
-          },
-          {
-            title: "Threshold (per minute)",
-            value: String(event.threshold),
-            short: true,
-          },
-          { title: "Streak began", value: startedIso, short: true },
-        ],
-        footer:
-          "Rate-limit store is degrading open. Investigate Redis/backing " +
-          "store before traffic spreads across replicas without a shared " +
-          "quota. See docs/runbooks/rate-limit-store.md.",
+        fields,
+        footer: defaultDegradedFooter(subsystem),
       },
     ],
   });
@@ -197,10 +305,11 @@ export function buildSlackRecoveredPayload(
   event: RecoveredTransitionEvent,
   source: string,
 ): string {
+  const label = eventLabel(event);
   const recoveredIso = new Date(event.recoveredAt).toISOString();
   const durationSeconds = Math.max(1, Math.round(event.durationMs / 1000));
   return JSON.stringify({
-    text: `:white_check_mark: Rate-limit store RECOVERED on ${source}`,
+    text: `:white_check_mark: ${label} RECOVERED on ${source}`,
     attachments: [
       {
         color: "good",
@@ -225,46 +334,60 @@ export function buildSlackRecoveredPayload(
 
 /**
  * Build the PagerDuty Events API v2 payload. We use a stable
- * `dedup_key` so a flapping store inside the same logical incident
- * groups under one PagerDuty incident instead of opening a new one
- * per transition. The trigger and resolve events share the same key
- * so PagerDuty closes the incident automatically on recovery.
+ * `dedup_key` so a flapping subsystem inside the same logical
+ * incident groups under one PagerDuty incident instead of opening a
+ * new one per transition. The trigger and resolve events share the
+ * same key so PagerDuty closes the incident automatically on
+ * recovery. Different subsystems get different `dedup_key` prefixes
+ * (e.g. `rate-limit-store-degraded:` vs `db-degraded:`) so a
+ * concurrent rate-limit and DB outage open as two distinct PagerDuty
+ * incidents instead of being squashed into one.
  */
 export function buildPagerDutyDegradedPayload(
   event: DegradedTransitionEvent,
   source: string,
   routingKey: string,
 ): string {
+  const subsystem = eventSubsystem(event);
+  const label = eventLabel(event);
+  const summary =
+    typeof event.threshold === "number"
+      ? `${label} degraded on ${source} (${event.failureCount} failures, threshold ${event.threshold}/min)`
+      : `${label} degraded on ${source} (${event.failureCount} failures)`;
+  const customDetails: Record<string, unknown> = {
+    failureCount: event.failureCount,
+    firstFailureAt: event.firstFailureAt,
+    breachedAt: event.breachedAt,
+  };
+  if (typeof event.threshold === "number") {
+    customDetails.threshold = event.threshold;
+  }
   return JSON.stringify({
     routing_key: routingKey,
     event_action: "trigger",
-    dedup_key: `rate-limit-store-degraded:${source}`,
+    dedup_key: `${subsystem}-degraded:${source}`,
     payload: {
-      summary: `Rate-limit store degraded on ${source} (${event.failureCount} failures, threshold ${event.threshold}/min)`,
+      summary,
       source,
       severity: "error",
-      component: "rate_limit_store",
+      component: subsystem === DEFAULT_SUBSYSTEM ? "rate_limit_store" : subsystem,
       group: "api-server",
       class: "subsystem-degraded",
-      custom_details: {
-        failureCount: event.failureCount,
-        threshold: event.threshold,
-        firstFailureAt: event.firstFailureAt,
-        breachedAt: event.breachedAt,
-      },
+      custom_details: customDetails,
     },
   });
 }
 
 export function buildPagerDutyRecoveredPayload(
-  _event: RecoveredTransitionEvent,
+  event: RecoveredTransitionEvent,
   source: string,
   routingKey: string,
 ): string {
+  const subsystem = eventSubsystem(event);
   return JSON.stringify({
     routing_key: routingKey,
     event_action: "resolve",
-    dedup_key: `rate-limit-store-degraded:${source}`,
+    dedup_key: `${subsystem}-degraded:${source}`,
   });
 }
 
@@ -289,6 +412,7 @@ export class WebhookIncidentNotifier implements RateLimitIncidentNotifier {
   notifyDegraded(event: DegradedTransitionEvent): void {
     const env = this.env();
     const source = incidentSource(env);
+    const subsystem = eventSubsystem(event);
     const slackUrl = (env.RATE_LIMIT_INCIDENT_SLACK_WEBHOOK_URL ?? "").trim();
     const pdKey = (
       env.RATE_LIMIT_INCIDENT_PAGERDUTY_ROUTING_KEY ?? ""
@@ -297,14 +421,14 @@ export class WebhookIncidentNotifier implements RateLimitIncidentNotifier {
       this.send(
         slackUrl,
         buildSlackDegradedPayload(event, source),
-        "slack_degraded",
+        `slack_degraded:${subsystem}`,
       );
     }
     if (pdKey !== "") {
       this.send(
         pagerDutyUrl(env),
         buildPagerDutyDegradedPayload(event, source, pdKey),
-        "pagerduty_degraded",
+        `pagerduty_degraded:${subsystem}`,
       );
     }
   }
@@ -312,6 +436,7 @@ export class WebhookIncidentNotifier implements RateLimitIncidentNotifier {
   notifyRecovered(event: RecoveredTransitionEvent): void {
     const env = this.env();
     const source = incidentSource(env);
+    const subsystem = eventSubsystem(event);
     const slackUrl = (env.RATE_LIMIT_INCIDENT_SLACK_WEBHOOK_URL ?? "").trim();
     const pdKey = (
       env.RATE_LIMIT_INCIDENT_PAGERDUTY_ROUTING_KEY ?? ""
@@ -320,14 +445,14 @@ export class WebhookIncidentNotifier implements RateLimitIncidentNotifier {
       this.send(
         slackUrl,
         buildSlackRecoveredPayload(event, source),
-        "slack_recovered",
+        `slack_recovered:${subsystem}`,
       );
     }
     if (pdKey !== "") {
       this.send(
         pagerDutyUrl(env),
         buildPagerDutyRecoveredPayload(event, source, pdKey),
-        "pagerduty_recovered",
+        `pagerduty_recovered:${subsystem}`,
       );
     }
   }
