@@ -54,6 +54,44 @@ jobs:
           SENTRY_PROJECT: ${{ vars.SENTRY_PROJECT }}
         run: pnpm --filter @workspace/scripts run sync-sentry-monitors
 
+  sentry-issue-alerts-sync:
+    # Push the production-secret issue-alert configuration declared in
+    # scripts/src/productionSecretAlerts.config.ts to Sentry's project
+    # rules API (task #96). Sibling of `sentry-monitors-sync` above
+    # and uses the same env-var contract — but rule sync is project-
+    # scoped, so we additionally gate on `vars.SENTRY_PROJECT != ''`.
+    # The companion `check-sentry-issue-alert-credentials` step in
+    # `ci.yml` fails the PR build when the declared intent ("we
+    # manage these alert rules in code") isn't backed by the
+    # credentials the sync needs, so this job never silently skips
+    # without a CI-time signal first.
+    name: Sync Sentry production-secret issue alert rules
+    runs-on: ubuntu-latest
+    needs: sentry-monitors-sync
+    if: ${{ vars.SENTRY_ORG != '' && vars.SENTRY_PROJECT != '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Upsert production-secret issue alerts via Sentry API
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          SENTRY_ORG: ${{ vars.SENTRY_ORG }}
+          SENTRY_PROJECT: ${{ vars.SENTRY_PROJECT }}
+          # Public runbook URL is rendered into each rule's notify
+          # action so on-call sees a deep link in the page body.
+          # `vars.PRODUCTION_SECRETS_RUNBOOK_URL` is optional — when
+          # unset the syncer falls back to the in-repo path, which
+          # still tells operators where to look.
+          RUNBOOK_URL: ${{ vars.PRODUCTION_SECRETS_RUNBOOK_URL }}
+        run: pnpm --filter @workspace/scripts run sync-sentry-issue-alerts
+
   # Post-deploy configuration gate (Task #100, building on #89).
   #
   # Calls the reusable `check-production-hostname-pattern.yml` workflow

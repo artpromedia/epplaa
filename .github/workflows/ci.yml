@@ -104,6 +104,28 @@ jobs:
           SENTRY_ORG: ${{ vars.SENTRY_ORG }}
         run: pnpm --filter @workspace/scripts run check-sentry-sync-credentials
 
+      # Sentry issue-alert sync credentials present (task #96).
+      #
+      # Sibling of the monitor credentials gate above. Fails the build
+      # when scripts/src/productionSecretAlerts.config.ts declares one
+      # or more Sentry-routed alerts (canonical or backstop) but the
+      # credentials needed by the release-time
+      # `sentry-issue-alerts-sync` job are missing. Issue rules are
+      # project-scoped, so the gate also requires `vars.SENTRY_PROJECT`
+      # in addition to the org + token the monitor sync uses.
+      #
+      # Same opt-in-by-presence pattern: removing every Sentry routing
+      # flag from productionSecretAlerts.config.ts (or emptying the
+      # array) makes this step no-op cleanly, which is the documented
+      # way for a fork that doesn't run its own Sentry project to
+      # disable the gate.
+      - name: Sentry issue-alert sync credentials present
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          SENTRY_ORG: ${{ vars.SENTRY_ORG }}
+          SENTRY_PROJECT: ${{ vars.SENTRY_PROJECT }}
+        run: pnpm --filter @workspace/scripts run check-sentry-issue-alert-credentials
+
       - name: Vitest unit tests with coverage threshold
         run: pnpm run test:coverage
         env:

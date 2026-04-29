@@ -83,6 +83,86 @@ Each helper detects production-shape via
 production-shape gating is consistent across all eleven checks
 (these nine plus the existing rate-limit and hostname checks).
 
+## Alert wiring as code (task #96)
+
+The "Alert wiring" subsections under each secret below describe the
+intent of every alert (severity, routing, window, runbook anchor).
+Until task #96, those descriptions were aspirational — operators had
+to translate them into Sentry / log-aggregator UIs by hand and
+remember to update both sides whenever a tag changed. The table below
+makes them machine-readable so the wiring is regenerated from this
+repo at release time and CI fails if the declared intent isn't backed
+by the credentials needed to push it.
+
+The same source-of-truth pattern is used by the existing Sentry Cron
+monitor sync (see [`scripts/src/sentryMonitors.config.ts`](../../scripts/src/sentryMonitors.config.ts)
+and [`docs/runbooks/rate-limit-store.md`](rate-limit-store.md)).
+
+| Layer | Source-of-truth | Pushed by | Drift / credentials check |
+| ----- | --------------- | --------- | ------------------------- |
+| Sentry issue alerts (canonical for CLERK_SECRET_KEY + SESSION_SECRET, backstop for SENTRY_DSN) | [`scripts/src/productionSecretAlerts.config.ts`](../../scripts/src/productionSecretAlerts.config.ts) (`sentry.canonical` / `sentry.backstop` flags) | [`scripts/src/syncSentryIssueAlerts.ts`](../../scripts/src/syncSentryIssueAlerts.ts) — release-time job in [`.github/workflows/release.yml`](../../.github/workflows/release.yml) (`sentry-issue-alerts-sync`). Idempotent: lists existing rules, PUTs matches by `[managed:<tag>]` name prefix, POSTs new ones. Operator-added actions (PagerDuty target, Slack channel) are preserved on update. | [`scripts/src/checkSentryIssueAlertSyncCredentials.ts`](../../scripts/src/checkSentryIssueAlertSyncCredentials.ts) — CI step in [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml). Fails the build when the config declares Sentry-routed alerts but `vars.SENTRY_ORG`, `vars.SENTRY_PROJECT`, or `secrets.SENTRY_AUTH_TOKEN` is missing. |
+| Log-aggregator alerts (canonical for SENTRY_DSN — Sentry can't tell you Sentry is off — backstop for the other two) | Same config, `logAggregator.canonical` / `logAggregator.backstop` flags. | [`scripts/src/printLogAggregatorAlerts.ts`](../../scripts/src/printLogAggregatorAlerts.ts) — operator runs `pnpm --filter @workspace/scripts run print-log-aggregator-alerts -- --format=datadog\|loki\|both`, copies the rendered Terraform / Alertmanager YAML into the chosen log-aggregator's config repo. No automatic sync yet — the canonical log aggregator hasn't been picked. Once it is, swap the printer for a sibling `syncLogAggregatorAlerts.ts` that pushes via the chosen API. | The printer never errors (renders empty when the array is empty), so the gate is the same Sentry-side credentials check above plus the per-tag coverage assertion in [`scripts/src/productionSecretAlerts.config.test.ts`](../../scripts/src/productionSecretAlerts.config.test.ts) (asserts each declared tag is actually emitted by the named source file — catches a rename without updating the config at PR time). |
+
+### Operator workflow for first-time wiring
+
+1. **Add the GitHub vars + secrets** so the release-time syncer can
+   authenticate:
+   - `vars.SENTRY_ORG` (e.g. `epplaa`) — also used by the existing
+     monitor sync.
+   - `vars.SENTRY_PROJECT` (e.g. `api-server`) — issue rules are
+     project-scoped and require this in addition to the org.
+   - `secrets.SENTRY_AUTH_TOKEN` — internal-integration token with
+     `project:write` scope on the named project.
+   - Optional: `vars.PRODUCTION_SECRETS_RUNBOOK_URL` — public URL of
+     this runbook (e.g. `https://github.com/<owner>/<repo>/blob/main/docs/runbooks/production-secrets.md`).
+     Rendered into each rule's notify action so on-call sees a deep
+     link in the page body. When unset the syncer falls back to the
+     in-repo path.
+2. **Dry-run the syncer locally** to inspect the payloads:
+   ```sh
+   SENTRY_ORG=... SENTRY_PROJECT=... DRY_RUN=1 \
+     pnpm --filter @workspace/scripts run sync-sentry-issue-alerts
+   ```
+3. **Cut a release** (push a `v*` tag). The release workflow's
+   `sentry-issue-alerts-sync` job runs after `sentry-monitors-sync`
+   and creates the rules under the `[managed:<tag>] Production secret
+   presence check` name prefix.
+4. **In the Sentry UI**, open each created rule and add the actual
+   on-call routing action (PagerDuty service / Slack channel /
+   Opsgenie team). The syncer preserves operator-added actions on
+   update — only the fields it owns (name, environment, conditions,
+   filter, frequency) are overwritten on subsequent syncs. Then
+   paste the rule's permalink into the "Live alert URL" slot in the
+   per-secret subsection below.
+5. **For the log aggregator**, run:
+   ```sh
+   pnpm --filter @workspace/scripts run print-log-aggregator-alerts
+   ```
+   Copy the Datadog Terraform monitors **or** the Loki/Alertmanager
+   YAML (depending on the chosen tool) into the relevant infrastructure
+   repo, apply it, then paste the resulting monitor URL into the
+   "Live alert URL" slot in the per-secret subsection below.
+
+### Adding a fourth alert later
+
+The seven other boot-time presence checks listed in the audit table
+above (`mfa_encryption_key_missing_for_production`, …,
+`cf_stream_webhook_secret_missing_for_production`) still warn at boot
+but are not yet in the alert config — extending this is intentionally
+mechanical:
+
+1. Add an entry to `PRODUCTION_SECRET_ALERTS` in
+   `scripts/src/productionSecretAlerts.config.ts` with `messageTag`,
+   `severity`, `runbookAnchor` (matching one of the per-secret `<a id="...">`
+   slugs in this file), `sentry`/`logAggregator` routing flags, and
+   `emittedBy` (the source file that emits the tag).
+2. The config's coverage test (`productionSecretAlerts.config.test.ts`)
+   automatically asserts the literal tag appears in the named source
+   file — so a typo or stale reference fails CI immediately.
+3. Cut a release. The new rule is created on first sync; the
+   log-aggregator printer's next run includes a new block to paste.
+
+<a id="sentry_dsn"></a>
 ### `SENTRY_DSN`
 
 **What:** `initSentryServer` reads `SENTRY_DSN`. If unset / empty,
@@ -125,6 +205,19 @@ In Sentry (backstop, only useful AFTER the DSN is restored):
   alert should treat it as "the previous deploy was flying blind for
   N hours" and cross-check the Sentry alert pipeline for missed events.
 
+**Source-of-truth (task #96):**
+
+- Sentry rule (backstop): managed by entry `sentry_dsn_missing_for_production`
+  in [`scripts/src/productionSecretAlerts.config.ts`](../../scripts/src/productionSecretAlerts.config.ts),
+  pushed by [`scripts/src/syncSentryIssueAlerts.ts`](../../scripts/src/syncSentryIssueAlerts.ts)
+  from the release pipeline. Rule name in Sentry: `[managed:sentry_dsn_missing_for_production] Production secret presence check`.
+- Log-aggregator rule (canonical): same config entry, rendered by
+  `pnpm --filter @workspace/scripts run print-log-aggregator-alerts`.
+- **Live alert URLs** (paste after first sync — see "Operator workflow for first-time wiring" above):
+  - Sentry: `<paste rule permalink here>`
+  - Log aggregator: `<paste monitor URL here>`
+
+<a id="clerk_secret_key"></a>
 ### `CLERK_SECRET_KEY`
 
 **What:** Three code paths read `CLERK_SECRET_KEY` and silently
@@ -170,6 +263,19 @@ the `SENTRY_DSN` interaction above):
 - Trigger when count > 0 over a 5-minute window.
 - Route to the api-server on-call rotation; severity = sev-1.
 
+**Source-of-truth (task #96):**
+
+- Sentry rule (canonical): managed by entry `clerk_secret_key_missing_for_production`
+  in [`scripts/src/productionSecretAlerts.config.ts`](../../scripts/src/productionSecretAlerts.config.ts),
+  pushed by [`scripts/src/syncSentryIssueAlerts.ts`](../../scripts/src/syncSentryIssueAlerts.ts)
+  from the release pipeline. Rule name in Sentry: `[managed:clerk_secret_key_missing_for_production] Production secret presence check`.
+- Log-aggregator rule (backstop): same config entry, rendered by
+  `pnpm --filter @workspace/scripts run print-log-aggregator-alerts`.
+- **Live alert URLs** (paste after first sync — see "Operator workflow for first-time wiring" above):
+  - Sentry: `<paste rule permalink here>`
+  - Log aggregator: `<paste monitor URL here>`
+
+<a id="session_secret"></a>
 ### `SESSION_SECRET`
 
 **What:** `SESSION_SECRET` is the HMAC / encryption key for several
@@ -222,6 +328,18 @@ In the log aggregator (backstop):
 - Filter: `source:api-server message:"session_secret_missing_for_production"`.
 - Trigger when count > 0 over a 5-minute window.
 - Route to the api-server on-call rotation; severity = sev-1.
+
+**Source-of-truth (task #96):**
+
+- Sentry rule (canonical): managed by entry `session_secret_missing_for_production`
+  in [`scripts/src/productionSecretAlerts.config.ts`](../../scripts/src/productionSecretAlerts.config.ts),
+  pushed by [`scripts/src/syncSentryIssueAlerts.ts`](../../scripts/src/syncSentryIssueAlerts.ts)
+  from the release pipeline. Rule name in Sentry: `[managed:session_secret_missing_for_production] Production secret presence check`.
+- Log-aggregator rule (backstop): same config entry, rendered by
+  `pnpm --filter @workspace/scripts run print-log-aggregator-alerts`.
+- **Live alert URLs** (paste after first sync — see "Operator workflow for first-time wiring" above):
+  - Sentry: `<paste rule permalink here>`
+  - Log aggregator: `<paste monitor URL here>`
 
 ### `MFA_ENCRYPTION_KEY`
 

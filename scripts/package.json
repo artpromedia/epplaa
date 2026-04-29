@@ -8,7 +8,10 @@
     "check-rate-limit-opt-out-sunsets": "tsx ./src/checkRateLimitOptOutSunsets.ts",
     "check-sentry-monitors": "tsx ./src/checkSentryMonitorsInSync.ts",
     "check-sentry-sync-credentials": "tsx ./src/checkSentrySyncCredentials.ts",
+    "check-sentry-issue-alert-credentials": "tsx ./src/checkSentryIssueAlertSyncCredentials.ts",
     "sync-sentry-monitors": "tsx ./src/syncSentryMonitors.ts",
+    "sync-sentry-issue-alerts": "tsx ./src/syncSentryIssueAlerts.ts",
+    "print-log-aggregator-alerts": "tsx ./src/printLogAggregatorAlerts.ts",
     "test": "vitest run --passWithNoTests",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
