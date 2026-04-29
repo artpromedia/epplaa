@@ -1,6 +1,9 @@
 import { createServer } from "node:http";
 import { logger } from "./lib/logger";
-import { assertStubFulfillmentSafe } from "./lib/fulfillment/bootGuard";
+import {
+  assertCarrierCredentialsConfiguredForProduction,
+  assertStubFulfillmentSafe,
+} from "./lib/fulfillment/bootGuard";
 import { assertOkHiConfiguredForProduction } from "./lib/fulfillment/okhi";
 import { assertShipbubbleConfiguredForProduction } from "./lib/fulfillment/shipbubble";
 import { assertCloudflareStreamWebhookConfiguredForProduction } from "./lib/streaming";
@@ -100,6 +103,28 @@ if (!rateLimitStoreGuard.ok) {
 // See `docs/runbooks/staging-only-endpoints.md` (boot-time guard).
 const stubFulfillmentGuard = assertStubFulfillmentSafe(process.env, logger);
 if (!stubFulfillmentGuard.ok) {
+  process.exit(1);
+}
+
+// Boot-time hard failure (task #99): refuse to boot if any production
+// signal is set AND the credentials for an enabled carrier are
+// missing. Task #88's `assertStubFulfillmentSafe` only catches the
+// "STUB_FULFILLMENT=1 leaked into production" half of the synthetic-
+// data threat model. The other half is a production deploy that boots
+// with `STUB_FULFILLMENT` unset AND the carrier credentials themselves
+// unset — each carrier's `isConfigured()` returns false and
+// quote/dispatch/verify falls straight through to the stub path
+// BEFORE the per-request `allowStubFallback()` production-signal
+// guard ever runs (there's no real-call failure to trigger the
+// guard). Buyers see fake quotes, ship under fake tracking numbers,
+// and pass an unverified address through the home-delivery confidence
+// gate. Operators that intentionally want to disable a carrier in
+// production can opt out via `DISABLE_CARRIER_{SHIPBUBBLE,GIG,OKHI}=1`.
+// See `docs/runbooks/staging-only-endpoints.md` (boot-time carrier
+// credentials guard).
+const carrierCredentialsGuard =
+  assertCarrierCredentialsConfiguredForProduction(process.env, logger);
+if (!carrierCredentialsGuard.ok) {
   process.exit(1);
 }
 

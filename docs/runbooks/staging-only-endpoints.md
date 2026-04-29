@@ -267,6 +267,68 @@ on-call sees exactly which env var is wrong rather than just
 - Disposition: **hardened** (same change as GIG / Shipbubble, plus the
   same boot-time guard in Task #88).
 
+### Boot-time guard for missing carrier credentials (`assertCarrierCredentialsConfiguredForProduction`)
+
+- Env flags: `SHIPBUBBLE_API_KEY`, `GIG_API_KEY` + `GIG_USERNAME`,
+  `OKHI_API_KEY` + `OKHI_BRANCH_ID`. Per-carrier opt-out:
+  `DISABLE_CARRIER_SHIPBUBBLE=1`, `DISABLE_CARRIER_GIG=1`,
+  `DISABLE_CARRIER_OKHI=1` (literal `"1"` only — same strictness as
+  the production-signal env vars themselves).
+- File: `artifacts/api-server/src/lib/fulfillment/bootGuard.ts`
+- Wired in: `artifacts/api-server/src/index.ts` (immediately after
+  `assertStubFulfillmentSafe`).
+- Why dangerous on production: Task #88's `assertStubFulfillmentSafe`
+  closes the "STUB_FULFILLMENT=1 leaked into production" half of the
+  synthetic-data threat model. The other half is a production deploy
+  that boots with `STUB_FULFILLMENT` UNSET AND the carrier
+  credentials themselves UNSET — each carrier's `isConfigured()`
+  returns false, and quote/dispatch/verify short-circuits straight
+  into the stub path BEFORE the per-request `allowStubFallback()`
+  production-signal guard ever runs (there is no real-call failure
+  to trigger the guard). Buyers see fake quotes, ship under fake
+  tracking numbers, and pass an unverified address through the home-
+  delivery confidence gate — the mistake only surfaces when the
+  courier never picks up. The existing
+  `assertShipbubbleConfiguredForProduction` /
+  `assertOkHiConfiguredForProduction` helpers WARN about the same
+  env vars but don't crash the boot, so a Sentry alert that isn't
+  wired or is muted lets the misconfiguration sit indefinitely.
+- Disposition: **hardened (Task #99).** At boot, if any production
+  signal is set AND the credentials for an enabled carrier are
+  missing, `process.exit(1)` runs and the platform health check
+  crash-loops the deploy. The structured log line
+  (`carrier_credentials_missing_for_production`) enumerates every
+  misconfigured carrier with the env vars that are missing AND the
+  matching `DISABLE_CARRIER_*` opt-out variable, so the operator can
+  fix every misconfiguration in one redeploy. Operators that
+  intentionally want to ship a production deploy without a given
+  carrier (e.g. GIG not yet contracted, OkHi disabled while a country
+  is still in beta) opt out per-carrier via
+  `DISABLE_CARRIER_{SHIPBUBBLE,GIG,OKHI}=1`. The opt-out only
+  governs the boot guard — the carrier's runtime stub-on-no-creds
+  behaviour is unchanged, so the operator is acknowledging that the
+  carrier returns synthetic quotes / addresses while disabled. This
+  is intentional: the guard's job is to make the trade-off
+  *explicit* rather than implicit.
+- Note on overlap with the existing warn-only helpers:
+  `assertShipbubbleConfiguredForProduction` covers a strictly broader
+  set of env vars (`SHIPBUBBLE_SENDER_CODE`,
+  `SHIPBUBBLE_WEBHOOK_SECRET`) whose absence has downstream impact
+  (real dispatches 4xx, inbound webhooks fail signature verification
+  and are silently dropped) but does NOT flip
+  `ShipbubbleCarrier.isConfigured()` from true to false. Those
+  remain warn-only. The hard-fail check here is intentionally the
+  narrower subset — exactly the env vars whose absence enables the
+  silent stub short-circuit.
+- Unit-tested in `lib/fulfillment/bootGuard.test.ts` (staging-allowed
+  paths covering each non-production NODE_ENV / hostname-mismatch /
+  all-creds-set / all-opted-out / partially-opted-out case, and
+  production-rejected paths covering all-creds-missing aggregation,
+  partial-cred misconfig, each individual production signal, the
+  opt-out typo defence, and the no-secret-echo discipline) and in
+  `src/index.boot.test.ts` (spawn-based wiring tests covering both
+  the hard-fail path and the all-opted-out exits-clean path).
+
 ### Boot-time guard for `STUB_FULFILLMENT=1` (`assertStubFulfillmentSafe`)
 
 - Env flag: `STUB_FULFILLMENT=1`

@@ -188,6 +188,12 @@ describe("index.ts boot-time guard wiring", () => {
       // process.exit(1), so boot proceeds to the test affordance and
       // exits 0.
       __EPPLAA_BOOT_GUARDS_ONLY: BOOT_GUARDS_ONLY_SENTINEL,
+      // Opt every carrier out so the carrier-credentials guard
+      // (task #99) doesn't preempt the path under test. The carriers'
+      // own behaviour is exercised in the dedicated tests below.
+      DISABLE_CARRIER_SHIPBUBBLE: "1",
+      DISABLE_CARRIER_GIG: "1",
+      DISABLE_CARRIER_OKHI: "1",
     });
 
     expect(result.exitCode).toBe(0);
@@ -198,6 +204,54 @@ describe("index.ts boot-time guard wiring", () => {
     // that would mean the guard wired up the wrong branch.
     expect(result.combined).not.toContain(
       "rate_limit_store_misconfigured_for_production",
+    );
+  }, 30_000);
+
+  it("exits 1 with the carrier-credentials tag when carrier creds are missing on a production-shaped deploy (task #99)", async () => {
+    const result = await spawnBoot({
+      NODE_ENV: "production",
+      // Rate-limit store wired so the prior guard passes and the
+      // carrier-credentials guard is what makes the decision.
+      RATE_LIMIT_STORE: "redis",
+      REDIS_URL: "redis://boot-guard-test@127.0.0.1:1/never-connected",
+      __EPPLAA_BOOT_GUARDS_ONLY: BOOT_GUARDS_ONLY_SENTINEL,
+      // SHIPBUBBLE_API_KEY / GIG_API_KEY / GIG_USERNAME / OKHI_API_KEY /
+      // OKHI_BRANCH_ID intentionally absent — the misconfiguration
+      // under test. The opt-out env vars are also absent so the guard
+      // must hard-fail rather than silently proceeding.
+    });
+
+    expect(result.exitCode).toBe(1);
+    expect(result.combined).toContain(
+      "carrier_credentials_missing_for_production",
+    );
+    // Ordering sanity: the prior guards' tags must NOT appear (they
+    // would only emit if their own misconfig was present, and would
+    // mean the carrier guard isn't the one that made the decision).
+    expect(result.combined).not.toContain(
+      "rate_limit_store_misconfigured_for_production",
+    );
+    expect(result.combined).not.toContain(
+      "stub_fulfillment_kill_switch_on_in_production",
+    );
+  }, 30_000);
+
+  it("exits 0 when every carrier is explicitly opted-out on a production-shaped deploy (task #99 opt-out wiring)", async () => {
+    const result = await spawnBoot({
+      NODE_ENV: "production",
+      RATE_LIMIT_STORE: "redis",
+      REDIS_URL: "redis://boot-guard-test@127.0.0.1:1/never-connected",
+      DISABLE_CARRIER_SHIPBUBBLE: "1",
+      DISABLE_CARRIER_GIG: "1",
+      DISABLE_CARRIER_OKHI: "1",
+      __EPPLAA_BOOT_GUARDS_ONLY: BOOT_GUARDS_ONLY_SENTINEL,
+    });
+
+    expect(result.exitCode).toBe(0);
+    // The hard-fail tag must NOT be emitted on the all-opted-out
+    // path — that would mean the opt-out env vars were ignored.
+    expect(result.combined).not.toContain(
+      "carrier_credentials_missing_for_production",
     );
   }, 30_000);
 });
