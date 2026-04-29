@@ -21,6 +21,7 @@ import TakedownsPage from "@/pages/takedowns";
 import UsersPage from "@/pages/users";
 import ScanBenchPage from "@/pages/scan-bench";
 import SecurityPage from "@/pages/security";
+import StatusPage from "@/pages/status";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -95,6 +96,7 @@ function Router() {
             <Route path="/users" component={UsersPage} />
             <Route path="/scan" component={ScanBenchPage} />
             <Route path="/security" component={SecurityPage} />
+            <Route path="/status" component={StatusPage} />
             <Route component={NotFound} />
           </Switch>
         </AdminShell>

@@ -12,6 +12,7 @@ import {
   Users,
   TestTube2,
   KeyRound,
+  Activity,
 } from "lucide-react";
 import { useAdminMyRoles, useGetMfaStatus } from "@workspace/api-client-react";
 import { cn } from "@/lib/utils";
@@ -32,6 +33,7 @@ const NAV: NavItem[] = [
   { href: "/users", label: "Users & roles", icon: Users },
   { href: "/scan", label: "Scan bench", icon: TestTube2 },
   { href: "/security", label: "Security", icon: KeyRound },
+  { href: "/status", label: "Status", icon: Activity },
 ];
 
 export function AdminShell({ children }: { children: ReactNode }) {

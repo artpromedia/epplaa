@@ -274,19 +274,40 @@ platform load balancer drains 503-returning replicas automatically,
 so a replica whose Redis has gone unreachable will fall out of
 rotation without human intervention.
 
+> **Tip — admin status panel.** For a click-not-curl view, the admin
+> console exposes the same `/api/readyz` data at `/admin/status`
+> (sidebar entry **Status**). It polls `/api/readyz` every 10s, fires
+> several parallel probes per cycle so the load balancer's
+> round-robin samples every replica behind it, groups results by the
+> `replicaId` field on the response, and visually flags any replica
+> whose check failed or whose response was 503. Use it during triage
+> to see at a glance which replica is unhealthy without scripting a
+> per-replica curl loop. It is implemented in
+> `artifacts/admin-console/src/pages/status.tsx` and consumes the
+> `replicaId` field added to `/healthz` and `/readyz` for exactly
+> this purpose.
+
 ```sh
 curl -s "$REPL_API_URL/api/readyz" | jq .
 # Healthy:
 #   { "status": "ready",
+#     "replicaId": "api-server-7c4f9d-x9k2p",
 #     "checks": { "db": "ok", "redis": "ok" },
 #     "rateLimitStore": "redis" }
 #
 # Unhealthy (503):
 #   { "status": "not_ready",
+#     "replicaId": "api-server-7c4f9d-x9k2p",
 #     "checks": { "db": "ok", "redis": "failed" },
 #     "failures": { "redis": "redis_ping_timeout_after_2000ms" },
 #     "rateLimitStore": "redis" }
 ```
+
+The `replicaId` field is the same one the admin status panel groups
+on — when a curl loop and the panel disagree about which replica is
+degraded, comparing `replicaId` values is how you reconcile them.
+Falls back to `pid:<n>` on local/dev replicas without a
+platform-set `HOSTNAME` env var.
 
 Hit `/readyz` against each replica until you have seen all of them
 respond. Any replica returning 503 with `redis: "failed"` is

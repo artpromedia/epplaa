@@ -136,6 +136,8 @@ describe("GET /healthz (liveness)", () => {
     const res = await request(buildApp()).get("/healthz");
     expect(res.status).toBe(200);
     expect(res.body.status).toBe("ok");
+    expect(typeof res.body.replicaId).toBe("string");
+    expect(res.body.replicaId.length).toBeGreaterThan(0);
     // Legacy top-level rateLimitStore field stays for back-compat with
     // the older probe + dashboards.
     expect(res.body.rateLimitStore).toEqual({
@@ -256,6 +258,8 @@ describe("GET /readyz (readiness)", () => {
     const res = await request(buildApp()).get("/readyz");
     expect(res.status).toBe(200);
     expect(res.body.status).toBe("ready");
+    expect(typeof res.body.replicaId).toBe("string");
+    expect(res.body.replicaId.length).toBeGreaterThan(0);
     expect(res.body.checks).toEqual({ db: "ok", redis: "ok" });
     expect(res.body.failures).toBeUndefined();
     expect(res.body.rateLimitStore).toBe("redis");
@@ -287,6 +291,8 @@ describe("GET /readyz (readiness)", () => {
     expect(res.body.checks.db).toBe("failed");
     expect(res.body.checks.redis).toBe("ok");
     expect(res.body.failures.db).toContain("ECONNREFUSED");
+    expect(typeof res.body.replicaId).toBe("string");
+    expect(res.body.replicaId.length).toBeGreaterThan(0);
   });
 
   it("returns 503 not_ready with failure detail when Redis ping fails", async () => {

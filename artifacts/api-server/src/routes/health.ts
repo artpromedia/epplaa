@@ -23,6 +23,17 @@ import {
 
 const router: IRouter = Router();
 
+// Per-process identifier surfaced on /healthz + /readyz so callers
+// (admin status panel, curl loops) can group probes by replica.
+const REPLICA_ID: string =
+  process.env.HOSTNAME && process.env.HOSTNAME.trim() !== ""
+    ? process.env.HOSTNAME
+    : `pid:${process.pid}`;
+
+export function getReplicaId(): string {
+  return REPLICA_ID;
+}
+
 router.get("/healthz", (_req, res) => {
   // Liveness probe — intentionally cheap and always-200 so the platform
   // doesn't kill replicas during transient backing-store blips. Use
@@ -56,6 +67,7 @@ router.get("/healthz", (_req, res) => {
   };
   res.json({
     status: "ok",
+    replicaId: REPLICA_ID,
     rateLimitStore: rateLimitStatus,
     subsystems,
   });
@@ -238,6 +250,7 @@ router.get("/readyz", (_req, res) => {
       );
       res.status(503).json({
         status: "not_ready",
+        replicaId: REPLICA_ID,
         checks,
         failures,
         rateLimitStore: getRateLimitStoreKind(),
@@ -247,6 +260,7 @@ router.get("/readyz", (_req, res) => {
     }
     res.json({
       status: "ready",
+      replicaId: REPLICA_ID,
       checks,
       rateLimitStore: getRateLimitStoreKind(),
       config,
@@ -257,6 +271,7 @@ router.get("/readyz", (_req, res) => {
     logger.error({ err: (err as Error).message }, "readyz_unhandled");
     res.status(503).json({
       status: "not_ready",
+      replicaId: REPLICA_ID,
       checks: {},
       failures: { unhandled: (err as Error).message },
     });
