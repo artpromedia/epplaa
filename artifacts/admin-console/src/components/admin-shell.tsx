@@ -19,6 +19,7 @@ import {
   ScrollText,
   AlertTriangle,
   ExternalLink,
+  Gauge,
 } from "lucide-react";
 import { useAdminMyRoles, useGetMfaStatus } from "@workspace/api-client-react";
 import { RateLimitStoreAlerts } from "@/components/rate-limit-store-alerts";
@@ -49,6 +50,7 @@ const NAV: NavItem[] = [
   { href: "/payouts?status=blocked", label: "Blocked payouts", icon: AlertTriangle, requireRoles: ADMIN_ONLY_NAV },
   { href: "/ndpr", label: "NDPR requests", icon: FileLock2, requireRoles: ADMIN_ONLY_NAV },
   { href: "/audit", label: "Audit log", icon: ScrollText, requireRoles: ADMIN_ONLY_NAV },
+  { href: "/rate-limit-events", label: "Rate-limit events", icon: Gauge, requireRoles: ADMIN_ONLY_NAV },
   { href: "/takedowns", label: "Takedowns", icon: Ban },
   { href: "/users", label: "Users & roles", icon: Users },
   { href: "/scan", label: "Scan bench", icon: TestTube2 },

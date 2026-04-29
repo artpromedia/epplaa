@@ -1350,6 +1350,22 @@ export interface AdminAuditPage {
   totalCount: number;
 }
 
+export interface AdminRateLimitEvent {
+  id: string;
+  /** Identity bucket key — e.g. 'user:abc' or 'ip:1.2.3.4'. */
+  identity: string;
+  /** Request path the rate limit fired on. */
+  route: string;
+  /** anon | buyer | seller | admin */
+  tier: string;
+  tsIso: string;
+}
+
+export interface AdminRateLimitEventPage {
+  items: AdminRateLimitEvent[];
+  totalCount: number;
+}
+
 export type NdprRequestBundlePayload = null | { [key: string]: unknown };
 
 export type NdprRequestRequestBody = null | { [key: string]: unknown };
@@ -2386,6 +2402,48 @@ export type SearchAdminAuditLogParams = {
    */
   limit?: number;
 };
+
+export type ListAdminRateLimitEventsParams = {
+  /**
+   * Identity key — usually 'user:<id>' or 'ip:<addr>'. Case-sensitive exact match.
+   */
+  identity?: string;
+  /**
+   * Request path the rate limit fired on. Substring (LIKE) match.
+   */
+  route?: string;
+  /**
+   * anon | buyer | seller | admin
+   */
+  tier?: string;
+  sinceIso?: string;
+  untilIso?: string;
+  /**
+   * @minimum 1
+   * @maximum 500
+   */
+  limit?: number;
+  /**
+   * @minimum 0
+   */
+  offset?: number;
+  /**
+ * Direction to sort by `ts`. Defaults to `desc` (newest first)
+which is the typical "what just happened" view; `asc`
+(oldest first) is useful for replaying a burst from its
+beginning.
+
+ */
+  sortDir?: ListAdminRateLimitEventsSortDir;
+};
+
+export type ListAdminRateLimitEventsSortDir =
+  (typeof ListAdminRateLimitEventsSortDir)[keyof typeof ListAdminRateLimitEventsSortDir];
+
+export const ListAdminRateLimitEventsSortDir = {
+  desc: "desc",
+  asc: "asc",
+} as const;
 
 export type RequestNdprRectifyBodyPatch = { [key: string]: unknown };
 

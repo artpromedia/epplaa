@@ -26,6 +26,7 @@ import KycPage from "@/pages/kyc";
 import SanctionsPage from "@/pages/sanctions";
 import NdprPage from "@/pages/ndpr";
 import AuditPage from "@/pages/audit";
+import RateLimitEventsPage from "@/pages/rate-limit-events";
 import { RequireRoles } from "@/components/require-roles";
 
 const ADMIN_ONLY = ["admin"] as const;
@@ -117,6 +118,11 @@ function Router() {
             <Route path="/audit">
               <RequireRoles roles={ADMIN_ONLY}>
                 <AuditPage />
+              </RequireRoles>
+            </Route>
+            <Route path="/rate-limit-events">
+              <RequireRoles roles={ADMIN_ONLY}>
+                <RateLimitEventsPage />
               </RequireRoles>
             </Route>
             <Route path="/takedowns" component={TakedownsPage} />

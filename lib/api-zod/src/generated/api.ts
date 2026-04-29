@@ -2240,6 +2240,50 @@ export const SearchAdminAuditLogResponse = zod.object({
   totalCount: zod.number(),
 });
 
+/**
+ * @summary Forensic search of the bounded `rate_limit_events` table (90-day
+window). Lets admins reconstruct credential-stuffing or scraping
+bursts after the fact, filtered by identity / route / tier /
+time window. The search itself is audited.
+
+ */
+export const listAdminRateLimitEventsQueryLimitMax = 500;
+
+export const listAdminRateLimitEventsQueryOffsetMin = 0;
+
+export const ListAdminRateLimitEventsQueryParams = zod.object({
+  identity: zod.coerce.string().optional(),
+  route: zod.coerce.string().optional(),
+  tier: zod.coerce.string().optional(),
+  sinceIso: zod.coerce.string().optional(),
+  untilIso: zod.coerce.string().optional(),
+  limit: zod.coerce
+    .number()
+    .min(1)
+    .max(listAdminRateLimitEventsQueryLimitMax)
+    .optional(),
+  offset: zod.coerce
+    .number()
+    .min(listAdminRateLimitEventsQueryOffsetMin)
+    .optional(),
+  sortDir: zod.enum(["desc", "asc"]).optional(),
+});
+
+export const ListAdminRateLimitEventsResponse = zod.object({
+  items: zod.array(
+    zod.object({
+      id: zod.string(),
+      identity: zod
+        .string()
+        .describe("Identity bucket key — e.g. 'user:abc' or 'ip:1.2.3.4'."),
+      route: zod.string().describe("Request path the rate limit fired on."),
+      tier: zod.string().describe("anon | buyer | seller | admin"),
+      tsIso: zod.string(),
+    }),
+  ),
+  totalCount: zod.number(),
+});
+
 export const ListNdprRequestsResponseItem = zod.object({
   id: zod.string(),
   kind: zod

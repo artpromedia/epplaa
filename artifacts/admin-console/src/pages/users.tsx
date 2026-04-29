@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { useSearch } from "wouter";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   useAdminGetUserRoles,
@@ -18,11 +19,32 @@ import { useToast } from "@/hooks/use-toast";
 const ROLES = ["admin", "moderator", "finance_ops", "support"];
 
 export default function UsersPage() {
-  const [userId, setUserId] = useState("");
-  const [search, setSearch] = useState("");
+  // `?q=<id>` deep-links from other admin surfaces (e.g. the rate-limit
+  // events page's Trust & Safety pivot button) prefill AND auto-run the
+  // lookup. Without the auto-run the link would dump operators into an
+  // empty search box and break the "click the burst row, see the user"
+  // expectation set by the rate-limit page. Only seeded once per visit
+  // so an operator who edits the input doesn't get overridden.
+  const searchString = useSearch();
+  const initialQ =
+    new URLSearchParams(searchString).get("q")?.trim() ?? "";
+  const [userId, setUserId] = useState(initialQ);
+  const [search, setSearch] = useState(initialQ);
   const [grantRole, setGrantRole] = useState<string>("moderator");
   const qc = useQueryClient();
   const { toast } = useToast();
+
+  useEffect(() => {
+    const next =
+      new URLSearchParams(searchString).get("q")?.trim() ?? "";
+    if (next && next !== search) {
+      setUserId(next);
+      setSearch(next);
+    }
+    // Only react to URL changes — local edits to `userId` should not
+    // re-trigger this effect or it would clobber operator typing.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchString]);
 
   const { data, isLoading, error } = useAdminGetUserRoles(search, {
     query: { enabled: search.length > 0, staleTime: 5_000 } as never,

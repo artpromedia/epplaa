@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { and, desc, eq, gte, like, count } from "drizzle-orm";
+import { and, desc, eq, gte, like, count, sql } from "drizzle-orm";
 import type { SQL } from "drizzle-orm";
 import { db, schema } from "../lib/db";
 import { requireUserId } from "../lib/auth";
@@ -371,6 +371,169 @@ router.get(
         createdAtIso: r.createdAt.toISOString(),
       })),
       totalCount: totalRows[0]?.c ?? 0,
+    });
+  },
+);
+
+/**
+ * GET /admin/rate-limit-events — forensic search of the bounded
+ * `rate_limit_events` table. The table is written by
+ * `middlewares/apiRateLimit.ts` whenever a bucket exhausts (one row per
+ * 429) and trimmed to a 90-day window by the retention sweep
+ * (`lib/retention.ts`). Without this surface the only way to query it
+ * is direct DB access, which defeats the point of keeping the trail.
+ *
+ * Filters:
+ *  - identity: exact match on the bucket key (typically "user:<id>" or
+ *    "ip:<addr>"). Indexed via `rate_limit_events_identity_ts_idx`.
+ *  - route: substring (LIKE %x%) match on the request path, so
+ *    operators can scope to "/auth/*" or "/api/wallet" without knowing
+ *    the exact path. Indexed prefix scans wouldn't help here because
+ *    investigators usually know a fragment, not a prefix.
+ *  - tier: anon | buyer | seller | admin (exact).
+ *  - sinceIso / untilIso: bounded time window. Defaults to the full
+ *    90-day retention window.
+ *  - limit / offset: simple pagination. Limit is capped at 500 to match
+ *    the audit search.
+ *
+ * Reading the rate-limit forensic trail is itself audited so we have a
+ * clear paper trail of who pulled credential-stuffing data — the same
+ * meta-audit we apply to the admin audit log search.
+ *
+ * Raw SQL because `rate_limit_events` is bootstrapped via
+ * `initSecuritySchema` (additive CREATE TABLE IF NOT EXISTS) rather
+ * than a Drizzle table definition, so there's no schema object on
+ * `schema.*` to target with the query builder.
+ */
+router.get(
+  "/admin/rate-limit-events",
+  requireRole(ADMIN_ONLY),
+  async (req, res) => {
+    const reviewerId = requireUserId(req, res);
+    if (!reviewerId) return;
+    const identity = String(req.query.identity ?? "").trim();
+    const route = String(req.query.route ?? "").trim();
+    const tier = String(req.query.tier ?? "").trim();
+    const sinceIso = String(req.query.sinceIso ?? "").trim();
+    const untilIso = String(req.query.untilIso ?? "").trim();
+    const limit = Math.min(
+      Math.max(Number(req.query.limit ?? 100), 1),
+      500,
+    );
+    const offset = Math.max(Number(req.query.offset ?? 0), 0);
+    // Operator-selectable sort: defaults to newest-first ("desc"),
+    // which is the typical "what just happened" view. "asc" lets
+    // an investigator replay a burst from its beginning. Any other
+    // value (typo, tampering) silently falls back to "desc" rather
+    // than throwing, since the column itself is server-controlled.
+    const sortDir =
+      String(req.query.sortDir ?? "desc").toLowerCase() === "asc"
+        ? "asc"
+        : "desc";
+
+    // Build the WHERE clause using parameterised drizzle `sql` fragments
+    // — never interpolate user input directly. The combined fragment is
+    // assembled from a list of conditions joined by AND, mirroring the
+    // pattern used by the audit search above.
+    const conds: SQL[] = [];
+    if (identity)
+      conds.push(sql`identity = ${identity}`);
+    if (route)
+      conds.push(sql`route LIKE ${`%${route}%`}`);
+    if (tier)
+      conds.push(sql`tier = ${tier}`);
+    if (sinceIso) {
+      const since = new Date(sinceIso);
+      if (!Number.isNaN(since.getTime())) {
+        conds.push(sql`ts >= ${since}`);
+      }
+    }
+    if (untilIso) {
+      const until = new Date(untilIso);
+      if (!Number.isNaN(until.getTime())) {
+        conds.push(sql`ts <= ${until}`);
+      }
+    }
+    const where: SQL =
+      conds.length === 0
+        ? sql`TRUE`
+        : sql.join(conds, sql` AND `);
+
+    interface Row {
+      id: string;
+      identity: string;
+      route: string;
+      tier: string;
+      ts: string | Date;
+    }
+    interface CountRow {
+      c: string | number;
+    }
+
+    let items: Row[] = [];
+    let totalCount = 0;
+    try {
+      // sortDir is constrained to the literal "asc" | "desc" above so
+      // it's safe to inline as raw SQL here — drizzle's `sql.raw` is
+      // necessary because ORDER BY direction is a syntactic position,
+      // not a parameter slot.
+      const orderClause =
+        sortDir === "asc"
+          ? sql`ORDER BY ts ASC, id ASC`
+          : sql`ORDER BY ts DESC, id DESC`;
+      const result = await db.execute(sql`
+        SELECT id, identity, route, tier, ts
+        FROM rate_limit_events
+        WHERE ${where}
+        ${orderClause}
+        LIMIT ${limit}
+        OFFSET ${offset};
+      `);
+      items =
+        ((result as unknown as { rows?: Row[] }).rows ?? []) as Row[];
+      const countResult = await db.execute(sql`
+        SELECT COUNT(*)::bigint AS c FROM rate_limit_events WHERE ${where};
+      `);
+      const countRows =
+        ((countResult as unknown as { rows?: CountRow[] }).rows ?? []) as CountRow[];
+      totalCount = Number(countRows[0]?.c ?? 0);
+    } catch (err) {
+      logger.error(
+        { err: (err as Error).message },
+        "admin_rate_limit_events_search_failed",
+      );
+      res.status(500).json({ error: "internal_error" });
+      return;
+    }
+
+    await recordAudit({
+      actorId: reviewerId,
+      action: "admin.rate_limit_events.search",
+      entity: "rate_limit_events",
+      payload: {
+        identity,
+        route,
+        tier,
+        sinceIso,
+        untilIso,
+        limit,
+        offset,
+        sortDir,
+        returned: items.length,
+        totalCount,
+      },
+    });
+
+    res.json({
+      items: items.map((r) => ({
+        id: r.id,
+        identity: r.identity,
+        route: r.route,
+        tier: r.tier,
+        tsIso:
+          r.ts instanceof Date ? r.ts.toISOString() : new Date(r.ts).toISOString(),
+      })),
+      totalCount,
     });
   },
 );

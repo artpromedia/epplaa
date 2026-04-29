@@ -41,6 +41,7 @@ import type {
   AdminListTakedownsParams,
   AdminNdprPage,
   AdminNdprRow,
+  AdminRateLimitEventPage,
   AdminReleasePayoutBody,
   AdminRunDuePayouts200,
   AdminRunReconciliation200,
@@ -90,6 +91,7 @@ import type {
   HealthStatus,
   KycStatus,
   ListAdminNdprRequestsParams,
+  ListAdminRateLimitEventsParams,
   ListAdminSanctionsHitsParams,
   ListFulfillmentLocationsParams,
   ListProductsParams,
@@ -10869,6 +10871,119 @@ export function useSearchAdminAuditLog<
   },
 ): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
   const queryOptions = getSearchAdminAuditLogQueryOptions(params, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Forensic search of the bounded `rate_limit_events` table (90-day
+window). Lets admins reconstruct credential-stuffing or scraping
+bursts after the fact, filtered by identity / route / tier /
+time window. The search itself is audited.
+
+ */
+export const getListAdminRateLimitEventsUrl = (
+  params?: ListAdminRateLimitEventsParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : value.toString());
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/api/admin/rate-limit-events?${stringifiedParams}`
+    : `/api/admin/rate-limit-events`;
+};
+
+export const listAdminRateLimitEvents = async (
+  params?: ListAdminRateLimitEventsParams,
+  options?: RequestInit,
+): Promise<AdminRateLimitEventPage> => {
+  return customFetch<AdminRateLimitEventPage>(
+    getListAdminRateLimitEventsUrl(params),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getListAdminRateLimitEventsQueryKey = (
+  params?: ListAdminRateLimitEventsParams,
+) => {
+  return [`/api/admin/rate-limit-events`, ...(params ? [params] : [])] as const;
+};
+
+export const getListAdminRateLimitEventsQueryOptions = <
+  TData = Awaited<ReturnType<typeof listAdminRateLimitEvents>>,
+  TError = ErrorType<UnauthorizedResponse | ForbiddenResponse>,
+>(
+  params?: ListAdminRateLimitEventsParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof listAdminRateLimitEvents>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getListAdminRateLimitEventsQueryKey(params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof listAdminRateLimitEvents>>
+  > = ({ signal }) =>
+    listAdminRateLimitEvents(params, { signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof listAdminRateLimitEvents>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type ListAdminRateLimitEventsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listAdminRateLimitEvents>>
+>;
+export type ListAdminRateLimitEventsQueryError = ErrorType<
+  UnauthorizedResponse | ForbiddenResponse
+>;
+
+/**
+ * @summary Forensic search of the bounded `rate_limit_events` table (90-day
+window). Lets admins reconstruct credential-stuffing or scraping
+bursts after the fact, filtered by identity / route / tier /
+time window. The search itself is audited.
+
+ */
+
+export function useListAdminRateLimitEvents<
+  TData = Awaited<ReturnType<typeof listAdminRateLimitEvents>>,
+  TError = ErrorType<UnauthorizedResponse | ForbiddenResponse>,
+>(
+  params?: ListAdminRateLimitEventsParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof listAdminRateLimitEvents>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getListAdminRateLimitEventsQueryOptions(params, options);
 
   const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
     queryKey: QueryKey;

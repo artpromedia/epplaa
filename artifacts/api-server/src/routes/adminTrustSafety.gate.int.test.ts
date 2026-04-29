@@ -102,6 +102,7 @@ d("admin Trust & Safety gate", () => {
     ["GET", "/admin/ndpr/requests"],
     ["POST", "/admin/ndpr/requests/ndpr_does_not_exist/cancel"],
     ["GET", "/admin/audit"],
+    ["GET", "/admin/rate-limit-events"],
     // Legacy KYC routes migrated from env-allowlist requireAdmin to
     // requireRole(['admin']) in this task. Approve/reject are POSTed
     // with empty body — the role gate runs before body parsing.

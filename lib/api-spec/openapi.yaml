@@ -1913,6 +1913,65 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
 
+  # ---- Rate-limit forensic search (admin) -----------------------------
+  /admin/rate-limit-events:
+    get:
+      operationId: listAdminRateLimitEvents
+      tags: [admin]
+      summary: |
+        Forensic search of the bounded `rate_limit_events` table (90-day
+        window). Lets admins reconstruct credential-stuffing or scraping
+        bursts after the fact, filtered by identity / route / tier /
+        time window. The search itself is audited.
+      parameters:
+        - in: query
+          name: identity
+          required: false
+          schema: { type: string, description: "Identity key — usually 'user:<id>' or 'ip:<addr>'. Case-sensitive exact match." }
+        - in: query
+          name: route
+          required: false
+          schema: { type: string, description: "Request path the rate limit fired on. Substring (LIKE) match." }
+        - in: query
+          name: tier
+          required: false
+          schema: { type: string, description: "anon | buyer | seller | admin" }
+        - in: query
+          name: sinceIso
+          required: false
+          schema: { type: string }
+        - in: query
+          name: untilIso
+          required: false
+          schema: { type: string }
+        - in: query
+          name: limit
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 500 }
+        - in: query
+          name: offset
+          required: false
+          schema: { type: integer, minimum: 0 }
+        - in: query
+          name: sortDir
+          required: false
+          schema:
+            type: string
+            enum: [desc, asc]
+            description: |
+              Direction to sort by `ts`. Defaults to `desc` (newest first)
+              which is the typical "what just happened" view; `asc`
+              (oldest first) is useful for replaying a burst from its
+              beginning.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AdminRateLimitEventPage" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
   # ---- NDPR ------------------------------------------------------------
   # Nigeria Data Protection Regulation — data-subject rights. All write
   # operations are audited and create rows in `ndpr_requests`.
@@ -3960,6 +4019,23 @@ components:
         items:
           type: array
           items: { $ref: "#/components/schemas/AdminAuditEvent" }
+        totalCount: { type: integer }
+    AdminRateLimitEvent:
+      type: object
+      required: [id, identity, route, tier, tsIso]
+      properties:
+        id: { type: string }
+        identity: { type: string, description: "Identity bucket key — e.g. 'user:abc' or 'ip:1.2.3.4'." }
+        route: { type: string, description: "Request path the rate limit fired on." }
+        tier: { type: string, description: "anon | buyer | seller | admin" }
+        tsIso: { type: string }
+    AdminRateLimitEventPage:
+      type: object
+      required: [items, totalCount]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/AdminRateLimitEvent" }
         totalCount: { type: integer }
 
     NdprRequest:
