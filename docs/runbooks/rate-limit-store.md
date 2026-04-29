@@ -452,24 +452,57 @@ at all*, on-call gets a Sentry Cron monitor failure on
 The two pages have different titles/fingerprints by design, so on-call
 knows which runbook section to start from.
 
-**One-time Sentry setup.** Configure the monitor in the Sentry UI
-(**Crons → Add Monitor**) with these values; check-ins from the
-workflow lazily upsert the monitor on first run, but explicit
-configuration ensures the schedule + margins are correct from the
-first tick:
+**Sentry monitor configuration.** The monitor configuration is
+**declared in code** at
+[`scripts/src/sentryMonitors.config.ts`](../../scripts/src/sentryMonitors.config.ts)
+(slug `check-healthz-degraded`). Two pieces of automation keep the
+Sentry-side state in lockstep with the workflow YAML:
+
+- **CI drift check** — the `Sentry Cron monitors in sync with workflow
+  cron` step in `.github/workflows/ci.yml` runs
+  `pnpm --filter @workspace/scripts run check-sentry-monitors` on
+  every PR. It parses the `cron:` value from this workflow's
+  `on.schedule` block and fails the build when it disagrees with the
+  declared `schedule`. So the cron values can never silently drift
+  apart — change the workflow's `cron:` and `sentryMonitors.config.ts`
+  in the same PR or CI rejects the change.
+- **Release-time push** — the `sentry-monitors-sync` job in
+  `.github/workflows/release.yml` runs
+  `pnpm --filter @workspace/scripts run sync-sentry-monitors` on
+  every release tag. The script PUTs each declared monitor to
+  Sentry's Monitors API (`PUT /api/0/organizations/<org>/monitors/<slug>/`),
+  which is idempotent — re-running it without changes is a no-op,
+  and a changed `schedule` / `checkin_margin` / `max_runtime` is
+  propagated in one job. **Do not edit the monitor in the Sentry
+  UI** — the next release will overwrite the manual change. To
+  rotate a value, edit `sentryMonitors.config.ts`.
+
+The values currently declared (mirrored here for triage convenience —
+the source-of-truth is the config file):
 
 | Setting | Value | Why |
 | --- | --- | --- |
 | Slug | `check-healthz-degraded` | Must match the slug in the workflow's `sentry-cli monitors run …` invocation. |
 | Schedule type | Crontab | Mirrors the GH Actions `schedule:` cadence. |
-| Schedule | `*/5 * * * *` | Same cron expression as the GH Actions schedule, so Sentry expects exactly one check-in per scheduled tick. |
+| Schedule | `*/5 * * * *` | Same cron expression as the GH Actions schedule, so Sentry expects exactly one check-in per scheduled tick. The CI drift check enforces this — it cannot silently fall out of sync. |
 | Timezone | `UTC` | GH Actions schedules run in UTC. |
 | Check-in margin | `5` minutes | Generous enough to absorb runner queue time + the workflow's own ~30s install/boot. Tighten only if you're prepared to chase noise from cold-start runners. |
 | Max runtime | `10` minutes | The probe loop's `timeout-minutes: 8` gives this slack; anything longer means the runner hung mid-loop. |
 | Failure issue threshold | `1` | Page on the first missed check-in — there is no "noisy" failure mode for "the scheduler stopped running." |
 | Recovery threshold | `1` | Resolve the issue as soon as the next check-in arrives. |
 | Environment | `production` | The workflow always passes `--environment production`. |
-| Owner / on-call | api-server / rate-limit owners | So the page routes to the same on-call as the streak-duration alert. |
+| Owner / on-call | api-server / rate-limit owners | So the page routes to the same on-call as the streak-duration alert. Owner is configured in the Sentry UI Teams settings — the API doesn't yet model team ownership for monitors created via PUT. |
+
+To verify the sync wiring without waiting for a release tag, run
+locally:
+
+```sh
+SENTRY_ORG=<org> DRY_RUN=1 \
+  pnpm --filter @workspace/scripts run sync-sentry-monitors
+```
+
+This logs the exact JSON payloads the release job would send, without
+hitting Sentry.
 
 **Verifying the heartbeat.** Two checks, in increasing cost:
 

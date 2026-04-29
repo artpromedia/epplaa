@@ -26,6 +26,34 @@ jobs:
           environment: production
           version: ${{ github.sha }}
 
+  sentry-monitors-sync:
+    # Push the Sentry Cron monitor configuration declared in
+    # scripts/src/sentryMonitors.config.ts to Sentry's Monitors API
+    # (task #77). Idempotent: re-runs on every release, only matters
+    # when something actually changed. Without this step, a merged-but-
+    # unsynced cron change would still leave Sentry's monitor on the
+    # old schedule until an operator hand-edited the UI — exactly the
+    # drift this task closes.
+    name: Sync Sentry Cron monitor configuration
+    runs-on: ubuntu-latest
+    if: ${{ vars.SENTRY_ORG != '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Upsert monitors via Sentry API
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          SENTRY_ORG: ${{ vars.SENTRY_ORG }}
+          SENTRY_PROJECT: ${{ vars.SENTRY_PROJECT }}
+        run: pnpm --filter @workspace/scripts run sync-sentry-monitors
+
   # Post-deploy configuration gate (Task #100, building on #89).
   #
   # Calls the reusable `check-production-hostname-pattern.yml` workflow

@@ -91,16 +91,20 @@ name: Healthz degraded probe (per-minute)
 #   check-healthz-degraded --environment production -- ...`. This sends
 #   an `in_progress` check-in at start and an `ok`/`error` check-in at
 #   finish to a Sentry Cron monitor with the slug
-#   `check-healthz-degraded`. The monitor itself (schedule,
-#   check-in margin, environment) is configured in the Sentry UI — see
-#   docs/runbooks/rate-limit-store.md Step 5 for the required values.
-#   Sentry pages on-call automatically when an expected check-in fails
-#   to arrive on time, which catches the failure modes that neither the
-#   in-loop `send-event` page nor GitHub's "Failed workflow run" mail
-#   can detect: GH Actions outages, the workflow being silently
-#   disabled (e.g. auto-disable after 60 days of inactivity if
-#   HEALTHZ_PROBE_ENABLED is flipped off temporarily), or schedule
-#   delays under load.
+#   `check-healthz-degraded`. The monitor configuration (schedule,
+#   check-in margin, max runtime, environment) is declared in code at
+#   `scripts/src/sentryMonitors.config.ts` and pushed to Sentry by the
+#   release workflow's `sentry-monitors-sync` job (task #77). The CI
+#   `Sentry Cron monitors in sync with workflow cron` step fails the
+#   build if the `cron:` value below diverges from the declared
+#   `schedule` for this slug — so the two values stay in lockstep.
+#   Update both in the same PR. Sentry pages on-call automatically when
+#   an expected check-in fails to arrive on time, which catches the
+#   failure modes that neither the in-loop `send-event` page nor
+#   GitHub's "Failed workflow run" mail can detect: GH Actions outages,
+#   the workflow being silently disabled (e.g. auto-disable after 60
+#   days of inactivity if HEALTHZ_PROBE_ENABLED is flipped off
+#   temporarily), or schedule delays under load.
 #
 # When secrets/vars are missing the workflow degrades safely:
 #   - HEALTHZ_PROBE_ENABLED != "1"            -> job is skipped entirely.
@@ -133,6 +137,11 @@ name: Healthz degraded probe (per-minute)
 
 on:
   schedule:
+    # Source-of-truth for this cron lives alongside the Sentry Cron
+    # monitor schedule it heartbeats for, in
+    # scripts/src/sentryMonitors.config.ts (slug
+    # `check-healthz-degraded`). CI fails the build if the two values
+    # disagree — update both in the same PR.
     - cron: "*/5 * * * *"
   workflow_dispatch: {}
 
@@ -404,13 +413,15 @@ jobs:
             # an `in_progress` check-in before exec'ing the wrapped
             # command and an `ok`/`error` check-in afterwards based on
             # the wrapped command's exit code. The Sentry Cron monitor
-            # with slug `check-healthz-degraded` (configured in the
-            # Sentry UI to expect `*/5 * * * *` check-ins; see
-            # docs/runbooks/rate-limit-store.md Step 5) will page
-            # on-call when an expected check-in fails to arrive within
-            # its check-in margin — which is the only signal that
-            # survives the scheduler itself going away (workflow
-            # disabled, GH Actions outage, schedule silently delayed).
+            # with slug `check-healthz-degraded` is declared in
+            # scripts/src/sentryMonitors.config.ts and synced to Sentry
+            # by the release workflow's `sentry-monitors-sync` job;
+            # the CI drift check enforces that the `cron:` value above
+            # matches the declared schedule. Sentry will page on-call
+            # when an expected check-in fails to arrive within its
+            # check-in margin — which is the only signal that survives
+            # the scheduler itself going away (workflow disabled, GH
+            # Actions outage, schedule silently delayed).
             #
             # The wrapper preserves the wrapped command's exit code, so
             # a non-zero loop still fails the workflow step and the

@@ -30,19 +30,25 @@ name: Backup verify (weekly)
 #                                        independently of the runtime DSN.
 #
 # Schedule: Sunday 03:00 UTC. Tweak `cron` if your backup window shifts —
-# remember to update the Sentry Cron monitor schedule + check-in margin
-# in lockstep (see docs/runbooks/backup-verify.md).
+# the matching Sentry Cron monitor schedule + margins live in
+# scripts/src/sentryMonitors.config.ts (slug `backup-verify`) and the
+# CI drift check fails the build when the two disagree, so update both
+# in the same PR.
 # Manual runs via workflow_dispatch are encouraged for ad-hoc validation.
 #
 # Heartbeat / Sentry Cron monitor:
 #   The verify step is wrapped with `sentry-cli monitors run backup-verify
 #   --environment production -- ...`. This sends an `in_progress` check-in
 #   at start and an `ok`/`error` check-in at finish to a Sentry Cron
-#   monitor with the slug `backup-verify`. The monitor itself (schedule,
-#   check-in margin, environment) is configured in the Sentry UI — see
-#   docs/runbooks/backup-verify.md for the required values. Sentry pages
-#   on-call automatically when an expected check-in fails to arrive on
-#   time, which catches the failure modes that neither the in-workflow
+#   monitor with the slug `backup-verify`. The monitor configuration
+#   (schedule, check-in margin, max runtime, environment) is declared
+#   in code at `scripts/src/sentryMonitors.config.ts` and pushed to
+#   Sentry by the release workflow's `sentry-monitors-sync` job (task
+#   #77). The CI `Sentry Cron monitors in sync with workflow cron`
+#   step fails the build if the `cron:` value below diverges from the
+#   declared `schedule` for this slug. Sentry pages on-call
+#   automatically when an expected check-in fails to arrive on time,
+#   which catches the failure modes that neither the in-workflow
 #   Sentry alert nor GitHub's "Failed workflow run" mail can detect: GH
 #   Actions outages, the workflow being silently disabled (e.g.
 #   auto-disable after 60 days of inactivity if BACKUP_VERIFY_ENABLED is
@@ -77,6 +83,11 @@ name: Backup verify (weekly)
 
 on:
   schedule:
+    # Source-of-truth for this cron lives alongside the Sentry Cron
+    # monitor schedule it heartbeats for, in
+    # scripts/src/sentryMonitors.config.ts (slug `backup-verify`). CI
+    # fails the build if the two values disagree — update both in the
+    # same PR.
     - cron: "0 3 * * 0"
   workflow_dispatch: {}
 
@@ -158,13 +169,16 @@ jobs:
             # `in_progress` check-in before exec'ing the wrapped command
             # and an `ok`/`error` check-in afterwards based on the
             # wrapped command's exit code. The Sentry Cron monitor with
-            # slug `backup-verify` (configured in the Sentry UI to expect
-            # `0 3 * * 0` weekly check-ins; see
-            # docs/runbooks/backup-verify.md) will page on-call when an
-            # expected check-in fails to arrive within its check-in
-            # margin — which is the only signal that survives the
-            # scheduler itself going away (workflow disabled, GH Actions
-            # outage, schedule silently delayed, file deleted/renamed).
+            # slug `backup-verify` is declared in
+            # scripts/src/sentryMonitors.config.ts and synced to Sentry
+            # by the release workflow's `sentry-monitors-sync` job; the
+            # CI drift check enforces that the `cron:` value above
+            # matches the declared schedule. Sentry will page on-call
+            # when an expected check-in fails to arrive within its
+            # check-in margin — which is the only signal that survives
+            # the scheduler itself going away (workflow disabled, GH
+            # Actions outage, schedule silently delayed, file
+            # deleted/renamed).
             #
             # The wrapper preserves the wrapped command's exit code, so a
             # non-zero verify still fails the workflow step and the

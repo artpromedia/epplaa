@@ -6,6 +6,8 @@
   "scripts": {
     "hello": "tsx ./src/hello.ts",
     "check-rate-limit-opt-out-sunsets": "tsx ./src/checkRateLimitOptOutSunsets.ts",
+    "check-sentry-monitors": "tsx ./src/checkSentryMonitorsInSync.ts",
+    "sync-sentry-monitors": "tsx ./src/syncSentryMonitors.ts",
     "test": "vitest run --passWithNoTests",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },

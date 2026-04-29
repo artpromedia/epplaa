@@ -62,6 +62,16 @@ jobs:
       - name: Typecheck
         run: pnpm run typecheck
 
+      # Sentry Cron monitor / workflow-cron drift check (task #77).
+      # Fails the build when a workflow's `cron:` value disagrees with
+      # the matching monitor's declared `schedule` in
+      # scripts/src/sentryMonitors.config.ts. Catches the
+      # "I changed the workflow cron and forgot to update the monitor"
+      # failure mode at PR time rather than at the next missed
+      # check-in page.
+      - name: Sentry Cron monitors in sync with workflow cron
+        run: pnpm --filter @workspace/scripts run check-sentry-monitors
+
       - name: Vitest unit tests with coverage threshold
         run: pnpm run test:coverage
         env:

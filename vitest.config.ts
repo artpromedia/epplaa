@@ -11,8 +11,9 @@ export default defineConfig({
     projects: [
       "artifacts/*/vitest.config.ts",
       // Pulls in @workspace/scripts so repo-level CLI checks
-      // (e.g. checkRateLimitOptOutSunsets) are exercised by the
-      // root `pnpm test` invocation alongside the artifact suites.
+      // (e.g. checkRateLimitOptOutSunsets, checkSentryMonitorsInSync)
+      // are exercised by the root `pnpm test` invocation alongside
+      // the artifact suites.
       "scripts/vitest.config.ts",
     ],
   },

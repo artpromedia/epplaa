@@ -90,23 +90,56 @@ GitHub.
 
 ## Sentry Cron monitor configuration
 
-Configure the monitor in the Sentry UI (**Crons → Add Monitor**) with
-these values; check-ins from the workflow lazily upsert the monitor on
-first run, but explicit configuration ensures the schedule + margins are
-correct from the first tick:
+The monitor configuration is **declared in code** at
+[`scripts/src/sentryMonitors.config.ts`](../../scripts/src/sentryMonitors.config.ts)
+(slug `backup-verify`). Two pieces of automation keep the Sentry-side
+state in lockstep with the workflow YAML:
+
+- **CI drift check** — the `Sentry Cron monitors in sync with workflow
+  cron` step in `.github/workflows/ci.yml` runs
+  `pnpm --filter @workspace/scripts run check-sentry-monitors` on
+  every PR. It parses the `cron:` value from this workflow's
+  `on.schedule` block and fails the build when it disagrees with the
+  declared `schedule`. So the cron values can never silently drift
+  apart — change the workflow's `cron:` and `sentryMonitors.config.ts`
+  in the same PR or CI rejects the change.
+- **Release-time push** — the `sentry-monitors-sync` job in
+  `.github/workflows/release.yml` runs
+  `pnpm --filter @workspace/scripts run sync-sentry-monitors` on every
+  release tag. The script PUTs each declared monitor to Sentry's
+  Monitors API (`PUT /api/0/organizations/<org>/monitors/<slug>/`),
+  which is idempotent — re-running it without changes is a no-op, and
+  a changed `schedule` / `checkin_margin` / `max_runtime` is propagated
+  in one job. **Do not edit the monitor in the Sentry UI** — the next
+  release will overwrite the manual change. To rotate a value, edit
+  `sentryMonitors.config.ts`.
+
+The values currently declared (mirrored here for triage convenience —
+the source-of-truth is the config file):
 
 | Setting | Value | Why |
 | --- | --- | --- |
 | Slug | `backup-verify` | Must match the slug in the workflow's `sentry-cli monitors run …` invocation. |
 | Schedule type | Crontab | Mirrors the GH Actions `schedule:` cadence. |
-| Schedule | `0 3 * * 0` | Same cron expression as the GH Actions schedule, so Sentry expects exactly one check-in per scheduled tick (Sunday 03:00 UTC). Keep this in lockstep with the workflow file — if you ever change the cron in one place, change it in the other in the same PR. |
+| Schedule | `0 3 * * 0` | Same cron expression as the GH Actions schedule, so Sentry expects exactly one check-in per scheduled tick (Sunday 03:00 UTC). The CI drift check enforces this — it cannot silently fall out of sync. |
 | Timezone | `UTC` | GH Actions schedules run in UTC. |
 | Check-in margin | `60` minutes | Generous enough to absorb runner queue time during weekend backlogs, the workflow's ~30s install/boot, and `apt-get install postgresql-client`. The job itself is allowed up to 30 minutes (`timeout-minutes: 30`), but the check-in margin only governs *when the `in_progress` arrives*, so 60 min is comfortable without being so loose that a missed run goes uncaught past the next on-call shift change. |
 | Max runtime | `45` minutes | The workflow's `timeout-minutes: 30` is the hard ceiling; 45 min gives Sentry slack so a healthy long-running restore (large dump, slow runner) doesn't trip a false `error` check-in. Anything longer than this means the runner hung mid-restore. |
 | Failure issue threshold | `1` | Page on the first missed check-in — there is no "noisy" failure mode for "the weekly backup-verify job stopped running." A single missed week is already a real loss of coverage. |
 | Recovery threshold | `1` | Resolve the issue as soon as the next check-in arrives — once the scheduler is back, we don't need to keep the page open. |
 | Environment | `production` | The workflow always passes `--environment production`. |
-| Owner / on-call | platform / data-resilience owners | So the page routes to whoever owns the restore drills. |
+| Owner / on-call | platform / data-resilience owners | So the page routes to whoever owns the restore drills. Owner is configured in the Sentry UI Teams settings — the API doesn't yet model team ownership for monitors created via PUT. |
+
+To verify the sync wiring without waiting for a release tag, run
+locally:
+
+```sh
+SENTRY_ORG=<org> DRY_RUN=1 \
+  pnpm --filter @workspace/scripts run sync-sentry-monitors
+```
+
+This logs the exact JSON payloads the release job would send, without
+hitting Sentry.
 
 ### Verifying the heartbeat
 
