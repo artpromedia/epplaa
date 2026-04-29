@@ -18,6 +18,7 @@ import {
   getPaymentGatewayWatcher,
   registerPaymentGatewayWatcher,
 } from "./subsystemHealth";
+import { gatewayCircuitMonitor } from "./alerts/gatewayHealthAlerts";
 
 /**
  * Boot-time sanity check: production deploys MUST set at least one of
@@ -175,6 +176,19 @@ class DbHealthStore implements HealthStore {
   }
 
   async record(gateway: GatewayName, ok: boolean): Promise<void> {
+    // Snapshot the previous breaker state BEFORE writing — we feed it
+    // into the alert monitor so the next "successful op after the
+    // breaker has expired" can be detected as the recovery edge. If
+    // the row doesn't exist yet, `previousOpenUntilMs` is null which
+    // the monitor treats as "no prior incident to recover from".
+    const [priorRow] = await db
+      .select({ circuitOpenUntil: schema.gatewayHealthTable.circuitOpenUntil })
+      .from(schema.gatewayHealthTable)
+      .where(eq(schema.gatewayHealthTable.gateway, gateway))
+      .limit(1);
+    const previousOpenUntilMs = priorRow?.circuitOpenUntil
+      ? priorRow.circuitOpenUntil.getTime()
+      : null;
     await db
       .insert(schema.gatewayHealthTable)
       .values({
@@ -217,14 +231,42 @@ class DbHealthStore implements HealthStore {
       if (ok) watcher.recordSuccess();
       else watcher.record();
     }
+    // Out-of-band recovery detection: if the breaker has expired and
+    // the next operation succeeds, we page on-call with the paired
+    // "all clear". The monitor swallows its own errors so the payment
+    // hot path never breaks because Slack/PagerDuty is unreachable.
+    gatewayCircuitMonitor.observeRecord(gateway, ok, previousOpenUntilMs);
   }
 
   async openCircuit(gateway: GatewayName, until: Date): Promise<void> {
+    // Read the current breaker state BEFORE we overwrite it so the
+    // alert monitor can tell whether this is a brand-new healthy →
+    // degraded transition (page on-call) or just an extension of an
+    // already-open breaker the router is re-tripping every cycle the
+    // failure rate stays high (no re-page).
+    const [priorRow] = await db
+      .select({ circuitOpenUntil: schema.gatewayHealthTable.circuitOpenUntil })
+      .from(schema.gatewayHealthTable)
+      .where(eq(schema.gatewayHealthTable.gateway, gateway))
+      .limit(1);
+    const previousOpenUntilMs = priorRow?.circuitOpenUntil
+      ? priorRow.circuitOpenUntil.getTime()
+      : null;
     await db
       .update(schema.gatewayHealthTable)
       .set({ circuitOpenUntil: until })
       .where(eq(schema.gatewayHealthTable.gateway, gateway));
     logger.warn({ gateway, until: until.toISOString() }, "circuit_opened");
+    // Fire-and-forget out-of-band paging: the monitor decides whether
+    // the transition is novel (i.e. the breaker was closed or expired
+    // before this call) and applies a per-gateway flap cooldown so a
+    // breaker that opens-closes-opens repeatedly inside one minute
+    // pages once, not once per cycle.
+    gatewayCircuitMonitor.notifyCircuitOpened(
+      gateway,
+      previousOpenUntilMs,
+      until.getTime(),
+    );
   }
 }
 
