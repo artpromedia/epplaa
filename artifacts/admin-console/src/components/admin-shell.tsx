@@ -15,6 +15,7 @@ import {
   Activity,
 } from "lucide-react";
 import { useAdminMyRoles, useGetMfaStatus } from "@workspace/api-client-react";
+import { RateLimitStoreAlerts } from "@/components/rate-limit-store-alerts";
 import { cn } from "@/lib/utils";
 import epplaaLogo from "@assets/epplaa-logo-color-nobg.png";
 
@@ -122,6 +123,7 @@ export function AdminShell({ children }: { children: ReactNode }) {
         <main className="flex-1 min-w-0 overflow-x-auto">
           <div className="px-4 sm:px-6 lg:px-8 py-6 max-w-7xl mx-auto w-full">
             <MfaRequiredBanner />
+            <RateLimitStoreAlerts />
             {children}
           </div>
         </main>
