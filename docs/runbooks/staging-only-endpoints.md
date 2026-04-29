@@ -184,15 +184,42 @@ on-call sees exactly which env var is wrong rather than just
   mask a config misconfiguration — the worst-possible time to lose
   the page.
 
-- Scheduling: when the dedicated workflow lands it should mirror
-  `.github/workflows/check-production-hostname-pattern.yml`'s
+- Scheduling: `.github/workflows/check-readyz-config.yml` (Task #120)
+  mirrors `.github/workflows/check-production-hostname-pattern.yml`'s
   schedule + Sentry pager + cron-monitor heartbeat pattern (15-minute
-  cadence, `workflow_dispatch` for ad-hoc, `workflow_call` so deploy
-  workflows can invoke it as the final post-deploy gate). Use a
-  separate `vars.READYZ_CONFIG_PROBE_ENABLED=1` toggle and a
-  separate `secrets.READYZ_CONFIG_SENTRY_DSN` so the two probes can
-  be enabled / disabled independently while the rollout is in
-  progress.
+  cron, `workflow_dispatch` for ad-hoc, `workflow_call` so deploy
+  workflows can invoke it as the final post-deploy gate). Required
+  repo configuration:
+  - `vars.READYZ_CONFIG_PROBE_ENABLED=1` — kill switch / opt-in
+    toggle. Separate from `vars.HOSTNAME_PATTERN_PROBE_ENABLED` so
+    the two probes can be enabled / disabled independently while
+    the rollout is in progress.
+  - `vars.READYZ_URL` — full URL to `/api/readyz` on the production
+    deployment (reused from the hostname-pattern workflow so a
+    single variable update points both probes at the same surface).
+  - `vars.READYZ_PROBE_TIMEOUT_MS` — optional per-request fetch
+    timeout, defaults to 5000 ms.
+  - `vars.SENTRY_ORG`, `vars.SENTRY_PROJECT` — Sentry destination,
+    reused from the release workflow so on-call sees these events
+    in the same project.
+  - `secrets.READYZ_CONFIG_SENTRY_DSN` — DSN for the page event AND
+    the `check-readyz-config` Sentry Cron monitor heartbeat.
+    Separate from `secrets.HOSTNAME_PATTERN_SENTRY_DSN` so it can
+    be rotated independently of the runtime DSN AND of the
+    hostname-only workflow's DSN. When the DSN is omitted the
+    workflow still fails on non-zero probe exit so on-call sees it
+    via GitHub's failed-workflow notification, but the Sentry Cron
+    "missed check-in" page is disabled.
+
+  Once the new workflow has run cleanly for a week and is confirmed
+  paging on every misconfiguration the old hostname-only workflow
+  caught (the generalised probe is a strict superset —
+  `productionHostnamePattern` is one of its five fields), the old
+  `.github/workflows/check-production-hostname-pattern.yml` workflow
+  + the matching `check-production-hostname-pattern` npm script in
+  `artifacts/api-server/package.json` + the
+  `artifacts/api-server/src/scripts/checkProductionHostnamePattern.ts`
+  source can be retired.
 
 - Tests: `routes/health.test.ts` (per-field route shape on both
   the 200 ready and 503 not_ready paths, plus the all-safe
