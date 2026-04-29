@@ -25,3 +25,40 @@ jobs:
         with:
           environment: production
           version: ${{ github.sha }}
+
+  # Post-deploy configuration gate (Task #100, building on #89).
+  #
+  # Calls the reusable `check-production-hostname-pattern.yml` workflow
+  # as the final job in the release pipeline so that a release whose
+  # production deploy is missing `PRODUCTION_HOSTNAME_PATTERN` fails
+  # the GitHub release run synchronously, instead of waiting up to ~15
+  # minutes for the cron tick to page on-call. The reusable workflow's
+  # own `if: vars.HOSTNAME_PATTERN_PROBE_ENABLED == '1'` guard means
+  # this job no-ops cleanly until an operator opts in by setting that
+  # repo variable; the cron + Sentry Cron monitor configuration
+  # documented in `docs/runbooks/staging-only-endpoints.md` (post-
+  # deploy verifier section) lists every required var/secret.
+  #
+  # `needs: sentry-release` keeps the gate AFTER release tagging so the
+  # probe runs against the freshly-deployed image rather than racing it.
+  # `if: always()` ensures the gate still runs when `sentry-release` is
+  # skipped (Sentry vars unset) or fails — the configuration check is
+  # independent of Sentry release tagging and must not be silently
+  # bypassed by an unrelated upstream failure. A non-zero exit from the
+  # probe fails this job, which fails the overall release run and fires
+  # the GitHub failed-workflow notification AND (when the DSN is
+  # configured) a Sentry fatal-level page via the reusable workflow's
+  # in-loop forwarder.
+  #
+  # `secrets: inherit` is required because the reusable workflow reads
+  # `secrets.HOSTNAME_PATTERN_SENTRY_DSN` directly and does not declare
+  # it as a `secrets:` input. Repo `vars.*` are inherited automatically
+  # by called workflows, so the `HOSTNAME_PATTERN_PROBE_ENABLED`,
+  # `READYZ_URL`, `SENTRY_ORG`, and `SENTRY_PROJECT` vars are visible
+  # to the called job without explicit pass-through.
+  post-deploy-config-check:
+    name: Post-deploy config check (production hostname pattern)
+    needs: sentry-release
+    if: always()
+    uses: ./.github/workflows/check-production-hostname-pattern.yml
+    secrets: inherit

@@ -84,6 +84,35 @@ path log-throttling for the compiled hostname-pattern cache).
   `secrets.HOSTNAME_PATTERN_SENTRY_DSN` (omit DSN to skip Sentry
   forwarding + heartbeat; the workflow still fails on non-zero exit
   so on-call sees it via GitHub's failed-workflow notification).
+- Deploy-workflow integration (Task #100): the release pipeline
+  (`.github/workflows/release.yml`, triggered on `push` of `v*` tags)
+  ends with a `post-deploy-config-check` job that invokes the
+  reusable workflow via `uses:` with `secrets: inherit`. The job runs
+  with `needs: sentry-release` + `if: always()` so the configuration
+  gate fires even when Sentry release tagging is skipped (Sentry vars
+  unset) or fails — the two are intentionally independent, since a
+  missing `PRODUCTION_HOSTNAME_PATTERN` is a deploy-blocking issue
+  regardless of release-tag bookkeeping. A non-zero probe exit fails
+  the release run synchronously instead of waiting up to ~15 minutes
+  for the cron tick. The probe job no-ops cleanly until
+  `vars.HOSTNAME_PATTERN_PROBE_ENABLED` is set to `1`. Required
+  deploy-time configuration in the GitHub repo
+  Settings → Secrets and variables → Actions:
+  - `vars.HOSTNAME_PATTERN_PROBE_ENABLED=1` — opts the post-deploy
+    gate (and the 15-minute cron) in. Leaving this unset (or set to
+    anything other than `1`) silently skips the gate AND the cron
+    job; the Sentry Cron monitor will then page on missed check-ins,
+    which is the intended "disabling the probe must be deliberate"
+    behaviour.
+  - `vars.READYZ_URL` — full URL to `/api/readyz` on the production
+    deploy (e.g. `https://api.epplaa.com/api/readyz`). The probe
+    fails fast if missing.
+  - `vars.SENTRY_ORG`, `vars.SENTRY_PROJECT` — Sentry destination,
+    reused from `release.yml`'s `sentry-release` job.
+  - `secrets.HOSTNAME_PATTERN_SENTRY_DSN` — DSN used by `sentry-cli`
+    to post the fatal-level page event AND the Sentry Cron monitor
+    check-ins. Omitting it disables Sentry forwarding + heartbeat
+    but keeps the GitHub failed-workflow notification path intact.
 - Tests: `routes/health.test.ts` (route shape across signals,
   including the 503-not_ready + missing-pattern combination),
   `lib/productionSignals.ts`'s helper unit tests, and
