@@ -778,6 +778,51 @@ paths:
         "403": { description: Forbidden }
         "401": { $ref: "#/components/responses/Unauthorized" }
 
+  /admin/replica-degraded-alerts:
+    post:
+      operationId: adminReportReplicaDegraded
+      tags: [admin]
+      summary: |
+        Report a degraded replica observed by the admin status panel.
+        The server dedups across operators / tabs and pages on-call
+        (Sentry) at most once per outage window per replicaId.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ReplicaDegradedReport" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ReplicaDegradedReportResult" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { description: Forbidden }
+
+  /admin/replica-degraded-alerts/recovery:
+    post:
+      operationId: adminReportReplicaRecovered
+      tags: [admin]
+      summary: |
+        Report a previously-degraded replica is healthy again. Closes
+        any open alert in the dedup table and emits a Sentry recovery
+        event so on-call sees the all-clear without manually
+        resolving the issue.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ReplicaRecoveredReport" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ReplicaRecoveredReportResult" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { description: Forbidden }
+
   /admin/reconciliation-runs:
     get:
       operationId: adminListReconciliationRuns
@@ -3304,6 +3349,66 @@ components:
         sampledAtIso:
           type: string
           description: ISO timestamp when the snapshot was taken.
+
+    ReplicaDegradedReport:
+      type: object
+      required: [replicaId, httpStatus, failingChecks, failures]
+      properties:
+        replicaId:
+          type: string
+          description: |
+            The /healthz + /readyz `replicaId` field the panel groups
+            on. Falls back to `pid:<n>` on dev replicas without a
+            platform-set HOSTNAME.
+        httpStatus:
+          type: integer
+          description: HTTP status the panel observed from /readyz for this replica.
+        failingChecks:
+          type: array
+          items: { type: string }
+          description: |
+            Names of checks that were `failed` in the /readyz body.
+            Surfaced separately so on-call can scan the failing
+            dependency list without parsing the full failures map.
+        failures:
+          type: object
+          additionalProperties: { type: string }
+          description: The /readyz body's `failures` map, copied verbatim.
+        consecutivePolls:
+          type: integer
+          minimum: 1
+          description: |
+            How many consecutive polls the panel observed this replica
+            as degraded before reporting. Echoed in the Sentry payload
+            so on-call can see whether this was the second consecutive
+            poll (the threshold) or a sustained outage the panel has
+            been watching for many cycles.
+    ReplicaDegradedReportResult:
+      type: object
+      required: [emitted, replicaId]
+      properties:
+        emitted:
+          type: boolean
+          description: True when this report fired a fresh Sentry event.
+        dedupReason:
+          type: string
+          enum: [within_cooldown]
+          description: Reason the report was deduped (only set when emitted=false).
+        replicaId: { type: string }
+    ReplicaRecoveredReport:
+      type: object
+      required: [replicaId]
+      properties:
+        replicaId: { type: string }
+    ReplicaRecoveredReportResult:
+      type: object
+      required: [emitted, replicaId]
+      properties:
+        emitted:
+          type: boolean
+          description: True when an open alert was closed (Sentry recovery emitted).
+        replicaId: { type: string }
+
 
     ReconciliationRun:
       type: object

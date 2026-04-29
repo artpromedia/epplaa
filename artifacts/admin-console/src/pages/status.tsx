@@ -14,6 +14,8 @@ import {
   XCircle,
 } from "lucide-react";
 import {
+  adminReportReplicaDegraded,
+  adminReportReplicaRecovered,
   getHealthCheckQueryOptions,
   useAdminGetDbHealth,
   useAdminGetGatewayHealth,
@@ -37,6 +39,17 @@ const REPLICA_STALE_AFTER_MS = 60_000;
 // default ever changes, update this constant too so on-call sees the same
 // "probe would page now" boundary in the UI as in their pages.
 const STUCK_DEGRADED_THRESHOLD_MS = 5 * 60 * 1000;
+/**
+ * The panel only pages on-call once a replica has been observed
+ * unhealthy for more than one consecutive poll cycle. A single bad
+ * sample is too easy to confuse with a transient blip (the LB happened
+ * to land a probe on a replica that was draining, a TCP RST on an idle
+ * connection, etc.) and would generate noise that erodes the signal.
+ * Two consecutive cycles is the minimum that "the panel saw a problem"
+ * actually means "the replica is degraded right now". See task #118
+ * "Done looks like" for the canonical wording.
+ */
+const PAGE_AFTER_CONSECUTIVE_DEGRADED_POLLS = 2;
 
 type CheckState = "ok" | "failed" | "skipped";
 
@@ -238,6 +251,171 @@ function isReplicaUnhealthy(s: ReplicaSample): boolean {
   return Object.values(checks).some((v) => v === "failed");
 }
 
+function failingChecksOf(sample: ReplicaSample): string[] {
+  const checks = sample.body?.checks ?? {};
+  const failing: string[] = [];
+  for (const [name, state] of Object.entries(checks)) {
+    if (state === "failed") failing.push(name);
+  }
+  // When the panel saw a non-200 with no parseable body, the readyz
+  // body's `checks` map is empty even though the replica is clearly
+  // degraded. Surface a synthetic marker so the alert payload still
+  // tells on-call WHY the panel decided this was a problem.
+  if (failing.length === 0 && (sample.httpStatus !== 200 || !sample.body)) {
+    failing.push(`http_status_${sample.httpStatus}`);
+  }
+  return failing;
+}
+
+interface ReplicaAlertState {
+  consecutiveDegraded: number;
+  /**
+   * True only after this tab has SUCCESSFULLY POSTed a degraded
+   * report for the current outage. A failed POST must NOT set this
+   * to true, otherwise a single transient failure (network blip,
+   * 5xx, CSRF refresh) would silently suppress paging for the
+   * remainder of the outage on this tab.
+   */
+  alertOpen: boolean;
+  /**
+   * Guard against issuing a second POST while the first is still
+   * in flight. The poll loop runs every 10s and the alert POST is
+   * usually fast, but a slow API server during an actual outage
+   * could easily stretch a request past one cycle. Without this
+   * flag we'd duplicate-POST and rely on server dedup to absorb it.
+   */
+  postInFlight: boolean;
+}
+
+/**
+ * Decide whether to fire / clear a degraded-replica page based on
+ * THIS cycle's sample for one replica. Pure-ish: takes the bookkeeping
+ * map by ref so callers can drive the same function from a unit test
+ * with a fresh map per case.
+ *
+ * Decision matrix:
+ *   - Sample healthy + no open alert  → clear streak counter, no-op.
+ *   - Sample healthy + open alert     → POST recovery; only clear the
+ *                                       flag on POST SUCCESS so a
+ *                                       failed recovery POST is retried
+ *                                       on the next healthy cycle.
+ *   - Sample unhealthy + streak < N   → bump streak, no-op.
+ *   - Sample unhealthy + streak >= N AND no open alert → POST degraded;
+ *                                                       only set the
+ *                                                       flag on POST
+ *                                                       SUCCESS so a
+ *                                                       failed POST is
+ *                                                       retried next
+ *                                                       cycle.
+ *   - Sample unhealthy + streak >= N AND open alert → no-op (server
+ *                                                     dedup is already
+ *                                                     holding the
+ *                                                     alert open).
+ *
+ * Network errors from the POST are logged to console but otherwise
+ * leave the bookkeeping in a state where the next poll will retry.
+ * The panel's UI keeps showing the live status regardless.
+ */
+function evaluateReplicaForPaging(
+  replicaId: string,
+  sample: ReplicaSample,
+  stateRef: React.MutableRefObject<Map<string, ReplicaAlertState>>,
+): void {
+  const state =
+    stateRef.current.get(replicaId) ?? {
+      consecutiveDegraded: 0,
+      alertOpen: false,
+      postInFlight: false,
+    };
+  const unhealthy = isReplicaUnhealthy(sample);
+
+  if (!unhealthy) {
+    // Reset the streak immediately - the replica is healthy this
+    // cycle. Do NOT clear `alertOpen` until a recovery POST succeeds,
+    // otherwise a failed recovery POST permanently strands the
+    // recovery signal and on-call never sees the all-clear.
+    const nextState: ReplicaAlertState = {
+      consecutiveDegraded: 0,
+      alertOpen: state.alertOpen,
+      postInFlight: state.postInFlight,
+    };
+    if (state.alertOpen && !state.postInFlight) {
+      nextState.postInFlight = true;
+      stateRef.current.set(replicaId, nextState);
+      void adminReportReplicaRecovered({ replicaId })
+        .then(() => {
+          const cur = stateRef.current.get(replicaId);
+          if (!cur) return;
+          stateRef.current.set(replicaId, {
+            ...cur,
+            alertOpen: false,
+            postInFlight: false,
+          });
+        })
+        .catch((err: unknown) => {
+          // eslint-disable-next-line no-console
+          console.warn(
+            "[status] failed to POST replica recovery",
+            (err as Error)?.message ?? err,
+          );
+          const cur = stateRef.current.get(replicaId);
+          if (!cur) return;
+          // Leave alertOpen=true so the next healthy cycle retries.
+          stateRef.current.set(replicaId, { ...cur, postInFlight: false });
+        });
+      return;
+    }
+    stateRef.current.set(replicaId, nextState);
+    return;
+  }
+
+  const nextStreak = state.consecutiveDegraded + 1;
+  const baseNext: ReplicaAlertState = {
+    consecutiveDegraded: nextStreak,
+    alertOpen: state.alertOpen,
+    postInFlight: state.postInFlight,
+  };
+  if (
+    nextStreak >= PAGE_AFTER_CONSECUTIVE_DEGRADED_POLLS &&
+    !state.alertOpen &&
+    !state.postInFlight
+  ) {
+    const failingChecks = failingChecksOf(sample);
+    const failures = sample.body?.failures ?? {};
+    baseNext.postInFlight = true;
+    stateRef.current.set(replicaId, baseNext);
+    void adminReportReplicaDegraded({
+      replicaId,
+      httpStatus: sample.httpStatus,
+      failingChecks,
+      failures,
+      consecutivePolls: nextStreak,
+    })
+      .then(() => {
+        const cur = stateRef.current.get(replicaId);
+        if (!cur) return;
+        stateRef.current.set(replicaId, {
+          ...cur,
+          alertOpen: true,
+          postInFlight: false,
+        });
+      })
+      .catch((err: unknown) => {
+        // eslint-disable-next-line no-console
+        console.warn(
+          "[status] failed to POST replica degraded",
+          (err as Error)?.message ?? err,
+        );
+        const cur = stateRef.current.get(replicaId);
+        if (!cur) return;
+        // Leave alertOpen=false so the next degraded cycle retries.
+        stateRef.current.set(replicaId, { ...cur, postInFlight: false });
+      });
+    return;
+  }
+  stateRef.current.set(replicaId, baseNext);
+}
+
 function formatRelativeMs(now: number, then: number): string {
   const ms = Math.max(0, now - then);
   if (ms < 1000) return "just now";
@@ -293,6 +471,26 @@ export default function StatusPage() {
   // so timestamps don't appear frozen between polls.
   const [, setTick] = useState(0);
   const mountedRef = useRef(true);
+  /**
+   * Per-replica consecutive-poll counters used to gate when this tab
+   * pages on-call. Stored in a ref (not state) because:
+   *   - It's strictly an internal bookkeeping signal — no UI reads it,
+   *     so flipping it must not trigger a re-render of every replica
+   *     card on every poll.
+   *   - The decision to fire / clear an alert is made at the end of
+   *     each poll cycle synchronously against the latest cycle's
+   *     samples, not against React state (which lags one render).
+   *
+   * `consecutiveDegraded` is the count of consecutive cycles this
+   * replica was unhealthy. `alertOpen` tracks whether THIS browser tab
+   * has already POSTed a degraded report for the current outage —
+   * server-side dedup (lib/replicaDegradedAlerts) collapses across all
+   * tabs/operators, but we still avoid spamming the endpoint on every
+   * poll once we know an alert is open.
+   */
+  const replicaAlertStateRef = useRef<Map<string, ReplicaAlertState>>(
+    new Map(),
+  );
 
   const pollNow = useCallback(async () => {
     setIsPolling(true);
@@ -341,6 +539,26 @@ export default function StatusPage() {
           }
           return next;
         });
+        // Pick the latest sample per replicaId from THIS cycle so the
+        // alert decision uses what we just observed (not stale state)
+        // and a flap that we did and then didn't see in the same cycle
+        // counts as "currently bad" if the latest sample is bad.
+        const latestThisCycle = new Map<string, ReplicaSample>();
+        for (const sample of fulfilled) {
+          const existing = latestThisCycle.get(sample.replicaId);
+          if (!existing || existing.observedAt <= sample.observedAt) {
+            latestThisCycle.set(sample.replicaId, sample);
+          }
+        }
+        for (const [replicaId, sample] of latestThisCycle) {
+          evaluateReplicaForPaging(replicaId, sample, replicaAlertStateRef);
+        }
+        // Replicas we did NOT see this cycle are NOT cleared — a
+        // single missed poll shouldn't close an open alert (the LB
+        // round-robin can starve a replica for a cycle or two even
+        // when it's healthy). The panel-side `REPLICA_STALE_AFTER_MS`
+        // cleanup AND the server-side staleness sweep
+        // (REPLICA_DEGRADED_ALERT_STALE_AFTER_MS) bound the table.
       }
       // Always run the staleness sweep, even when every healthz probe in
       // this cycle failed. Otherwise a healthz outage that lasts longer

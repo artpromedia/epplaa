@@ -13,6 +13,14 @@ import {
 import { probeDbLatency } from "../lib/dbLatencyProbe";
 import { getQueueHealthSnapshot } from "../lib/queueDepth";
 import { getReplicaId } from "./health";
+import {
+  reportDegraded,
+  reportRecovered,
+} from "../lib/replicaDegradedAlerts";
+import {
+  AdminReportReplicaDegradedBody,
+  AdminReportReplicaRecoveredBody,
+} from "@workspace/api-zod";
 
 const router: IRouter = Router();
 
@@ -58,6 +66,58 @@ router.get("/admin/queue-health", requireAdmin, async (_req, res) => {
   const snapshot = await getQueueHealthSnapshot(db);
   res.json(snapshot);
 });
+
+/**
+ * Admin status panel ("/admin/status") fan-out for "the panel saw a
+ * degraded replica for more than one consecutive poll". The panel
+ * reports here on every cycle while a replica is unhealthy AND on the
+ * cycle a previously-unhealthy replica returns to healthy. The
+ * server-side dedup table in `lib/replicaDegradedAlerts` is what
+ * collapses N operators × M tabs of the panel into a single Sentry
+ * page per outage window per replicaId.
+ *
+ * Auth: same `requireAdmin` envelope as the other status surfaces on
+ * this router so an unauthenticated browser can never spoof a fake
+ * page on-call. The panel itself is gated by the admin-console route
+ * guard, but defence in depth.
+ */
+router.post(
+  "/admin/replica-degraded-alerts",
+  requireAdmin,
+  async (req, res) => {
+    const parsed = AdminReportReplicaDegradedBody.safeParse(req.body);
+    if (!parsed.success) {
+      res
+        .status(400)
+        .json({ error: "bad_request", detail: parsed.error.message });
+      return;
+    }
+    const out = reportDegraded({
+      replicaId: parsed.data.replicaId,
+      httpStatus: parsed.data.httpStatus,
+      failingChecks: parsed.data.failingChecks,
+      failures: parsed.data.failures,
+      consecutivePolls: parsed.data.consecutivePolls,
+    });
+    res.json(out);
+  },
+);
+
+router.post(
+  "/admin/replica-degraded-alerts/recovery",
+  requireAdmin,
+  async (req, res) => {
+    const parsed = AdminReportReplicaRecoveredBody.safeParse(req.body);
+    if (!parsed.success) {
+      res
+        .status(400)
+        .json({ error: "bad_request", detail: parsed.error.message });
+      return;
+    }
+    const out = reportRecovered({ replicaId: parsed.data.replicaId });
+    res.json(out);
+  },
+);
 
 router.get("/admin/payment-gateway-health", requireAdmin, async (_req, res) => {
   const rows = await db.select().from(schema.gatewayHealthTable);

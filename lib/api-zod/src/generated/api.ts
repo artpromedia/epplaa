@@ -1057,6 +1057,68 @@ export const AdminGetQueueHealthResponse = zod
     "Aggregate row counts of the `notifications_outbox` table, the\nsingle shared queue the api-server drains every 30s for\nretryable notifications and the periodic background jobs that\nfan out through it (reconciliation, payouts).\n",
   );
 
+/**
+ * @summary Report a degraded replica observed by the admin status panel.
+The server dedups across operators / tabs and pages on-call
+(Sentry) at most once per outage window per replicaId.
+
+ */
+
+export const AdminReportReplicaDegradedBody = zod.object({
+  replicaId: zod
+    .string()
+    .describe(
+      "The \/healthz + \/readyz `replicaId` field the panel groups\non. Falls back to `pid:<n>` on dev replicas without a\nplatform-set HOSTNAME.\n",
+    ),
+  httpStatus: zod
+    .number()
+    .describe("HTTP status the panel observed from \/readyz for this replica."),
+  failingChecks: zod
+    .array(zod.string())
+    .describe(
+      "Names of checks that were `failed` in the \/readyz body.\nSurfaced separately so on-call can scan the failing\ndependency list without parsing the full failures map.\n",
+    ),
+  failures: zod
+    .record(zod.string(), zod.string())
+    .describe("The \/readyz body's `failures` map, copied verbatim."),
+  consecutivePolls: zod
+    .number()
+    .min(1)
+    .optional()
+    .describe(
+      "How many consecutive polls the panel observed this replica\nas degraded before reporting. Echoed in the Sentry payload\nso on-call can see whether this was the second consecutive\npoll (the threshold) or a sustained outage the panel has\nbeen watching for many cycles.\n",
+    ),
+});
+
+export const AdminReportReplicaDegradedResponse = zod.object({
+  emitted: zod
+    .boolean()
+    .describe("True when this report fired a fresh Sentry event."),
+  dedupReason: zod
+    .enum(["within_cooldown"])
+    .optional()
+    .describe("Reason the report was deduped (only set when emitted=false)."),
+  replicaId: zod.string(),
+});
+
+/**
+ * @summary Report a previously-degraded replica is healthy again. Closes
+any open alert in the dedup table and emits a Sentry recovery
+event so on-call sees the all-clear without manually
+resolving the issue.
+
+ */
+export const AdminReportReplicaRecoveredBody = zod.object({
+  replicaId: zod.string(),
+});
+
+export const AdminReportReplicaRecoveredResponse = zod.object({
+  emitted: zod
+    .boolean()
+    .describe("True when an open alert was closed (Sentry recovery emitted)."),
+  replicaId: zod.string(),
+});
+
 export const AdminListReconciliationRunsResponseItem = zod.object({
   id: zod.string(),
   gateway: zod.string(),

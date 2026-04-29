@@ -154,6 +154,10 @@ import type {
   RefundResponse,
   RejectKycVerificationBody,
   Replay,
+  ReplicaDegradedReport,
+  ReplicaDegradedReportResult,
+  ReplicaRecoveredReport,
+  ReplicaRecoveredReportResult,
   RequestNdprRectifyBody,
   RequestNdprRestrictBody,
   RequestSellerPayoutBody,
@@ -4960,6 +4964,202 @@ export function useAdminGetQueueHealth<
 
   return { ...query, queryKey: queryOptions.queryKey };
 }
+
+/**
+ * @summary Report a degraded replica observed by the admin status panel.
+The server dedups across operators / tabs and pages on-call
+(Sentry) at most once per outage window per replicaId.
+
+ */
+export const getAdminReportReplicaDegradedUrl = () => {
+  return `/api/admin/replica-degraded-alerts`;
+};
+
+export const adminReportReplicaDegraded = async (
+  replicaDegradedReport: ReplicaDegradedReport,
+  options?: RequestInit,
+): Promise<ReplicaDegradedReportResult> => {
+  return customFetch<ReplicaDegradedReportResult>(
+    getAdminReportReplicaDegradedUrl(),
+    {
+      ...options,
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...options?.headers },
+      body: JSON.stringify(replicaDegradedReport),
+    },
+  );
+};
+
+export const getAdminReportReplicaDegradedMutationOptions = <
+  TError = ErrorType<UnauthorizedResponse | void>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof adminReportReplicaDegraded>>,
+    TError,
+    { data: BodyType<ReplicaDegradedReport> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof adminReportReplicaDegraded>>,
+  TError,
+  { data: BodyType<ReplicaDegradedReport> },
+  TContext
+> => {
+  const mutationKey = ["adminReportReplicaDegraded"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof adminReportReplicaDegraded>>,
+    { data: BodyType<ReplicaDegradedReport> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return adminReportReplicaDegraded(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type AdminReportReplicaDegradedMutationResult = NonNullable<
+  Awaited<ReturnType<typeof adminReportReplicaDegraded>>
+>;
+export type AdminReportReplicaDegradedMutationBody =
+  BodyType<ReplicaDegradedReport>;
+export type AdminReportReplicaDegradedMutationError =
+  ErrorType<UnauthorizedResponse | void>;
+
+/**
+ * @summary Report a degraded replica observed by the admin status panel.
+The server dedups across operators / tabs and pages on-call
+(Sentry) at most once per outage window per replicaId.
+
+ */
+export const useAdminReportReplicaDegraded = <
+  TError = ErrorType<UnauthorizedResponse | void>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof adminReportReplicaDegraded>>,
+    TError,
+    { data: BodyType<ReplicaDegradedReport> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof adminReportReplicaDegraded>>,
+  TError,
+  { data: BodyType<ReplicaDegradedReport> },
+  TContext
+> => {
+  return useMutation(getAdminReportReplicaDegradedMutationOptions(options));
+};
+
+/**
+ * @summary Report a previously-degraded replica is healthy again. Closes
+any open alert in the dedup table and emits a Sentry recovery
+event so on-call sees the all-clear without manually
+resolving the issue.
+
+ */
+export const getAdminReportReplicaRecoveredUrl = () => {
+  return `/api/admin/replica-degraded-alerts/recovery`;
+};
+
+export const adminReportReplicaRecovered = async (
+  replicaRecoveredReport: ReplicaRecoveredReport,
+  options?: RequestInit,
+): Promise<ReplicaRecoveredReportResult> => {
+  return customFetch<ReplicaRecoveredReportResult>(
+    getAdminReportReplicaRecoveredUrl(),
+    {
+      ...options,
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...options?.headers },
+      body: JSON.stringify(replicaRecoveredReport),
+    },
+  );
+};
+
+export const getAdminReportReplicaRecoveredMutationOptions = <
+  TError = ErrorType<UnauthorizedResponse | void>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof adminReportReplicaRecovered>>,
+    TError,
+    { data: BodyType<ReplicaRecoveredReport> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof adminReportReplicaRecovered>>,
+  TError,
+  { data: BodyType<ReplicaRecoveredReport> },
+  TContext
+> => {
+  const mutationKey = ["adminReportReplicaRecovered"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof adminReportReplicaRecovered>>,
+    { data: BodyType<ReplicaRecoveredReport> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return adminReportReplicaRecovered(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type AdminReportReplicaRecoveredMutationResult = NonNullable<
+  Awaited<ReturnType<typeof adminReportReplicaRecovered>>
+>;
+export type AdminReportReplicaRecoveredMutationBody =
+  BodyType<ReplicaRecoveredReport>;
+export type AdminReportReplicaRecoveredMutationError =
+  ErrorType<UnauthorizedResponse | void>;
+
+/**
+ * @summary Report a previously-degraded replica is healthy again. Closes
+any open alert in the dedup table and emits a Sentry recovery
+event so on-call sees the all-clear without manually
+resolving the issue.
+
+ */
+export const useAdminReportReplicaRecovered = <
+  TError = ErrorType<UnauthorizedResponse | void>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof adminReportReplicaRecovered>>,
+    TError,
+    { data: BodyType<ReplicaRecoveredReport> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof adminReportReplicaRecovered>>,
+  TError,
+  { data: BodyType<ReplicaRecoveredReport> },
+  TContext
+> => {
+  return useMutation(getAdminReportReplicaRecoveredMutationOptions(options));
+};
 
 export const getAdminListReconciliationRunsUrl = () => {
   return `/api/admin/reconciliation-runs`;

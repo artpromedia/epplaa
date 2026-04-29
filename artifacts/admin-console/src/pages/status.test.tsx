@@ -311,6 +311,178 @@ describe("StatusPage", () => {
     );
   });
 
+  /**
+   * Helper that splits the inbound mock into the two surfaces the panel
+   * actually talks to: /readyz polls (readyzImpl) and the alert-fan-out
+   * POSTs to /api/admin/replica-degraded-alerts. Returns the recorded
+   * alert/recovery payloads so tests can assert against them.
+   */
+  function setupAlertCapture(readyzImpl: () => Promise<Response>) {
+    const degradedReports: unknown[] = [];
+    const recoveryReports: unknown[] = [];
+    fetchMock.mockImplementation(
+      (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = typeof input === "string" ? input : input.toString();
+        if (url.includes("/admin/replica-degraded-alerts/recovery")) {
+          recoveryReports.push(JSON.parse(String(init?.body ?? "{}")));
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({ emitted: true, replicaId: "x" }),
+              { status: 200, headers: { "content-type": "application/json" } },
+            ),
+          );
+        }
+        if (url.includes("/admin/replica-degraded-alerts")) {
+          degradedReports.push(JSON.parse(String(init?.body ?? "{}")));
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({ emitted: true, replicaId: "x" }),
+              { status: 200, headers: { "content-type": "application/json" } },
+            ),
+          );
+        }
+        // Pre-canned healthy responses for the sidecar dependency
+        // panels (db-health, queue-health, payment-gateway-health,
+        // healthz) — without these the panels' background queries
+        // would receive readyz JSON and crash the page render.
+        const canned = defaultHealthResponse(url);
+        if (canned) return Promise.resolve(canned);
+        return readyzImpl();
+      },
+    );
+    return { degradedReports, recoveryReports };
+  }
+
+  it("does NOT page on-call after a single bad poll (one cycle isn't enough)", async () => {
+    const { degradedReports } = setupAlertCapture(() =>
+      Promise.resolve(
+        jsonResponse(503, {
+          status: "not_ready",
+          replicaId: "replica-Z",
+          checks: { db: "ok", redis: "failed" },
+          failures: { redis: "redis_ping_timeout_after_2000ms" },
+          rateLimitStore: "redis",
+        }),
+      ),
+    );
+    renderWithQuery(<StatusPage />);
+    await flushAsync();
+    await waitFor(() =>
+      expect(screen.getByTestId("replica-replica-Z")).toBeTruthy(),
+    );
+    expect(degradedReports.length).toBe(0);
+  });
+
+  it("pages on-call once a replica is degraded for two consecutive polls and again on recovery", async () => {
+    let healthy = false;
+    const { degradedReports, recoveryReports } = setupAlertCapture(() => {
+      const body: FakeReadyzBody = healthy
+        ? {
+            status: "ready",
+            replicaId: "replica-Z",
+            checks: { db: "ok", redis: "ok" },
+            rateLimitStore: "redis",
+          }
+        : {
+            status: "not_ready",
+            replicaId: "replica-Z",
+            checks: { db: "ok", redis: "failed" },
+            failures: { redis: "redis_ping_timeout_after_2000ms" },
+            rateLimitStore: "redis",
+          };
+      return Promise.resolve(jsonResponse(healthy ? 200 : 503, body));
+    });
+    renderWithQuery(<StatusPage />);
+    await flushAsync();
+    await waitFor(() =>
+      expect(screen.getByTestId("replica-replica-Z")).toBeTruthy(),
+    );
+    expect(degradedReports.length).toBe(0);
+
+    // Second cycle - still bad. Streak reaches 2, fire one alert.
+    fireEvent.click(screen.getByTestId("button-refresh-status"));
+    await flushAsync();
+    await waitFor(() => expect(degradedReports.length).toBe(1));
+    const reported = degradedReports[0] as Record<string, unknown>;
+    expect(reported.replicaId).toBe("replica-Z");
+    expect(reported.httpStatus).toBe(503);
+    expect(reported.failingChecks).toEqual(["redis"]);
+    expect(reported.failures).toEqual({
+      redis: "redis_ping_timeout_after_2000ms",
+    });
+    expect(reported.consecutivePolls).toBe(2);
+
+    // Third cycle - still bad. The dedup-aware alertOpen flag in the
+    // panel must NOT POST again; server-side dedup handles cross-tab.
+    fireEvent.click(screen.getByTestId("button-refresh-status"));
+    await flushAsync();
+    expect(degradedReports.length).toBe(1);
+
+    // Replica recovers - panel should POST one recovery so on-call sees
+    // the all-clear.
+    healthy = true;
+    fireEvent.click(screen.getByTestId("button-refresh-status"));
+    await flushAsync();
+    await waitFor(() => expect(recoveryReports.length).toBe(1));
+    expect(
+      (recoveryReports[0] as Record<string, unknown>).replicaId,
+    ).toBe("replica-Z");
+  });
+
+  it("retries the degraded POST on the next cycle when the first POST fails", async () => {
+    let degradedPostAttempts = 0;
+    fetchMock.mockImplementation(
+      (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = typeof input === "string" ? input : input.toString();
+        if (url.includes("/admin/replica-degraded-alerts")) {
+          degradedPostAttempts += 1;
+          // First POST fails (transient 500). Second POST succeeds.
+          if (degradedPostAttempts === 1) {
+            return Promise.reject(new Error("alert pipe down"));
+          }
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({ emitted: true, replicaId: "x" }),
+              { status: 200, headers: { "content-type": "application/json" } },
+            ),
+          );
+        }
+        const canned = defaultHealthResponse(url);
+        if (canned) return Promise.resolve(canned);
+        return Promise.resolve(
+          jsonResponse(503, {
+            status: "not_ready",
+            replicaId: "replica-Q",
+            checks: { db: "failed" },
+            failures: { db: "db_ping_timeout" },
+            rateLimitStore: "redis",
+          }),
+        );
+      },
+    );
+    // Silence the expected console.warn from the failed POST.
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    renderWithQuery(<StatusPage />);
+    await flushAsync();
+    await waitFor(() =>
+      expect(screen.getByTestId("replica-replica-Q")).toBeTruthy(),
+    );
+    // Cycle 2: streak hits 2, POST attempted, but fails.
+    fireEvent.click(screen.getByTestId("button-refresh-status"));
+    await flushAsync();
+    await waitFor(() => expect(degradedPostAttempts).toBe(1));
+    // Cycle 3: replica still bad, POST must be retried because the
+    // panel must NOT have set alertOpen=true on the failed attempt.
+    fireEvent.click(screen.getByTestId("button-refresh-status"));
+    await flushAsync();
+    await waitFor(() => expect(degradedPostAttempts).toBe(2));
+    // Cycle 4: now alertOpen is true (success), no further POSTs.
+    fireEvent.click(screen.getByTestId("button-refresh-status"));
+    await flushAsync();
+    expect(degradedPostAttempts).toBe(2);
+    warnSpy.mockRestore();
+  });
+
   it("re-polls when the operator clicks Refresh now", async () => {
     fetchMock.mockImplementation(
       dispatchByUrl({

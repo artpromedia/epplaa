@@ -634,6 +634,66 @@ row is currently leased.
   sampledAtIso: string;
 }
 
+/**
+ * The /readyz body's `failures` map, copied verbatim.
+ */
+export type ReplicaDegradedReportFailures = { [key: string]: string };
+
+export interface ReplicaDegradedReport {
+  /** The /healthz + /readyz `replicaId` field the panel groups
+on. Falls back to `pid:<n>` on dev replicas without a
+platform-set HOSTNAME.
+ */
+  replicaId: string;
+  /** HTTP status the panel observed from /readyz for this replica. */
+  httpStatus: number;
+  /** Names of checks that were `failed` in the /readyz body.
+Surfaced separately so on-call can scan the failing
+dependency list without parsing the full failures map.
+ */
+  failingChecks: string[];
+  /** The /readyz body's `failures` map, copied verbatim. */
+  failures: ReplicaDegradedReportFailures;
+  /**
+   * How many consecutive polls the panel observed this replica
+as degraded before reporting. Echoed in the Sentry payload
+so on-call can see whether this was the second consecutive
+poll (the threshold) or a sustained outage the panel has
+been watching for many cycles.
+
+   * @minimum 1
+   */
+  consecutivePolls?: number;
+}
+
+/**
+ * Reason the report was deduped (only set when emitted=false).
+ */
+export type ReplicaDegradedReportResultDedupReason =
+  (typeof ReplicaDegradedReportResultDedupReason)[keyof typeof ReplicaDegradedReportResultDedupReason];
+
+export const ReplicaDegradedReportResultDedupReason = {
+  within_cooldown: "within_cooldown",
+} as const;
+
+export interface ReplicaDegradedReportResult {
+  /** True when this report fired a fresh Sentry event. */
+  emitted: boolean;
+  /** Reason the report was deduped (only set when emitted=false). */
+  dedupReason?: ReplicaDegradedReportResultDedupReason;
+  replicaId: string;
+}
+
+export interface ReplicaRecoveredReport {
+  replicaId: string;
+}
+
+export interface ReplicaRecoveredReportResult {
+  /** True when an open alert was closed (Sentry recovery emitted). */
+  emitted: boolean;
+  replicaId: string;
+}
+
 export type ReconciliationRunMismatchesItem = { [key: string]: unknown };
 
 export interface ReconciliationRun {
