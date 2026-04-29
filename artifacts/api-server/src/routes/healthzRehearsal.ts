@@ -1,6 +1,10 @@
 import { Router, type IRouter, type Request, type Response, type NextFunction } from "express";
 import { timingSafeEqual } from "node:crypto";
 import { logger } from "../lib/logger";
+import {
+  detectNonHostnameProductionSignals,
+  type ProductionSignal,
+} from "../lib/productionSignals";
 import { dbHealthWatcher } from "../lib/subsystemHealth";
 import { __getRedisFailureWatcherForRehearsal } from "../middlewares/apiRateLimit";
 
@@ -115,13 +119,6 @@ export type RehearsalBootGuardOutcome =
   | { ok: true }
   | { ok: false; reason: string };
 
-interface ProductionSignal {
-  /** Short identifier surfaced in the structured log + reason text. */
-  signal: string;
-  /** Human-readable detail (env var name + observed value). */
-  detail: string;
-}
-
 /**
  * Compile the production-hostname regex from `PRODUCTION_HOSTNAME_PATTERN`.
  * An invalid pattern is treated as if no pattern were configured, but
@@ -148,45 +145,6 @@ function compileHostnamePattern(
     );
     return null;
   }
-}
-
-/**
- * Subset of `detectProductionSignals` that only considers the env vars
- * an operator can set independently of `HOSTNAME` / `PRODUCTION_HOSTNAME_PATTERN`.
- *
- * Used by `assertProductionHostnamePatternConfigured` below to decide
- * whether a deploy is "production-shaped" *without* relying on the
- * hostname pattern itself — the whole point of that check is to warn
- * when the hostname pattern is missing on a production deploy, so we
- * must determine production-ness via the other signals.
- */
-function detectNonHostnameProductionSignals(
-  env: NodeJS.ProcessEnv,
-): ProductionSignal[] {
-  const signals: ProductionSignal[] = [];
-
-  if (env.NODE_ENV === "production") {
-    signals.push({
-      signal: "node_env",
-      detail: "NODE_ENV=production",
-    });
-  }
-
-  if (env.REPLIT_DEPLOYMENT === "1") {
-    signals.push({
-      signal: "replit_deployment",
-      detail: "REPLIT_DEPLOYMENT=1 (Replit production deployment)",
-    });
-  }
-
-  if (env.DEPLOYMENT_ENVIRONMENT === "production") {
-    signals.push({
-      signal: "deployment_environment",
-      detail: "DEPLOYMENT_ENVIRONMENT=production",
-    });
-  }
-
-  return signals;
 }
 
 function detectProductionSignals(

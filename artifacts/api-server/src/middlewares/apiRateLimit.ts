@@ -5,6 +5,7 @@ import { db } from "../lib/db";
 import { newSafeId } from "../lib/ids";
 import { logger } from "../lib/logger";
 import { getUserId } from "../lib/auth";
+import { detectNonHostnameProductionSignals } from "../lib/productionSignals";
 import { userHasAnyRole } from "../lib/roles";
 import { captureException, captureMessage } from "../lib/sentry";
 
@@ -26,6 +27,128 @@ import { captureException, captureMessage } from "../lib/sentry";
  *     each in-memory replica would otherwise own its own quota,
  *     effectively multiplying the cap by the replica count.
  */
+
+/**
+ * Boot-time sanity check: production deploys MUST set
+ * `RATE_LIMIT_STORE=redis` (and the matching `REDIS_URL`).
+ *
+ * The runbook (`docs/runbooks/rate-limit-store.md`) explicitly says
+ * Redis is required for any deploy with more than one api-server
+ * replica — the in-process memory bucket is replica-local, so a
+ * multi-replica production deploy that ships with the default falls
+ * back to per-process counters. An attacker can defeat the per-tier
+ * cap by simply spreading their traffic across replicas: each replica
+ * has its own quota, so the effective rate limit is multiplied by the
+ * replica count and the abuse-prevention layer is silently disabled.
+ *
+ * That misconfiguration ships clean today — `createBucketStore` reads
+ * the env var lazily and quietly defaults to `InMemoryStore` when it's
+ * unset. Until task #84 added `assertProductionHostnamePatternConfigured`
+ * the only feedback an operator got was a runbook prose sentence —
+ * easy to miss across env-var rotations and platform migrations. This
+ * check, modelled on that one, turns the runbook recommendation into
+ * an automated boot-time signal:
+ *
+ *   - If a production-shaped deploy is detected (any of `NODE_ENV=production`,
+ *     `REPLIT_DEPLOYMENT=1`, `DEPLOYMENT_ENVIRONMENT=production`),
+ *   - AND `RATE_LIMIT_STORE` does not normalise to "redis" (i.e. it's
+ *     unset / empty / "memory" / any other value that falls back to
+ *     the in-process memory bucket),
+ *   - THEN emit a loud structured warning naming the missing config,
+ *     the production signals that triggered the check, and the
+ *     runbook section to read.
+ *
+ * The check determines production-ness via the operator-set env vars
+ * only (the same `detectNonHostnameProductionSignals` helper used by
+ * `assertProductionHostnamePatternConfigured`). Hostname matching is
+ * intentionally out of scope here — it would require dragging the
+ * regex parsing into the rate-limit module, and the signals chosen
+ * are sufficient to catch the production deploys we actually ship.
+ *
+ * This is a warning, not a hard failure. Some legitimate single-replica
+ * production deploys (e.g. canary, internal-only tools) intentionally
+ * run on the in-process bucket because they can't justify a managed
+ * Redis. Crash-looping every existing production deploy that hasn't
+ * yet wired Redis would be more disruptive than the marginal security
+ * gain — instead we rely on a Sentry / log-aggregator alert keyed off
+ * the dedicated `rate_limit_store_misconfigured_for_production`
+ * message tag so on-call sees the misconfiguration within minutes of
+ * the next deploy. Tightening to a hard failure can come later once
+ * every shipping deploy is known to be Redis-backed.
+ *
+ * Pure function — takes `env` and a `log` sink so the unit test can
+ * exercise both the staging-skipped, production-warned, and
+ * production-configured paths without poisoning `process.env` or
+ * piping pino output. Returns the outcome instead of side-effects so
+ * the caller can decide what to do (today: log + continue; in the
+ * future a deploy gate could reject).
+ */
+export type RateLimitStoreConfigOutcome =
+  | { ok: true }
+  | { ok: false; reason: string };
+
+export function assertRateLimitStoreConfiguredForProduction(
+  env: NodeJS.ProcessEnv,
+  log: { warn: (obj: unknown, msg: string) => void },
+): RateLimitStoreConfigOutcome {
+  const productionSignals = detectNonHostnameProductionSignals(env);
+  if (productionSignals.length === 0) {
+    // Not a production deploy — the in-process bucket is fine on
+    // staging / dev / preview environments. Nothing to warn about.
+    return { ok: true };
+  }
+
+  // Normalise via the SAME helper `createBucketStore` uses so the
+  // check agrees byte-for-byte with the actual runtime selection.
+  // Any value that doesn't normalise to "redis" — unset, empty,
+  // whitespace-only, "memory", typos like "redys", or anything else
+  // `createBucketStore` would also reject and log
+  // `rate_limit_store_unknown_kind_falling_back_to_memory` for —
+  // falls back to the per-process memory bucket and is the
+  // misconfiguration we're warning about. The shared helper means a
+  // whitespace-padded `RATE_LIMIT_STORE=" redis "` is BOTH selected
+  // as redis at runtime AND counted as configured here, instead of
+  // the runtime silently falling back to memory while the guard
+  // stayed silent — exactly the kind of false-negative this check
+  // exists to prevent.
+  const raw = env.RATE_LIMIT_STORE;
+  const normalised = normaliseRateLimitStoreKind(raw);
+  if (normalised === "redis") {
+    // Configured. We deliberately do NOT also assert REDIS_URL here —
+    // `createBucketStore` already throws synchronously at boot when
+    // `RATE_LIMIT_STORE=redis` is set without `REDIS_URL`, which
+    // crash-loops the deploy with a clear message. A second warning
+    // from this check would be duplicate noise on a path that already
+    // fails loudly.
+    return { ok: true };
+  }
+
+  const signalDetails = productionSignals.map((s) => s.detail).join("; ");
+  const observed =
+    raw === undefined
+      ? "RATE_LIMIT_STORE is unset"
+      : `RATE_LIMIT_STORE=${JSON.stringify(raw)}`;
+  const reason =
+    `${observed} on this production deploy — the rate limiter will fall ` +
+    "back to a per-process in-memory bucket. " +
+    `Detected production signal(s): ${signalDetails}. ` +
+    "Multi-replica deploys with the in-memory bucket give each replica " +
+    "its own counters, so the per-tier rate limit is effectively " +
+    "multiplied by the replica count and trivially bypassed by spreading " +
+    "traffic across replicas. Set RATE_LIMIT_STORE=redis (and REDIS_URL) " +
+    "— see docs/runbooks/rate-limit-store.md (boot-time presence check).";
+  log.warn(
+    {
+      node_env: env.NODE_ENV,
+      replit_deployment: env.REPLIT_DEPLOYMENT,
+      deployment_environment: env.DEPLOYMENT_ENVIRONMENT,
+      rate_limit_store: raw ?? null,
+      production_signals: productionSignals.map((s) => s.signal),
+    },
+    `rate_limit_store_misconfigured_for_production: ${reason}`,
+  );
+  return { ok: false, reason };
+}
 
 type Tier = "anon" | "buyer" | "seller" | "admin";
 
@@ -407,8 +530,29 @@ class RedisStore implements BucketStore {
   }
 }
 
+/**
+ * Normalise `RATE_LIMIT_STORE` to a comparable kind string. Trims
+ * surrounding whitespace and lowercases, then defaults to `"memory"`
+ * for unset/empty so the value can be safely compared with `===`.
+ *
+ * Shared between `createBucketStore` (which actually picks the store)
+ * and `assertRateLimitStoreConfiguredForProduction` (which warns when
+ * the picked store isn't redis on a production deploy). The two MUST
+ * agree byte-for-byte: if the guard treated `" redis "` as configured
+ * but `createBucketStore` rejected it as unknown and silently fell
+ * back to the in-process bucket, a whitespace-padded production env
+ * value would leave the deploy bypassable while the new boot-time
+ * warning stayed silent — exactly the misconfiguration class this
+ * check is meant to catch.
+ */
+function normaliseRateLimitStoreKind(raw: string | undefined): string {
+  const trimmed = (raw ?? "").trim();
+  if (trimmed === "") return "memory";
+  return trimmed.toLowerCase();
+}
+
 function createBucketStore(): BucketStore {
-  const kind = (process.env.RATE_LIMIT_STORE ?? "memory").toLowerCase();
+  const kind = normaliseRateLimitStoreKind(process.env.RATE_LIMIT_STORE);
   if (kind === "redis") {
     // TODO(deploy): provision a managed Redis (Upstash for serverless,
     // Memorystore for region-pinned VMs) and wire its connection string
@@ -646,4 +790,5 @@ export const __test__ = {
   RedisStore,
   RedisFailureWatcher,
   redisFailureWatcher,
+  normaliseRateLimitStoreKind,
 };

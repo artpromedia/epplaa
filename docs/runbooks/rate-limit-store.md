@@ -12,6 +12,89 @@ backend is selected at boot by the `RATE_LIMIT_STORE` env var:
 When `RATE_LIMIT_STORE=redis`, `REDIS_URL` must also be set or the
 process crashes at boot.
 
+## Boot-time presence check
+
+The api-server entrypoint (`artifacts/api-server/src/index.ts`) runs
+`assertRateLimitStoreConfiguredForProduction` (in
+`artifacts/api-server/src/middlewares/apiRateLimit.ts`) on every boot.
+On a production-shaped deploy (any of `NODE_ENV=production`,
+`REPLIT_DEPLOYMENT=1`, `DEPLOYMENT_ENVIRONMENT=production`) it emits a
+loud structured warning identified by the message tag
+`rate_limit_store_misconfigured_for_production` when `RATE_LIMIT_STORE`
+does not normalise to `"redis"` (i.e. it's unset, empty, `"memory"`, or
+any typo'd value that `createBucketStore` would also fall back to the
+in-process bucket for). The check uses the same
+`detectNonHostnameProductionSignals` helper as the
+`production_hostname_pattern_missing` check above (see also
+`artifacts/api-server/src/lib/productionSignals.ts`).
+
+Why this matters: the in-process memory bucket is replica-local. A
+multi-replica production deploy that ships with the default gives
+each replica its own per-tier counters, so the effective rate limit
+is multiplied by the replica count and an attacker can defeat it by
+spreading traffic across replicas — the abuse-prevention layer is
+silently disabled. The runbook (this file) explicitly says
+`RATE_LIMIT_STORE=redis` is required for any deploy with more than one
+api-server replica, but until this check shipped the only feedback an
+operator got was a runbook prose sentence, easy to miss across env-var
+rotations and platform migrations.
+
+The check is intentionally a warning, not a hard failure, so:
+
+- Single-replica production deploys (canary, internal-only tools)
+  that legitimately run on the in-process bucket are not crash-looped.
+- Existing production deploys that haven't yet been rotated to wire
+  Redis don't refuse to start the first time the change ships.
+
+The structured log payload includes `production_signals` (which
+signals tripped the production-shape detection), `node_env`,
+`replit_deployment`, `deployment_environment`, and the observed
+`rate_limit_store` value (`null` when unset) so triage can confirm
+the misconfiguration without shelling onto the box. A healthy boot —
+production deploy with `RATE_LIMIT_STORE=redis` — produces zero output
+from this check, so the alert below can fire on first occurrence
+without tuning.
+
+**Wire a Sentry / log-aggregator alert on the
+`rate_limit_store_misconfigured_for_production` message tag**, route
+it to the rate-limit owners, and treat it as a misconfigured-deploy
+remediation:
+
+- Sentry: in **Alerts → Create Alert → Issue Alert**, filter to
+  `message:"*rate_limit_store_misconfigured_for_production*"` (the
+  tag is embedded in the warning text emitted by `pino`) on the
+  api-server project. Set the action to page the on-call rotation
+  that owns rate limiting. Severity should match the
+  `production_hostname_pattern_missing` alert above so both
+  production-config drifts are routed the same way.
+- Datadog / log aggregator: a saved query of
+  `message:"rate_limit_store_misconfigured_for_production"` against
+  the api-server log source, with a monitor that triggers on
+  `count > 0 last 5 minutes`. Forward to the same on-call channel.
+
+When the alert fires, fix the deploy:
+
+```sh
+# On the production api-server deploy:
+RATE_LIMIT_STORE=redis
+REDIS_URL=<connection string for the managed Redis instance>
+```
+
+Then restart the api-server. Confirm the fix landed by hitting
+`/healthz` and looking for `rateLimitStore: "redis"` in the body
+(see Step 1 below). Do **not** work around the warning by unsetting
+`NODE_ENV` / `REPLIT_DEPLOYMENT` / `DEPLOYMENT_ENVIRONMENT` — those
+signals exist precisely to catch the case where the rate-limit store
+is misconfigured on a production deploy; weakening them defeats the
+check.
+
+The check is unit-covered in
+`artifacts/api-server/src/middlewares/apiRateLimit.test.ts`
+(`assertRateLimitStoreConfiguredForProduction —` describe block) and
+the production-shape signal detection it shares with the hostname
+check is covered in
+`artifacts/api-server/src/routes/healthzRehearsal.test.ts`.
+
 ## Symptom: alert from Sentry
 
 You will see one of these:

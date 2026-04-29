@@ -1,5 +1,6 @@
 import { createServer } from "node:http";
 import { logger } from "./lib/logger";
+import { assertRateLimitStoreConfiguredForProduction } from "./middlewares/apiRateLimit";
 import {
   assertProductionHostnamePatternConfigured,
   assertRehearsalKillSwitchSafe,
@@ -39,6 +40,23 @@ if (!rehearsalGuard.ok) {
 // looping every existing production deploy that never set this env
 // var would be more disruptive than the marginal security gain.
 assertProductionHostnamePatternConfigured(process.env, logger);
+
+// Boot-time sanity check (task #87): on production-shaped deploys
+// (NODE_ENV=production / REPLIT_DEPLOYMENT=1 / DEPLOYMENT_ENVIRONMENT=production),
+// warn loudly if RATE_LIMIT_STORE is unset / "memory". The runbook
+// (`docs/runbooks/rate-limit-store.md`) explicitly says
+// `RATE_LIMIT_STORE=redis` is required for any deploy with more than
+// one api-server replica — the in-process bucket is replica-local, so
+// each replica owns its own counters and the per-tier rate limit is
+// trivially bypassed by spreading traffic across replicas. The check
+// turns the runbook recommendation into an automated boot-time signal
+// so the misconfiguration shows up in log aggregators / Sentry within
+// minutes of the next deploy. Like the hostname-pattern check above,
+// the outcome is intentionally NOT used to abort boot — single-replica
+// production deploys legitimately run on the in-process bucket and
+// crash-looping every existing deploy that hasn't wired Redis would
+// be more disruptive than the marginal security gain.
+assertRateLimitStoreConfiguredForProduction(process.env, logger);
 
 const rawPort = process.env["PORT"];
 
