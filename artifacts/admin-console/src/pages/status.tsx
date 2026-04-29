@@ -1,5 +1,19 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Activity, AlertTriangle, CheckCircle2, XCircle, RefreshCw } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
+import {
+  Activity,
+  AlertTriangle,
+  CheckCircle2,
+  CreditCard,
+  Database,
+  RefreshCw,
+  XCircle,
+} from "lucide-react";
+import {
+  getHealthCheckQueryOptions,
+  useAdminGetGatewayHealth,
+  type GatewayHealthSnapshot,
+} from "@workspace/api-client-react";
 import { PageHeader } from "@/components/admin-shell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -63,7 +77,7 @@ function isReplicaUnhealthy(s: ReplicaSample): boolean {
   return Object.values(checks).some((v) => v === "failed");
 }
 
-function formatRelative(now: number, then: number): string {
+function formatRelativeMs(now: number, then: number): string {
   const ms = Math.max(0, now - then);
   if (ms < 1000) return "just now";
   const s = Math.round(ms / 1000);
@@ -76,6 +90,34 @@ function checkBadgeVariant(state: CheckState): "default" | "destructive" | "outl
   if (state === "ok") return "secondary";
   if (state === "failed") return "destructive";
   return "outline";
+}
+
+function formatTimestamp(value: number | string | null): string {
+  if (value === null) return "—";
+  const ms = typeof value === "string" ? Date.parse(value) : value;
+  if (Number.isNaN(ms)) return "—";
+  return new Date(ms).toLocaleString(undefined, {
+    dateStyle: "medium",
+    timeStyle: "medium",
+  });
+}
+
+function formatRelativeFlexible(value: number | string | null, now: number): string {
+  if (value === null) return "—";
+  const ms = typeof value === "string" ? Date.parse(value) : value;
+  if (Number.isNaN(ms)) return "—";
+  const deltaSec = Math.round((now - ms) / 1000);
+  const absSec = Math.abs(deltaSec);
+  const future = deltaSec < 0;
+  const fmt = (n: number, unit: string) =>
+    future ? `in ${n}${unit}` : `${n}${unit} ago`;
+  if (absSec < 60) return fmt(absSec, "s");
+  const minutes = Math.round(absSec / 60);
+  if (minutes < 60) return fmt(minutes, "m");
+  const hours = Math.round(minutes / 60);
+  if (hours < 48) return fmt(hours, "h");
+  const days = Math.round(hours / 24);
+  return fmt(days, "d");
 }
 
 export default function StatusPage() {
@@ -169,8 +211,8 @@ export default function StatusPage() {
   return (
     <div data-testid="page-status">
       <PageHeader
-        title="Replica health"
-        description={`Polls /api/readyz every ${POLL_INTERVAL_MS / 1000}s and groups responses by replica. Multiple parallel probes per cycle increase the odds of sampling every replica behind the load balancer.`}
+        title="System status"
+        description="Backing dependencies the api-server relies on, plus a live view of the replicas behind the load balancer. Each panel shows the dependency, current state, and the latest timestamps."
         actions={
           <button
             type="button"
@@ -185,56 +227,91 @@ export default function StatusPage() {
         }
       />
 
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-6">
-        <SummaryTile
-          label="Replicas observed"
-          value={sortedReplicas.length}
-          icon={Activity}
-          testId="tile-replicas"
-        />
-        <SummaryTile
-          label="Healthy"
-          value={healthyCount}
-          icon={CheckCircle2}
-          tone={sortedReplicas.length > 0 && healthyCount === sortedReplicas.length ? "good" : "neutral"}
-          testId="tile-healthy"
-        />
-        <SummaryTile
-          label="Degraded"
-          value={degradedCount}
-          icon={AlertTriangle}
-          tone={degradedCount > 0 ? "bad" : "neutral"}
-          testId="tile-degraded"
-        />
-      </div>
-
-      {lastError && sortedReplicas.length === 0 && (
-        <div
-          className="mb-4 rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive"
-          data-testid="status-network-error"
+      <section
+        aria-labelledby="status-dependencies-heading"
+        className="mb-8"
+        data-testid="section-dependencies"
+      >
+        <h2
+          id="status-dependencies-heading"
+          className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3"
         >
-          Could not reach <code>/api/readyz</code>: {lastError.message}
+          Backing dependencies
+        </h2>
+        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+          <RateLimitStorePanel />
+          <PaymentGatewayHealthPanel />
         </div>
-      )}
+      </section>
 
-      <div className="space-y-3">
-        {sortedReplicas.length === 0 && !lastError && (
-          <Card data-testid="status-empty">
-            <CardContent className="py-8 text-center text-sm text-muted-foreground">
-              Waiting for the first probe response…
-            </CardContent>
-          </Card>
+      <section
+        aria-labelledby="status-replicas-heading"
+        data-testid="section-replicas"
+      >
+        <h2
+          id="status-replicas-heading"
+          className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3"
+        >
+          Replica health
+        </h2>
+        <p className="text-xs text-muted-foreground mb-3">
+          Polls <code>/api/readyz</code> every {POLL_INTERVAL_MS / 1000}s and
+          groups responses by replica. Multiple parallel probes per cycle
+          increase the odds of sampling every replica behind the load
+          balancer.
+        </p>
+
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-6">
+          <SummaryTile
+            label="Replicas observed"
+            value={sortedReplicas.length}
+            icon={Activity}
+            testId="tile-replicas"
+          />
+          <SummaryTile
+            label="Healthy"
+            value={healthyCount}
+            icon={CheckCircle2}
+            tone={sortedReplicas.length > 0 && healthyCount === sortedReplicas.length ? "good" : "neutral"}
+            testId="tile-healthy"
+          />
+          <SummaryTile
+            label="Degraded"
+            value={degradedCount}
+            icon={AlertTriangle}
+            tone={degradedCount > 0 ? "bad" : "neutral"}
+            testId="tile-degraded"
+          />
+        </div>
+
+        {lastError && sortedReplicas.length === 0 && (
+          <div
+            className="mb-4 rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive"
+            data-testid="status-network-error"
+          >
+            Could not reach <code>/api/readyz</code>: {lastError.message}
+          </div>
         )}
-        {sortedReplicas.map((replica) => (
-          <ReplicaCard key={replica.replicaId} replica={replica} now={now} />
-        ))}
-      </div>
 
-      <p className="mt-6 text-xs text-muted-foreground" data-testid="status-poll-meta">
-        Last polled {lastPolledAt ? formatRelative(now, lastPolledAt) : "never"} ·{" "}
-        {SAMPLES_PER_CYCLE} parallel probes per cycle · stale replicas drop after{" "}
-        {REPLICA_STALE_AFTER_MS / 1000}s of silence
-      </p>
+        <div className="space-y-3">
+          {sortedReplicas.length === 0 && !lastError && (
+            <Card data-testid="status-empty">
+              <CardContent className="py-8 text-center text-sm text-muted-foreground">
+                Waiting for the first probe response…
+              </CardContent>
+            </Card>
+          )}
+          {sortedReplicas.map((replica) => (
+            <ReplicaCard key={replica.replicaId} replica={replica} now={now} />
+          ))}
+        </div>
+
+        <p className="mt-6 text-xs text-muted-foreground" data-testid="status-poll-meta">
+          Last polled {lastPolledAt ? formatRelativeMs(now, lastPolledAt) : "never"} ·{" "}
+          {SAMPLES_PER_CYCLE} parallel probes per cycle · stale replicas drop after{" "}
+          {REPLICA_STALE_AFTER_MS / 1000}s of silence
+        </p>
+      </section>
     </div>
   );
 }
@@ -281,6 +358,270 @@ function SummaryTile({
   );
 }
 
+function RateLimitStorePanel() {
+  const { data, isLoading, error } = useQuery({
+    ...getHealthCheckQueryOptions(),
+    refetchInterval: 10_000,
+    refetchIntervalInBackground: true,
+    staleTime: 0,
+  });
+
+  const status = data?.rateLimitStore;
+  const degraded = status?.state === "degraded";
+  const now = Date.now();
+
+  return (
+    <Card
+      className={cn(degraded && "border-destructive/60 bg-destructive/5")}
+      data-testid="rate-limit-store-panel"
+    >
+      <CardHeader className="flex flex-row items-center justify-between pb-2">
+        <CardTitle className="text-sm">Rate limit store</CardTitle>
+        <Database
+          className={cn(
+            "w-4 h-4",
+            degraded ? "text-destructive" : "text-muted-foreground",
+          )}
+        />
+      </CardHeader>
+      <CardContent className="space-y-2">
+        {error ? (
+          <p
+            className="text-xs text-destructive"
+            data-testid="rate-limit-store-error"
+          >
+            Could not reach /api/healthz. The api-server may be down or
+            the preview proxy is misrouting requests.
+          </p>
+        ) : isLoading || !status ? (
+          <p className="text-xs text-muted-foreground">Loading…</p>
+        ) : (
+          <>
+            <div className="flex items-center gap-2 flex-wrap">
+              <Badge variant="outline" data-testid="rate-limit-store-kind">
+                {status.kind}
+              </Badge>
+              {degraded ? (
+                <Badge
+                  variant="destructive"
+                  data-testid="rate-limit-store-state"
+                >
+                  degraded
+                </Badge>
+              ) : (
+                <Badge
+                  variant="secondary"
+                  data-testid="rate-limit-store-state"
+                >
+                  healthy
+                </Badge>
+              )}
+            </div>
+            <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
+              <dt className="text-muted-foreground">Failure count</dt>
+              <dd
+                className={cn(
+                  "tabular-nums",
+                  degraded && "font-medium text-destructive",
+                )}
+                data-testid="rate-limit-store-failure-count"
+              >
+                {status.failureCount}
+              </dd>
+              <dt className="text-muted-foreground">Streak started</dt>
+              <dd
+                className="tabular-nums"
+                data-testid="rate-limit-store-first-failure"
+                title={
+                  status.firstFailureAt === null
+                    ? undefined
+                    : formatTimestamp(status.firstFailureAt)
+                }
+              >
+                {status.firstFailureAt === null
+                  ? "—"
+                  : `${formatRelativeFlexible(status.firstFailureAt, now)} (${formatTimestamp(status.firstFailureAt)})`}
+              </dd>
+              <dt className="text-muted-foreground">Last recovered</dt>
+              <dd
+                className="tabular-nums"
+                data-testid="rate-limit-store-last-recovered"
+                title={
+                  status.lastRecoveredAt === null
+                    ? undefined
+                    : formatTimestamp(status.lastRecoveredAt)
+                }
+              >
+                {status.lastRecoveredAt === null
+                  ? "—"
+                  : `${formatRelativeFlexible(status.lastRecoveredAt, now)} (${formatTimestamp(status.lastRecoveredAt)})`}
+              </dd>
+            </dl>
+            {status.kind === "memory" && (
+              <p className="text-[11px] text-muted-foreground">
+                Memory store: streak metrics are always zero. Set{" "}
+                <code>RATE_LIMIT_STORE=redis</code> before scaling the
+                api-server beyond one replica.
+              </p>
+            )}
+          </>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function isGatewayDegraded(gateway: GatewayHealthSnapshot, now: number): boolean {
+  if (gateway.circuitOpenUntilIso) {
+    const ts = Date.parse(gateway.circuitOpenUntilIso);
+    if (!Number.isNaN(ts) && ts > now) return true;
+  }
+  return false;
+}
+
+function PaymentGatewayHealthPanel() {
+  const { data, isLoading, error } = useAdminGetGatewayHealth({
+    query: {
+      refetchInterval: 15_000,
+      refetchIntervalInBackground: true,
+      staleTime: 0,
+    } as never,
+  });
+
+  const now = Date.now();
+  const gateways = data ?? [];
+  const anyDegraded = gateways.some((g) => isGatewayDegraded(g, now));
+
+  return (
+    <Card
+      className={cn(anyDegraded && "border-destructive/60 bg-destructive/5")}
+      data-testid="payment-gateway-health-panel"
+    >
+      <CardHeader className="flex flex-row items-center justify-between pb-2">
+        <CardTitle className="text-sm">Payment gateways</CardTitle>
+        <CreditCard
+          className={cn(
+            "w-4 h-4",
+            anyDegraded ? "text-destructive" : "text-muted-foreground",
+          )}
+        />
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {error ? (
+          <p
+            className="text-xs text-destructive"
+            data-testid="payment-gateway-health-error"
+          >
+            Could not load /api/admin/payment-gateway-health. You may not have
+            permission, or the api-server may be down.
+          </p>
+        ) : isLoading ? (
+          <p className="text-xs text-muted-foreground">Loading…</p>
+        ) : gateways.length === 0 ? (
+          <p
+            className="text-xs text-muted-foreground"
+            data-testid="payment-gateway-health-empty"
+          >
+            No gateway activity recorded yet.
+          </p>
+        ) : (
+          gateways.map((g) => {
+            const degraded = isGatewayDegraded(g, now);
+            return (
+              <div
+                key={g.gateway}
+                className="space-y-1.5 border-t border-border first:border-t-0 first:pt-0 pt-3"
+                data-testid={`payment-gateway-row-${g.gateway}`}
+              >
+                <div className="flex items-center gap-2 flex-wrap">
+                  <Badge
+                    variant="outline"
+                    data-testid={`payment-gateway-${g.gateway}-name`}
+                  >
+                    {g.gateway}
+                  </Badge>
+                  {degraded ? (
+                    <Badge
+                      variant="destructive"
+                      data-testid={`payment-gateway-${g.gateway}-state`}
+                    >
+                      degraded
+                    </Badge>
+                  ) : (
+                    <Badge
+                      variant="secondary"
+                      data-testid={`payment-gateway-${g.gateway}-state`}
+                    >
+                      healthy
+                    </Badge>
+                  )}
+                </div>
+                <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
+                  <dt className="text-muted-foreground">Successes</dt>
+                  <dd className="tabular-nums">{g.successCount}</dd>
+                  <dt className="text-muted-foreground">Failures</dt>
+                  <dd
+                    className={cn(
+                      "tabular-nums",
+                      g.failureCount > 0 && "font-medium",
+                      degraded && "text-destructive",
+                    )}
+                  >
+                    {g.failureCount}
+                  </dd>
+                  <dt className="text-muted-foreground">Window started</dt>
+                  <dd
+                    className="tabular-nums"
+                    data-testid={`payment-gateway-${g.gateway}-window-started`}
+                    title={
+                      g.windowStartedAtIso
+                        ? formatTimestamp(g.windowStartedAtIso)
+                        : undefined
+                    }
+                  >
+                    {g.windowStartedAtIso
+                      ? `${formatRelativeFlexible(g.windowStartedAtIso, now)} (${formatTimestamp(g.windowStartedAtIso)})`
+                      : "—"}
+                  </dd>
+                  <dt className="text-muted-foreground">Last event</dt>
+                  <dd
+                    className="tabular-nums"
+                    data-testid={`payment-gateway-${g.gateway}-last-event`}
+                    title={
+                      g.lastEventAtIso
+                        ? formatTimestamp(g.lastEventAtIso)
+                        : undefined
+                    }
+                  >
+                    {g.lastEventAtIso
+                      ? `${formatRelativeFlexible(g.lastEventAtIso, now)} (${formatTimestamp(g.lastEventAtIso)})`
+                      : "—"}
+                  </dd>
+                  {g.circuitOpenUntilIso && (
+                    <>
+                      <dt className="text-muted-foreground">Circuit reopens</dt>
+                      <dd
+                        className={cn(
+                          "tabular-nums",
+                          degraded && "font-medium text-destructive",
+                        )}
+                        data-testid={`payment-gateway-${g.gateway}-circuit-until`}
+                        title={formatTimestamp(g.circuitOpenUntilIso)}
+                      >
+                        {`${formatRelativeFlexible(g.circuitOpenUntilIso, now)} (${formatTimestamp(g.circuitOpenUntilIso)})`}
+                      </dd>
+                    </>
+                  )}
+                </dl>
+              </div>
+            );
+          })
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 function ReplicaCard({ replica, now }: { replica: ReplicaSample; now: number }) {
   const unhealthy = isReplicaUnhealthy(replica);
   const checks = replica.body?.checks ?? {};
@@ -299,7 +640,7 @@ function ReplicaCard({ replica, now }: { replica: ReplicaSample; now: number }) 
               {replica.replicaId}
             </CardTitle>
             <p className="text-xs text-muted-foreground mt-0.5">
-              HTTP {replica.httpStatus} · last seen {formatRelative(now, replica.observedAt)}
+              HTTP {replica.httpStatus} · last seen {formatRelativeMs(now, replica.observedAt)}
             </p>
           </div>
           <div className="flex items-center gap-2">
