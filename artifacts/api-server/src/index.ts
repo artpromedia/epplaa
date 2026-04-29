@@ -73,6 +73,53 @@ if (!rateLimitStoreGuard.ok) {
   process.exit(1);
 }
 
+// Test-only affordance for `src/index.boot.test.ts` (task #92). When set
+// to the exact sentinel value below, the entrypoint exits cleanly AFTER
+// all boot-time guards have run but BEFORE the PORT check /
+// `await import("./app")` (which would otherwise require DATABASE_URL
+// and trigger schema/scheduler side effects). This is the only way to
+// assert the opt-out path
+// (`RATE_LIMIT_STORE_ALLOW_MEMORY_IN_PRODUCTION=1`) reaches an exit-0
+// state without spinning up the full app on the test runner.
+//
+// The check is intentionally placed AFTER all three guards so a future
+// refactor that drops the exit on a guard failure or reorders the
+// guards is still caught — the spawn test for the failing-guard cases
+// sees exit code 1 from the guard, not exit code 0 from this
+// affordance.
+//
+// Defense-in-depth against accidental production misuse:
+//   1. The env var name is double-underscored so it can't be confused
+//      with a real operator-facing knob.
+//   2. The trigger value is NOT "1" / "true" — it's a cryptic literal
+//      that an operator would never type by accident or copy from a
+//      runbook (the only place it appears outside this file is the
+//      spawn-based test).
+//   3. If it ever DOES fire, we emit a structured `error`-level log
+//      with a stable tag so any log aggregator / Sentry forwarder
+//      sees it immediately. An operator who accidentally set this in
+//      a real deploy would notice the missing HTTP listener within
+//      one platform health check, but the explicit log makes the
+//      cause unambiguous instead of a silent "process exited 0".
+const BOOT_GUARDS_ONLY_SENTINEL =
+  "test-only-exit-after-boot-guards-do-not-set-in-production";
+if (
+  process.env["__EPPLAA_BOOT_GUARDS_ONLY"] === BOOT_GUARDS_ONLY_SENTINEL
+) {
+  logger.error(
+    {
+      env_var: "__EPPLAA_BOOT_GUARDS_ONLY",
+      pid: process.pid,
+    },
+    "boot_guards_only_test_affordance_triggered: " +
+      "exiting 0 after boot-time guards without binding the HTTP listener. " +
+      "This is a test-only path used by src/index.boot.test.ts. " +
+      "If this log appears in a real deploy, the env var has been set in " +
+      "production by mistake — unset __EPPLAA_BOOT_GUARDS_ONLY and restart.",
+  );
+  process.exit(0);
+}
+
 const rawPort = process.env["PORT"];
 
 if (!rawPort) {
