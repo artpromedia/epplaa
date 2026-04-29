@@ -68,6 +68,7 @@ export const SEED_PRODUCTS = [
     rating: 4.8,
     soldCount: 124,
     isLiveNow: true,
+    freeShipping: true,
     images: [
       "/images/lagos-product-carousel-1.png",
       "/images/lagos-product-serum.png",
@@ -125,6 +126,7 @@ export const SEED_PRODUCTS = [
     rating: 4.5,
     soldCount: 1500,
     isLiveNow: false,
+    freeShipping: true,
     images: [
       "/images/lagos-feed-2.png",
     ],

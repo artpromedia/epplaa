@@ -1,3 +1,4 @@
+import { and, eq } from "drizzle-orm";
 import { db, schema } from "./db";
 import { logger } from "./logger";
 import { PROMO_CODES, SEED_FULFILLMENT_LOCATIONS } from "./static";
@@ -12,6 +13,30 @@ export async function seedDatabaseIfEmpty(): Promise<void> {
     if (existingProducts.length === 0) {
       await db.insert(schema.productsTable).values(SEED_PRODUCTS).onConflictDoNothing();
       logger.info({ count: SEED_PRODUCTS.length }, "Seeded products");
+    } else {
+      // Backfill the freeShipping flag on known seed products so existing
+      // databases (seeded before the column was populated) still surface the
+      // "Free shipping" badge and filter. Idempotent: the WHERE clause filters
+      // on the current value, so once the row is true subsequent boots are
+      // no-ops.
+      const seedFreeShipping = SEED_PRODUCTS.filter((p) => p.freeShipping === true);
+      let updated = 0;
+      for (const p of seedFreeShipping) {
+        const res = await db
+          .update(schema.productsTable)
+          .set({ freeShipping: true })
+          .where(
+            and(
+              eq(schema.productsTable.id, p.id),
+              eq(schema.productsTable.freeShipping, false),
+            ),
+          )
+          .returning({ id: schema.productsTable.id });
+        updated += res.length;
+      }
+      if (updated > 0) {
+        logger.info({ count: updated }, "Backfilled free shipping on seeded products");
+      }
     }
 
     const existingStreams = await db.select({ id: schema.streamsTable.id }).from(schema.streamsTable).limit(1);

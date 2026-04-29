@@ -9,6 +9,7 @@ import {
   Heart,
   Radio,
   AlertTriangle,
+  Truck,
 } from "lucide-react";
 import { useTheme } from "@/lib/theme-context";
 import { useCountry } from "@/lib/country-context";
@@ -241,6 +242,28 @@ export default function Search() {
             }`}
           >
             All
+          </button>
+          <button
+            onClick={() =>
+              setFilters((prev) => ({
+                ...prev,
+                freeShippingOnly: !prev.freeShippingOnly,
+              }))
+            }
+            data-testid="chip-free-shipping"
+            aria-pressed={filters.freeShippingOnly}
+            className={`whitespace-nowrap px-4 py-1.5 rounded-full text-sm font-medium transition-colors flex items-center gap-1.5 ${
+              filters.freeShippingOnly
+                ? isDark
+                  ? "bg-[#5BA3F5] text-black"
+                  : "bg-[#1B2A4A] text-white"
+                : isDark
+                  ? "bg-white/5 text-white/70 border border-white/10"
+                  : "bg-white border border-stone-400/55 text-stone-600"
+            }`}
+          >
+            <Truck className="w-3.5 h-3.5" />
+            Free shipping
           </button>
           {CATEGORIES.map((c) => (
             <button
@@ -603,6 +626,7 @@ export type SearchProductCard = {
   rating: number;
   isLiveNow: boolean;
   images: string[];
+  freeShipping?: boolean;
 };
 
 function ProductCard({
@@ -657,6 +681,20 @@ function ProductCard({
           } animate-pulse`}
         >
           <Radio className="w-2 h-2" /> LIVE
+        </div>
+      )}
+      {product.freeShipping && (
+        <div
+          data-testid={`badge-free-shipping-${product.id}`}
+          className={`absolute ${
+            product.isLiveNow ? "top-7" : "top-2"
+          } left-2 text-[9px] font-black px-1.5 py-0.5 rounded flex items-center gap-1 ${
+            isDark
+              ? "bg-[#5BA3F5] text-black"
+              : "bg-white/95 text-[#1B2A4A] border border-[#1B2A4A]/20"
+          }`}
+        >
+          <Truck className="w-2 h-2" /> FREE SHIPPING
         </div>
       )}
       <div

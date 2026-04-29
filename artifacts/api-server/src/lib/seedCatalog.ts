@@ -18,6 +18,7 @@ export const SEED_PRODUCTS = [
     variants: [{ name: "Size", options: ["S", "M", "L", "XL"] }, { name: "Colour", options: ["Sunset", "Midnight"] }],
     category: "Fashion",
     countryCode: "NG",
+    freeShipping: true,
   },
   {
     id: "prod-2",
@@ -51,6 +52,7 @@ export const SEED_PRODUCTS = [
     variants: [{ name: "Size", options: ["Petite", "Standard", "Plus"] }],
     category: "Fashion",
     countryCode: "NG",
+    freeShipping: true,
   },
   {
     id: "prod-4",
@@ -67,6 +69,7 @@ export const SEED_PRODUCTS = [
     variants: [{ name: "Skin Tone", options: ["Light", "Medium", "Deep"] }],
     category: "Beauty",
     countryCode: "NG",
+    freeShipping: true,
   },
 ];
 
