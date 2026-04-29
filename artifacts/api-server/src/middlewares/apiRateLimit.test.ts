@@ -469,6 +469,178 @@ describe("RedisFailureWatcher recovery signaling", () => {
   });
 });
 
+describe("RedisFailureWatcher incident-notifier wiring", () => {
+  // The notifier fires on the same healthy→degraded edge that flips
+  // /healthz `state` from "healthy" to "degraded" — i.e. the moment
+  // `firstFailureAt` becomes non-null. This deliberately matches the
+  // admin console's `prevState !== "degraded"` dedupe semantics
+  // (`components/rate-limit-store-alerts.tsx`) so the in-app banner
+  // and the on-call channel can never disagree about whether an
+  // incident occurred. The Sentry breach threshold is a separate
+  // concern (telemetry rollup); the page is not gated on it.
+  it("invokes notifyDegraded exactly once on the healthy→degraded transition (first failure)", () => {
+    const events: Array<{ kind: string; payload: unknown }> = [];
+    const notifier = {
+      notifyDegraded: (e: unknown) =>
+        events.push({ kind: "degraded", payload: e }),
+      notifyRecovered: (e: unknown) =>
+        events.push({ kind: "recovered", payload: e }),
+    };
+    const watcher = new __test__.RedisFailureWatcher({
+      threshold: 3,
+      cooldownMs: 60_000,
+      incidentNotifier: notifier,
+    });
+    const t0 = 9_000_000;
+    // The very first failure transitions the watcher to degraded —
+    // this is the page edge, regardless of the breach threshold.
+    watcher.record("rate_limit_redis_bump_failed", new Error("x"), t0);
+    expect(events).toHaveLength(1);
+    expect(events[0]!.kind).toBe("degraded");
+    expect(events[0]!.payload).toMatchObject({
+      failureCount: 1,
+      threshold: 3,
+      firstFailureAt: t0,
+      breachedAt: t0,
+    });
+
+    // Subsequent in-streak failures (including ones that DO cross the
+    // Sentry breach threshold) must not re-page — `breachedThisIncident`
+    // is unchanged by additional failures within the same streak, but
+    // the page is gated on the streak transition, not the breach.
+    for (let i = 1; i < 6; i++) {
+      watcher.record(
+        "rate_limit_redis_bump_failed",
+        new Error("x"),
+        t0 + i,
+      );
+    }
+    expect(events.filter((e) => e.kind === "degraded")).toHaveLength(1);
+  });
+
+  it("invokes notifyRecovered exactly once on the degraded→healthy transition", () => {
+    const events: Array<{ kind: string; payload: unknown }> = [];
+    const notifier = {
+      notifyDegraded: (e: unknown) =>
+        events.push({ kind: "degraded", payload: e }),
+      notifyRecovered: (e: unknown) =>
+        events.push({ kind: "recovered", payload: e }),
+    };
+    const watcher = new __test__.RedisFailureWatcher({
+      threshold: 2,
+      cooldownMs: 60_000,
+      incidentNotifier: notifier,
+    });
+    const t0 = 9_100_000;
+    watcher.record("rate_limit_redis_bump_failed", new Error("x"), t0);
+    watcher.record("rate_limit_redis_bump_failed", new Error("x"), t0 + 100);
+    expect(events.filter((e) => e.kind === "degraded")).toHaveLength(1);
+
+    // Multiple consecutive successes only fire ONE recovery page.
+    watcher.recordSuccess(t0 + 5_000);
+    watcher.recordSuccess(t0 + 5_010);
+    watcher.recordSuccess(t0 + 5_020);
+    const recoveries = events.filter((e) => e.kind === "recovered");
+    expect(recoveries).toHaveLength(1);
+    expect(recoveries[0]!.payload).toMatchObject({
+      durationMs: 5_000,
+      failureCount: 2,
+      recoveredAt: t0 + 5_000,
+    });
+  });
+
+  it("pages even on sub-threshold blips so the page matches the in-app banner edge", () => {
+    // The /healthz `state` flips degraded the instant `firstFailureAt`
+    // becomes non-null — even a single failure. The admin console's
+    // toast fires on `prevState !== "degraded"`, so a sub-threshold
+    // blip that the operator happens to catch in a poll window WILL
+    // produce an in-app banner. The out-of-band page must follow the
+    // same edge so on-call and the operator agree on whether an
+    // incident occurred.
+    const events: Array<{ kind: string }> = [];
+    const notifier = {
+      notifyDegraded: () => events.push({ kind: "degraded" }),
+      notifyRecovered: () => events.push({ kind: "recovered" }),
+    };
+    const watcher = new __test__.RedisFailureWatcher({
+      threshold: 5,
+      cooldownMs: 60_000,
+      incidentNotifier: notifier,
+    });
+    const t0 = 9_200_000;
+    watcher.record("rate_limit_redis_bump_failed", new Error("x"), t0);
+    watcher.record("rate_limit_redis_bump_failed", new Error("x"), t0 + 1);
+    watcher.recordSuccess(t0 + 100);
+    expect(events).toEqual([
+      { kind: "degraded" },
+      { kind: "recovered" },
+    ]);
+  });
+
+  it("re-pages on the next healthy→degraded transition after a recovery", () => {
+    // Dedupe is per-incident, not for-all-time. After a streak closes,
+    // the next streak's first failure must page again — otherwise a
+    // genuine new outage would silently bypass on-call.
+    const events: Array<{ kind: string }> = [];
+    const notifier = {
+      notifyDegraded: () => events.push({ kind: "degraded" }),
+      notifyRecovered: () => events.push({ kind: "recovered" }),
+    };
+    const watcher = new __test__.RedisFailureWatcher({
+      threshold: 2,
+      cooldownMs: 60_000,
+      incidentNotifier: notifier,
+    });
+    const t0 = 9_300_000;
+    watcher.record("rate_limit_redis_bump_failed", new Error("x"), t0);
+    watcher.record("rate_limit_redis_bump_failed", new Error("x"), t0 + 10);
+    watcher.recordSuccess(t0 + 1_000);
+    expect(events).toEqual([
+      { kind: "degraded" },
+      { kind: "recovered" },
+    ]);
+    watcher.record("rate_limit_redis_bump_failed", new Error("x"), t0 + 2_000);
+    expect(events).toEqual([
+      { kind: "degraded" },
+      { kind: "recovered" },
+      { kind: "degraded" },
+    ]);
+  });
+
+  it("does NOT let a throwing notifier break the breach detector", () => {
+    // Webhook outages must never cascade into the rate-limit decision
+    // path. The watcher swallows notifier errors and keeps tracking the
+    // streak — Sentry already has the underlying failure signal so the
+    // incident is not lost.
+    const notifier = {
+      notifyDegraded: () => {
+        throw new Error("transport down");
+      },
+      notifyRecovered: () => {
+        throw new Error("transport down");
+      },
+    };
+    const watcher = new __test__.RedisFailureWatcher({
+      threshold: 2,
+      cooldownMs: 60_000,
+      incidentNotifier: notifier,
+    });
+    const t0 = 9_400_000;
+    expect(() => {
+      watcher.record("rate_limit_redis_bump_failed", new Error("x"), t0);
+      watcher.record(
+        "rate_limit_redis_bump_failed",
+        new Error("x"),
+        t0 + 1,
+      );
+      watcher.recordSuccess(t0 + 100);
+    }).not.toThrow();
+    // Internal state is consistent: the streak closed normally even
+    // though both notifier calls threw.
+    expect(watcher.getSnapshot().state).toBe("healthy");
+  });
+});
+
 describe("RedisStore.bump emits recovery after a failure streak", () => {
   it("notifies on first success after a streak that crossed the alert threshold", async () => {
     let shouldFail = true;

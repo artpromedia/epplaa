@@ -6,6 +6,10 @@ import { newSafeId } from "../lib/ids";
 import { logger } from "../lib/logger";
 import { getUserId } from "../lib/auth";
 import { detectNonHostnameProductionSignals } from "../lib/productionSignals";
+import {
+  WebhookIncidentNotifier,
+  type RateLimitIncidentNotifier,
+} from "../lib/rate-limit/incidentNotifier";
 import { userHasAnyRole } from "../lib/roles";
 import { captureException, captureMessage } from "../lib/sentry";
 
@@ -261,14 +265,27 @@ class RedisFailureWatcher {
   private lastRecoveredAt: number | null = null;
   readonly thresholdPerMin: number;
   readonly cooldownMs: number;
+  /**
+   * Out-of-band paging sink (Slack / PagerDuty). Default is the
+   * env-driven webhook notifier; tests inject a deterministic stub via
+   * the constructor opts so we can assert on the exact transitions
+   * without touching network state.
+   */
+  private readonly incidentNotifier: RateLimitIncidentNotifier;
 
-  constructor(opts?: { threshold?: number; cooldownMs?: number }) {
+  constructor(opts?: {
+    threshold?: number;
+    cooldownMs?: number;
+    incidentNotifier?: RateLimitIncidentNotifier;
+  }) {
     this.thresholdPerMin =
       opts?.threshold ??
       Number(process.env.RATE_LIMIT_REDIS_FAILURE_ALERT_PER_MIN ?? "5");
     this.cooldownMs =
       opts?.cooldownMs ??
       Number(process.env.RATE_LIMIT_REDIS_FAILURE_ALERT_COOLDOWN_MS ?? "60000");
+    this.incidentNotifier =
+      opts?.incidentNotifier ?? new WebhookIncidentNotifier();
   }
 
   record(
@@ -280,11 +297,44 @@ class RedisFailureWatcher {
       tags: { subsystem: "rate_limit", kind },
       level: "error",
     });
-    if (this.firstFailureAt === null) {
+    // Track whether this failure starts a brand-new streak — that's the
+    // healthy→degraded edge consumed by /healthz (`state` flips to
+    // "degraded" the instant `firstFailureAt` becomes non-null) and by
+    // the admin console's `prevState !== "degraded"` dedupe. Paging on
+    // this edge keeps the out-of-band signal aligned with the in-app
+    // banner: if the operator sees a banner, on-call sees a page; if
+    // the operator never saw a banner (single-tick blip resolved
+    // before the next health-check poll), on-call still gets the page
+    // for the actual state transition the watcher observed. Decoupling
+    // this from the rate-based `thresholdPerMin` breach below means
+    // the threshold is purely a Sentry-telemetry concern: it controls
+    // when a `level: "fatal"` `captureMessage` rolls up but no longer
+    // gates the Slack/PagerDuty page.
+    const isFirstFailureInStreak = this.firstFailureAt === null;
+    if (isFirstFailureInStreak) {
       this.firstFailureAt = now;
       this.failuresSinceFirstFailure = 0;
     }
     this.failuresSinceFirstFailure += 1;
+    if (isFirstFailureInStreak) {
+      // Page exactly once per healthy→degraded transition. Wrapped in
+      // try/catch so a webhook-transport bug can't bubble back into the
+      // bump path — Sentry already has the underlying failure via the
+      // captureException above.
+      try {
+        this.incidentNotifier.notifyDegraded({
+          failureCount: this.failuresSinceFirstFailure,
+          threshold: this.thresholdPerMin,
+          firstFailureAt: now,
+          breachedAt: now,
+        });
+      } catch (notifyErr) {
+        logger.warn(
+          { err: (notifyErr as Error).message },
+          "rate_limit_incident_notify_degraded_threw",
+        );
+      }
+    }
     const cutoff = now - 60_000;
     this.timestamps.push(now);
     while (this.timestamps.length > 0 && this.timestamps[0]! <= cutoff) {
@@ -322,13 +372,20 @@ class RedisFailureWatcher {
    * Called by `RedisStore.bump` after a successful Lua roundtrip. If we
    * previously crossed the degraded-alert threshold (i.e. on-call was
    * paged with `rate_limit_store_degraded`), emit a paired
-   * `rate_limit_store_recovered` signal so the incident timeline closes
-   * itself instead of relying on Sentry's auto-resolve / a manual
-   * `/healthz` poke.
+   * `rate_limit_store_recovered` Sentry signal so the incident timeline
+   * closes itself instead of relying on Sentry's auto-resolve / a
+   * manual `/healthz` poke.
    *
-   * Recovery only fires for incidents we actually paged on. Sub-threshold
-   * blips reset the streak silently — emitting a "recovered" event for
-   * a degradation the team never saw would be pure noise.
+   * The Sentry recovery signal still gates on `breachedThisIncident`
+   * because Sentry's breach event is itself threshold-gated — pairing
+   * "recovered" with "breached" keeps that telemetry channel coherent.
+   *
+   * The OUT-OF-BAND incident notifier (Slack/PagerDuty) operates on
+   * different semantics: it fires on every degraded→healthy edge,
+   * matching the admin console's `lastRecoveredAt`-based banner so
+   * the in-app and on-call channels can never disagree about whether
+   * an incident occurred. PagerDuty's shared `dedup_key` makes a
+   * paired resolve a no-op if no trigger ever fired, so this is safe.
    */
   recordSuccess(now: number = Date.now()): void {
     const hadBreach = this.breachedThisIncident;
@@ -347,6 +404,30 @@ class RedisFailureWatcher {
     // store last come back" regardless of whether on-call was paged.
     if (startedAt !== null) {
       this.lastRecoveredAt = now;
+    }
+    // Out-of-band "all clear" page on the degraded→healthy transition.
+    // We fire on EVERY closing streak (matching admin console's
+    // `lastRecoveredAt !== prevRecoveredAt` dedupe), not just streaks
+    // that crossed the Sentry breach threshold — the in-app banner and
+    // the on-call channel must agree about whether an incident
+    // happened, and `RateLimitStoreAlerts` decides that purely from
+    // `state` flipping degraded→healthy. PagerDuty's `dedup_key` makes
+    // a paired resolve a no-op if no trigger ever fired, so this
+    // doesn't open spurious incidents.
+    if (startedAt !== null) {
+      const durationMs = Math.max(0, now - startedAt);
+      try {
+        this.incidentNotifier.notifyRecovered({
+          durationMs,
+          failureCount,
+          recoveredAt: now,
+        });
+      } catch (notifyErr) {
+        logger.warn(
+          { err: (notifyErr as Error).message },
+          "rate_limit_incident_notify_recovered_threw",
+        );
+      }
     }
     if (!hadBreach || startedAt === null) return;
     // Recovery is the true close of an alert window: drop the cooldown
