@@ -131,6 +131,17 @@ jobs:
         env:
           MFA_ENCRYPTION_KEY: 0000000000000000000000000000000000000000000000000000000000000000
 
+      # Bats unit tests for the chat heads-up shell script
+      # (.github/scripts/healthz-probe-loop.sh). The integration-level
+      # cover for that script is the rehearse-chat-firing job in
+      # rehearse-healthz-degraded.yml, which runs against staging once
+      # a week. Without this PR-time unit cover, a regression in the
+      # script's dedup guards / NOTIFY_LOG_FILE format / exit-code
+      # mapping / rehearsal clear hook would only surface on Sunday at
+      # 04:17 UTC instead of in CI.
+      - name: Bats unit tests for healthz-probe-loop.sh
+        run: pnpm run test:probe-loop
+
       - name: Build
         run: pnpm run build
 

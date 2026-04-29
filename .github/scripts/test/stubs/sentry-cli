@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# Stub for `sentry-cli` invoked by healthz-probe-loop.sh tests.
+#
+# The probe loop only invokes sentry-cli when SENTRY_DSN is set, and
+# the chat-firing tests deliberately leave it unset. This stub is here
+# so a future test that opts SENTRY_DSN in can record the invocations
+# without requiring the real binary to be installed in CI.
+#
+# STUB_SENTRY_EXIT_CODE — exit code to return (default 0).
+# STUB_STATE_DIR/sentry.log — appended one line per invocation, with
+#                             a JSON-shaped summary of the args.
+
+set -uo pipefail
+
+state_dir="${STUB_STATE_DIR:?STUB_STATE_DIR must be set}"
+echo "sentry-cli $*" >> "$state_dir/sentry.log"
+
+exit "${STUB_SENTRY_EXIT_CODE:-0}"

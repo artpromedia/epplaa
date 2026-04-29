@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# Stub for `pnpm` invoked by healthz-probe-loop.sh tests.
+#
+# The probe loop calls:
+#   pnpm --silent --filter @workspace/api-server run check-healthz-degraded
+# We don't want a real pnpm; we just need to control:
+#   1. exit code per iteration (0 / 1 / 2)
+#   2. the stdout JSON line the probe would have printed
+#
+# Iteration counter is tracked per-test in $STUB_STATE_DIR/pnpm_iter so
+# repeated calls in one test walk through the configured exit/output
+# sequences.
+#
+# Inputs (env vars):
+#   STUB_STATE_DIR        — temp dir owned by the bats test
+#   STUB_PNPM_EXITS       — space-separated exit codes, one per
+#                           expected iteration (default: "0")
+#   STUB_PNPM_OUTPUTS     — space-separated tag tokens; for token N
+#                           we print PROBE_OUTPUT_<TOKEN> if defined,
+#                           otherwise a default "page" JSON line
+#                           (suitable for exit-2 iterations)
+#
+# A command name other than the expected one is allowed but ignored —
+# all we look at is the call sequence, not the args.
+
+set -euo pipefail
+
+state_file="${STUB_STATE_DIR:?STUB_STATE_DIR must be set}/pnpm_iter"
+i=$(cat "$state_file" 2>/dev/null || echo 0)
+i=$((i + 1))
+echo "$i" > "$state_file"
+
+read -r -a exits <<< "${STUB_PNPM_EXITS:-0}"
+exit_code="${exits[$((i - 1))]:-0}"
+
+read -r -a outputs <<< "${STUB_PNPM_OUTPUTS:-}"
+token="${outputs[$((i - 1))]:-}"
+
+if [ -n "$token" ]; then
+  varname="PROBE_OUTPUT_${token}"
+  printf '%s\n' "${!varname-}"
+else
+  # Default page JSON — matches the shape the real probe emits when
+  # /healthz reports a stuck-degraded subsystem.
+  printf '{"subsystem":"rateLimitStore","durationMs":600000,"thresholdMs":60000,"outcome":"page"}\n'
+fi
+
+exit "$exit_code"

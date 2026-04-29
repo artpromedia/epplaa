@@ -9,11 +9,13 @@
     "typecheck": "pnpm run typecheck:libs && pnpm -r --filter \"./artifacts/**\" --filter \"./scripts\" --if-present run typecheck",
     "test": "vitest run --passWithNoTests",
     "test:watch": "vitest",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "test:probe-loop": "bats .github/scripts/test/healthz-probe-loop.bats"
   },
   "private": true,
   "devDependencies": {
     "@vitest/coverage-v8": "4.1.5",
+    "bats": "1.13.0",
     "prettier": "^3.8.1",
     "typescript": "~5.9.2",
     "vitest": "4.1.5"

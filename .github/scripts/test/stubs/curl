@@ -1,0 +1,86 @@
+#!/usr/bin/env bash
+# Stub for `curl` invoked by healthz-probe-loop.sh tests.
+#
+# The probe loop makes two kinds of curl calls:
+#   1. notify_chat — POST to $NOTIFY_WEBHOOK with -w '%{http_code}'
+#   2. rehearsal-clear — POST to $REHEARSAL_CLEAR_URL with -w '\n%{http_code}'
+#
+# We differentiate by URL (matches $NOTIFY_WEBHOOK -> notify, anything
+# else -> clear) and walk per-kind code sequences:
+#   STUB_NOTIFY_CODES   — codes for chat-webhook calls (default "200")
+#   STUB_CLEAR_CODES    — codes for rehearsal-clear calls (default "200")
+#
+# The literal string "000" simulates a curl-level failure: the stub
+# exits non-zero AND prints nothing on stdout, which makes the loop's
+# `code=$(curl ... || echo "000")` fall back to "000" — same shape as a
+# real DNS / TLS / connect failure.
+#
+# Every call is appended to $STUB_STATE_DIR/curl.log so the bats tests
+# can assert on call counts, URLs, payloads, and codes.
+
+set -uo pipefail
+
+state_dir="${STUB_STATE_DIR:?STUB_STATE_DIR must be set}"
+log_file="$state_dir/curl.log"
+
+method="GET"
+url=""
+data=""
+output_file=""
+write_out=""
+headers=()
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -X)        method="$2"; shift 2 ;;
+    -H)        headers+=("$2"); shift 2 ;;
+    --data|-d) data="$2"; shift 2 ;;
+    -o)        output_file="$2"; shift 2 ;;
+    -w)        write_out="$2"; shift 2 ;;
+    -sS|-s|-S) shift ;;
+    --)        shift ;;
+    -*)        shift ;;
+    *)         url="$1"; shift ;;
+  esac
+done
+
+if [ -n "${NOTIFY_WEBHOOK:-}" ] && [ "$url" = "$NOTIFY_WEBHOOK" ]; then
+  kind="notify"
+  count_file="$state_dir/notify_count"
+  read -r -a codes <<< "${STUB_NOTIFY_CODES:-200}"
+else
+  kind="clear"
+  count_file="$state_dir/clear_count"
+  read -r -a codes <<< "${STUB_CLEAR_CODES:-200}"
+fi
+
+count=$(cat "$count_file" 2>/dev/null || echo 0)
+count=$((count + 1))
+echo "$count" > "$count_file"
+
+code="${codes[$((count - 1))]:-200}"
+
+printf '%s call=%s url=%s method=%s code=%s data=%s\n' \
+  "$kind" "$count" "$url" "$method" "$code" "$data" >> "$log_file"
+
+if [ "$code" = "000" ]; then
+  # Simulate a curl-level failure: write nothing to stdout, write an
+  # empty body to the -o file (mirrors what a real failure looks like:
+  # /tmp/notify_resp ends up empty), and exit non-zero so the loop's
+  # `|| echo "000"` fallback fires.
+  if [ -n "$output_file" ]; then : > "$output_file"; fi
+  exit 7
+fi
+
+if [ -n "$output_file" ]; then
+  printf 'stub-response-body' > "$output_file"
+fi
+
+if [ -n "$write_out" ]; then
+  rendered="${write_out//%\{http_code\}/$code}"
+  # %b interprets backslash escapes (\n in the rehearsal clear's
+  # write-out format) without re-interpreting % format specifiers.
+  printf '%b' "$rendered"
+fi
+
+exit 0
