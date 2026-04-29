@@ -1,6 +1,6 @@
 import { ReactNode } from "react";
 import { Link, useLocation } from "wouter";
-import { useUser, UserButton } from "@clerk/clerk-react";
+import { useClerk, useUser, UserButton } from "@clerk/clerk-react";
 import {
   ShieldAlert,
   ShieldCheck,
@@ -18,9 +18,11 @@ import {
   FileLock2,
   ScrollText,
   AlertTriangle,
+  ExternalLink,
 } from "lucide-react";
 import { useAdminMyRoles, useGetMfaStatus } from "@workspace/api-client-react";
 import { RateLimitStoreAlerts } from "@/components/rate-limit-store-alerts";
+import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import epplaaLogo from "@assets/epplaa-logo-color-nobg.png";
 
@@ -61,6 +63,25 @@ export function AdminShell({ children }: { children: ReactNode }) {
     query: { staleTime: 30_000 } as never,
   });
   const roles = rolesQuery.data?.roles ?? [];
+  const mfaStatusQuery = useGetMfaStatus({ query: { staleTime: 30_000 } as never });
+  const mfaStatus = mfaStatusQuery.data;
+
+  // Mirror the backend gate (Clerk `fva` claim via /mfa/status.sessionVerified).
+  // Allow /security so the operator can enrol/verify without a self-lockout.
+  const onSecurityPage = location.startsWith("/security");
+  const mfaWallActive =
+    !!mfaStatus &&
+    mfaStatus.required &&
+    !mfaStatus.sessionVerified &&
+    !onSecurityPage;
+  if (mfaWallActive) {
+    return (
+      <MfaEnrollmentWall
+        reason={mfaStatus.requiredReason}
+        enrolled={mfaStatus.enrolled}
+      />
+    );
+  }
 
   return (
     <div className="min-h-screen bg-background text-foreground flex">
@@ -166,13 +187,94 @@ export function AdminShell({ children }: { children: ReactNode }) {
   );
 }
 
+// Full-screen takeover when `required && !sessionVerified`. Copy adapts
+// to whether the operator already has a factor (then "verify") or not
+// (then "enrol"). Offers the in-house TOTP flow plus a Clerk-modal deep
+// link to Multi-factor authentication.
+function MfaEnrollmentWall({
+  reason,
+  enrolled,
+}: {
+  reason: "admin_role" | "high_velocity" | null;
+  enrolled: boolean;
+}) {
+  const clerk = useClerk();
+  const handleOpenClerkProfile = () => {
+    // `__experimental_startPath` lands the modal on Clerk's MFA page
+    // instead of the generic Account tab.
+    clerk.openUserProfile({ __experimental_startPath: "/security" });
+  };
+  const headline = enrolled
+    ? "Verify your second factor to continue"
+    : "Enrol MFA to continue";
+  const subhead =
+    reason === "admin_role"
+      ? enrolled
+        ? "Operator accounts must verify their second factor for the current session before they can act."
+        : "Operator accounts must enable a second factor before they can act."
+      : enrolled
+        ? "Your account crossed the high-velocity threshold and your current session is not MFA-verified."
+        : "Your account crossed the high-velocity threshold and now requires MFA.";
+  const guidance = enrolled
+    ? "Use one of the options below to verify your existing second factor. The back-office unlocks automatically once Clerk records the verification — you'll see this screen disappear within a few seconds."
+    : "Pick one of the options below. Once you've added a factor the back-office unlocks automatically — you'll see this screen disappear within a few seconds.";
+  return (
+    <div
+      className="min-h-screen flex items-center justify-center bg-muted px-4"
+      data-testid="screen-mfa-required"
+    >
+      <div className="w-full max-w-lg rounded-lg border border-border bg-background shadow-sm p-6">
+        <div className="flex items-center gap-3 mb-4">
+          <div className="rounded-full bg-destructive/10 p-2">
+            <ShieldAlert className="w-6 h-6 text-destructive" aria-hidden />
+          </div>
+          <div>
+            <h1 className="text-lg font-semibold">{headline}</h1>
+            <p className="text-xs text-muted-foreground mt-0.5">{subhead}</p>
+          </div>
+        </div>
+        <p className="text-sm text-muted-foreground mb-5">{guidance}</p>
+        <div className="space-y-2">
+          <Button
+            asChild
+            className="w-full justify-start gap-2"
+            data-testid="button-mfa-wall-setup-totp"
+          >
+            <Link href="/security">
+              <ShieldCheck className="w-4 h-4" />
+              Set up an authenticator app (TOTP)
+            </Link>
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            className="w-full justify-start gap-2"
+            onClick={handleOpenClerkProfile}
+            data-testid="button-mfa-wall-open-clerk"
+          >
+            <ExternalLink className="w-4 h-4" />
+            Open Clerk profile (passkeys, WebAuthn, additional factors)
+          </Button>
+        </div>
+        <p className="text-[11px] text-muted-foreground mt-4">
+          Need help? Ask another admin to walk you through enrolment in
+          your authenticator app. Backup codes are issued automatically
+          and should be stored somewhere safe and offline.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+// Inline fallback for when the wall stands down (e.g. /security).
+// Keyed off `sessionVerified` to match the backend gate.
 function MfaRequiredBanner() {
   const [location] = useLocation();
   const statusQuery = useGetMfaStatus({ query: { staleTime: 30_000 } as never });
   const status = statusQuery.data;
   if (!status) return null;
   if (location.startsWith("/security")) return null;
-  if (!status.required || status.enrolled) return null;
+  if (!status.required || status.sessionVerified) return null;
   return (
     <div
       className="mb-4 flex items-start gap-3 rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm"
@@ -183,8 +285,10 @@ function MfaRequiredBanner() {
         <p className="font-medium text-destructive">MFA required</p>
         <p className="text-xs text-muted-foreground mt-0.5">
           {status.requiredReason === "admin_role"
-            ? "Operators must enrol an authenticator app before they can act on cases or payouts."
-            : "Your account crossed the high-velocity threshold and now requires MFA."}
+            ? status.enrolled
+              ? "Operators must verify their second factor for the current session before they can act on cases or payouts."
+              : "Operators must enable a second factor before they can act on cases or payouts."
+            : "Your account crossed the high-velocity threshold and your current session is not MFA-verified."}
         </p>
       </div>
       <Link
@@ -192,7 +296,8 @@ function MfaRequiredBanner() {
         data-testid="link-mfa-setup"
         className="shrink-0 inline-flex items-center gap-1 rounded-md border border-destructive/40 bg-background px-3 py-1.5 text-xs font-medium hover-elevate"
       >
-        <ShieldCheck className="w-3.5 h-3.5" /> Set up MFA
+        <ShieldCheck className="w-3.5 h-3.5" />{" "}
+        {status.enrolled ? "Verify MFA" : "Set up MFA"}
       </Link>
     </div>
   );

@@ -7,7 +7,7 @@ import {
   SetupMfaTotpResponse,
   VerifyMfaTotpResponse,
 } from "@workspace/api-zod";
-import { requireUserId } from "../lib/auth";
+import { hasMfaVerifiedSession, requireUserId } from "../lib/auth";
 import { recordAudit } from "../lib/audit";
 import { logger } from "../lib/logger";
 import { sendValidated } from "../lib/responseSchema";
@@ -117,6 +117,8 @@ router.get("/mfa/status", async (req: Request, res: Response) => {
     ...status,
     enrolledAt: status.enrolledAt?.toISOString() ?? null,
     lastUsedAt: status.lastUsedAt?.toISOString() ?? null,
+    // Same predicate as the backend operator-MFA gate.
+    sessionVerified: hasMfaVerifiedSession(req),
     required,
     requiredReason: isAdmin
       ? "admin_role"

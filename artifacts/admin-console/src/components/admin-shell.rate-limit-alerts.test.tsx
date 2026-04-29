@@ -29,6 +29,7 @@ vi.mock("@clerk/clerk-react", () => ({
   useUser: () => ({
     user: { id: "user_test", primaryEmailAddress: { emailAddress: "test@example.com" } },
   }),
+  useClerk: () => ({ openUserProfile: () => undefined }),
   UserButton: () => null,
 }));
 

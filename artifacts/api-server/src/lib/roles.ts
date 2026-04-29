@@ -2,7 +2,7 @@ import type { Request, Response, NextFunction, RequestHandler } from "express";
 import { eq, and, sql } from "drizzle-orm";
 import { db, schema } from "./db";
 import { logger } from "./logger";
-import { getUserId } from "./auth";
+import { getUserId, hasMfaVerifiedSession } from "./auth";
 import { newRoleId } from "./ids";
 
 /**
@@ -178,9 +178,11 @@ export async function userHasAnyRole(userId: string, allowed: readonly RoleName[
 }
 
 /**
- * Express middleware factory: `requireRole(['admin','moderator'])`. Returns
- * 401 when unauthenticated, 403 when the user lacks all listed roles.
- * `admin` is implicitly granted access to every gate.
+ * `requireRole(['admin','moderator'])`: 401 unauthed, 403 forbidden,
+ * else 403 mfa_required if the Clerk session is not MFA-verified.
+ * `admin` implicitly satisfies every gate. The MFA check uses Clerk's
+ * `fva` claim (see `hasMfaVerifiedSession`) — distinct from the
+ * recency-bound `requireMfa()` layered on money mutations.
  */
 export function requireRole(allowed: readonly RoleName[]): RequestHandler {
   return async (req: Request, res: Response, next: NextFunction) => {
@@ -193,6 +195,19 @@ export function requireRole(allowed: readonly RoleName[]): RequestHandler {
       const ok = await userHasAnyRole(userId, allowed);
       if (!ok) {
         res.status(403).json({ error: "forbidden", detail: "operator_role_required" });
+        return;
+      }
+      // Run the MFA check after the role check so non-operators get
+      // the (more accurate) forbidden response.
+      if (!hasMfaVerifiedSession(req)) {
+        res.status(403).json({
+          error: "mfa_required",
+          detail:
+            "Operators must verify a second factor (TOTP, passkey, " +
+            "WebAuthn, or backup code) for the current session before " +
+            "acting on cases, payouts, or role grants.",
+          enrollUrl: "/admin/security",
+        });
         return;
       }
       next();

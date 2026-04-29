@@ -31,17 +31,23 @@ import request from "supertest";
  * not pollute shared dev data.
  */
 
-// Hoisted Clerk mock — the factory runs before any module that imports
-// `@clerk/express` is evaluated, so `lib/auth.ts` (and through it the
-// `requireMfa` middleware) sees this stub instead of the real Clerk SDK.
-// `getAuth` reads the calling user from the `x-test-user-id` header,
-// which lets each test pick the identity for the request without
-// rebuilding the app or fiddling with module-level state.
+// Stubs Clerk auth via two test headers:
+//   x-test-user-id      → caller id
+//   x-test-mfa-verified → minutes-since-2FA; absent/empty = -1 (primary-only)
 vi.mock("@clerk/express", () => ({
   getAuth: (req: { headers: Record<string, string | string[] | undefined> }) => {
     const raw = req.headers["x-test-user-id"];
     const userId = typeof raw === "string" && raw.length > 0 ? raw : null;
-    return { userId };
+    const mfaRaw = req.headers["x-test-mfa-verified"];
+    const mfaStr = typeof mfaRaw === "string" ? mfaRaw : null;
+    const secondFactorAge =
+      mfaStr === null || mfaStr === "" ? -1 : Number.parseInt(mfaStr, 10);
+    const fva: [number, number] = [0, Number.isFinite(secondFactorAge) ? secondFactorAge : -1];
+    return {
+      userId,
+      factorVerificationAge: fva,
+      sessionClaims: { fva },
+    };
   },
 }));
 
@@ -376,6 +382,140 @@ d("mfa high-value gate", () => {
         .send({});
       expect(r.status).toBe(403);
       expect(r.body.error).toBe("mfa_required");
+    });
+  });
+
+  // requireRole() operator-MFA gate: source of truth is Clerk's `fva`
+  // claim (toggled via x-test-mfa-verified), not local mfa_enrollments.
+  describe("requireRole() operator-MFA gate", () => {
+    type Roles = typeof import("./roles");
+    let roles: Roles;
+
+    async function grantRoleByName(
+      userId: string,
+      roleName: string,
+    ): Promise<void> {
+      const role = await db.execute<{ id: string }>(
+        sql.raw(`SELECT id FROM roles WHERE name = '${roleName}' LIMIT 1;`),
+      );
+      const roleId = role.rows[0]?.id;
+      expect(roleId).toBeTruthy();
+      await db.execute(sql`
+        INSERT INTO user_roles (user_id, role_id, granted_by)
+        VALUES (${userId}, ${roleId!}, 'test')
+        ON CONFLICT DO NOTHING;
+      `);
+    }
+
+    async function enrollUserActiveTotp(userId: string): Promise<void> {
+      const setup = await mfa.setupTotp(userId, `${userId}@example.com`);
+      authenticator.options = { window: 1, step: 30 };
+      const code = authenticator.generate(setup.secret);
+      const ok = await mfa.verifyTotpAndActivate(userId, code);
+      expect(ok).toBe(true);
+    }
+
+    function buildRoleApp(allowed: readonly ("admin" | "moderator" | "finance_ops" | "support")[]): Express {
+      const app = express();
+      app.use(express.json());
+      app.post(
+        "/api/admin/protected",
+        roles.requireRole(allowed),
+        (_req, res) => {
+          res.json({ ok: true });
+        },
+      );
+      return app;
+    }
+
+    beforeAll(async () => {
+      roles = await import("./roles");
+    });
+
+    it("returns 401 unauthorized when the request has no authenticated user", async () => {
+      const r = await request(buildRoleApp(["admin"]))
+        .post("/api/admin/protected")
+        .set("x-test-mfa-verified", "0")
+        .send({});
+      expect(r.status).toBe(401);
+      expect(r.body.error).toBe("unauthorized");
+    });
+
+    it("returns 403 forbidden (role error, not mfa) when the user has no operator role", async () => {
+      const userId = makeUserId();
+      const r = await request(buildRoleApp(["admin", "moderator"]))
+        .post("/api/admin/protected")
+        .set("x-test-user-id", userId)
+        .set("x-test-mfa-verified", "0")
+        .send({});
+      expect(r.status).toBe(403);
+      expect(r.body.error).toBe("forbidden");
+      expect(r.body.detail).toBe("operator_role_required");
+    });
+
+    for (const role of ["admin", "moderator", "finance_ops", "support"] as const) {
+      it(`returns 403 mfa_required for a ${role} on a primary-only session`, async () => {
+        const userId = makeUserId();
+        await grantRoleByName(userId, role);
+        const r = await request(buildRoleApp([role]))
+          .post("/api/admin/protected")
+          .set("x-test-user-id", userId)
+          .send({});
+        expect(r.status).toBe(403);
+        expect(r.body.error).toBe("mfa_required");
+        expect(r.body.detail).toContain("second factor");
+        expect(r.body.enrollUrl).toBe("/admin/security");
+      });
+    }
+
+    it("admin role implies access to a moderator endpoint, but still requires MFA verification", async () => {
+      const userId = makeUserId();
+      await grantRoleByName(userId, "admin");
+      const r = await request(buildRoleApp(["moderator"]))
+        .post("/api/admin/protected")
+        .set("x-test-user-id", userId)
+        .send({});
+      expect(r.status).toBe(403);
+      expect(r.body.error).toBe("mfa_required");
+    });
+
+    for (const role of ["admin", "moderator", "finance_ops", "support"] as const) {
+      it(`passes through a ${role} with MFA-verified session and no local TOTP row`, async () => {
+        const userId = makeUserId();
+        await grantRoleByName(userId, role);
+        const r = await request(buildRoleApp([role]))
+          .post("/api/admin/protected")
+          .set("x-test-user-id", userId)
+          .set("x-test-mfa-verified", "0")
+          .send({});
+        expect(r.status).toBe(200);
+        expect(r.body).toEqual({ ok: true });
+      });
+    }
+
+    it("active local TOTP alone is NOT enough — Clerk session must be MFA-verified", async () => {
+      const userId = makeUserId();
+      await grantRoleByName(userId, "moderator");
+      await enrollUserActiveTotp(userId);
+      await db.execute(sql`DELETE FROM mfa_challenges WHERE user_id = ${userId};`);
+      const r = await request(buildRoleApp(["moderator"]))
+        .post("/api/admin/protected")
+        .set("x-test-user-id", userId)
+        .send({});
+      expect(r.status).toBe(403);
+      expect(r.body.error).toBe("mfa_required");
+    });
+
+    it("stale Clerk MFA verification (120 min) still satisfies the role gate; recency is requireMfa()'s job", async () => {
+      const userId = makeUserId();
+      await grantRoleByName(userId, "support");
+      const r = await request(buildRoleApp(["support"]))
+        .post("/api/admin/protected")
+        .set("x-test-user-id", userId)
+        .set("x-test-mfa-verified", "120")
+        .send({});
+      expect(r.status).toBe(200);
+      expect(r.body).toEqual({ ok: true });
     });
   });
 });

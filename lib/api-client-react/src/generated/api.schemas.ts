@@ -906,6 +906,8 @@ export interface MfaStatus {
   lastUsedAt: string | null;
   backupCodesRemaining: number;
   recentlyAsserted: boolean;
+  /** True when the current Clerk session has a verified second factor (the `fva` JWT claim reports a non-negative second-factor verification age). Source of truth for whether the operator-MFA gate (`requireRole`) will let admin-console requests through: even an enrolled operator must re-verify in the active session before they can act, so a stolen primary session cannot be weaponised. Stays in sync with Clerk-native factors (TOTP, passkey, WebAuthn) — not only the in-house TOTP enrolment. */
+  sessionVerified: boolean;
   required: boolean;
   /** @nullable */
   requiredReason: MfaStatusRequiredReason;
