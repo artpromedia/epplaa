@@ -429,6 +429,15 @@ d("mfa db integration", () => {
          WHERE user_id = ${userId};
       `);
     }
+    // Drop the activation-confirmation outbox row that
+    // `verifyTotpAndActivate` enqueues so the nudge tests below can
+    // continue to assert on a clean outbox slate. The activation
+    // email itself has dedicated coverage in the "activation email"
+    // describe block.
+    await db.execute(sql`
+      DELETE FROM notifications_outbox
+       WHERE user_id = ${userId} AND event_type = 'mfa_activated';
+    `);
     return userId;
   }
 
@@ -525,7 +534,10 @@ d("mfa db integration", () => {
   it("regenerateBackupCodes clears the nudge marker so a future drain re-emails", async () => {
     const u = await setupActiveUser(1);
     await mfa.nudgeLowBackupCodes();
-    expect(await outboxRowsFor(u)).toHaveLength(1);
+    const lowRowsAfterFirst = (await outboxRowsFor(u)).filter(
+      (r) => r.event_type === "mfa_backup_codes_low",
+    );
+    expect(lowRowsAfterFirst).toHaveLength(1);
 
     const regenerated = await mfa.regenerateBackupCodes(u);
     expect(regenerated).not.toBeNull();
@@ -539,9 +551,16 @@ d("mfa db integration", () => {
     expect(cleared.rows[0]!.last).toBeNull();
     expect(Number(cleared.rows[0]!.remaining)).toBe(10);
 
-    // Nothing should fire while the user is back above the threshold.
+    // Nothing should fire while the user is back above the threshold —
+    // filter to the low-codes event so the regeneration confirmation
+    // email (a separate event_type, asserted independently below)
+    // doesn't pollute the count.
     await mfa.nudgeLowBackupCodes();
-    expect(await outboxRowsFor(u)).toHaveLength(1);
+    expect(
+      (await outboxRowsFor(u)).filter(
+        (r) => r.event_type === "mfa_backup_codes_low",
+      ),
+    ).toHaveLength(1);
 
     // Drain again and re-run — a fresh "low" email is expected because
     // the marker was cleared by regeneration.
@@ -550,9 +569,170 @@ d("mfa db integration", () => {
        WHERE user_id = ${u};
     `);
     await mfa.nudgeLowBackupCodes();
-    const rows = await outboxRowsFor(u);
-    expect(rows).toHaveLength(2);
-    expect((rows[1]!.payload as { threshold?: string }).threshold).toBe("low");
+    const lowRowsFinal = (await outboxRowsFor(u)).filter(
+      (r) => r.event_type === "mfa_backup_codes_low",
+    );
+    expect(lowRowsFinal).toHaveLength(2);
+    expect((lowRowsFinal[1]!.payload as { threshold?: string }).threshold).toBe(
+      "low",
+    );
+  });
+
+  /*
+   * --- Enrolment + regenerate confirmation emails ---
+   *
+   * `verifyTotpAndActivate` sends a one-time confirmation email when a
+   * seller successfully turns on TOTP, and `regenerateBackupCodes`
+   * sends a per-event audit email each time a fresh sheet is minted.
+   * The activation email MUST NOT re-send when a user re-runs setup
+   * on the same device (a common UX path), but a real disable +
+   * fresh enrolment SHOULD send a new confirmation. The regenerate
+   * email always fires, by design.
+   */
+
+  it("verifyTotpAndActivate enqueues a confirmation email exactly once per active enrolment", async () => {
+    const userId = makeUserId();
+    const setup = await mfa.setupTotp(userId, `${userId}@example.com`);
+    authenticator.options = { window: 1, step: 30 };
+    const ok = await mfa.verifyTotpAndActivate(
+      userId,
+      authenticator.generate(setup.secret),
+    );
+    expect(ok).toBe(true);
+
+    const rows = await db.execute<{
+      event_type: string;
+      channel: string;
+      payload: Record<string, unknown>;
+    }>(sql`
+      SELECT event_type, channel, payload
+        FROM notifications_outbox
+       WHERE user_id = ${userId} AND event_type = 'mfa_activated';
+    `);
+    expect(rows.rows).toHaveLength(1);
+    expect(rows.rows[0]!.channel).toBe("email");
+    const payload = rows.rows[0]!.payload as Record<string, unknown>;
+    expect(String(payload.url)).toBe("/account/security");
+    expect(String(payload.title)).toMatch(/two-factor/i);
+    expect(String(payload.body)).toMatch(/backup codes/i);
+
+    // Marker stamped so a re-activation will not re-send.
+    const stamped = await db.execute<{ sent_at: Date | null }>(sql`
+      SELECT activation_email_sent_at AS sent_at
+        FROM mfa_enrollments WHERE user_id = ${userId};
+    `);
+    expect(stamped.rows[0]!.sent_at).not.toBeNull();
+  });
+
+  it("verifyTotpAndActivate does NOT re-send the confirmation when a user re-enrols on the same device", async () => {
+    const userId = makeUserId();
+    // First enrolment + activate — sends one confirmation email.
+    const first = await mfa.setupTotp(userId, `${userId}@example.com`);
+    authenticator.options = { window: 1, step: 30 };
+    await mfa.verifyTotpAndActivate(
+      userId,
+      authenticator.generate(first.secret),
+    );
+
+    // User re-runs setup on the same device (e.g. lost the QR before
+    // saving the backup codes and started the flow again). The UPSERT
+    // in `setupTotp` flips status back to `pending` with a fresh
+    // secret, but the row's `activation_email_sent_at` marker is
+    // preserved so the next activation does not re-send.
+    const second = await mfa.setupTotp(userId, `${userId}@example.com`);
+    const ok = await mfa.verifyTotpAndActivate(
+      userId,
+      authenticator.generate(second.secret),
+    );
+    expect(ok).toBe(true);
+
+    const rows = await db.execute<{ id: string }>(sql`
+      SELECT id FROM notifications_outbox
+       WHERE user_id = ${userId} AND event_type = 'mfa_activated';
+    `);
+    expect(rows.rows).toHaveLength(1);
+  });
+
+  it("disableMfa + fresh enrolment sends a new activation confirmation email", async () => {
+    const userId = makeUserId();
+    const first = await mfa.setupTotp(userId, `${userId}@example.com`);
+    authenticator.options = { window: 1, step: 30 };
+    await mfa.verifyTotpAndActivate(
+      userId,
+      authenticator.generate(first.secret),
+    );
+    expect(
+      (
+        await db.execute<{ id: string }>(sql`
+          SELECT id FROM notifications_outbox
+           WHERE user_id = ${userId} AND event_type = 'mfa_activated';
+        `)
+      ).rows,
+    ).toHaveLength(1);
+
+    // Tear-down + brand-new enrolment — disableMfa drops the row, so
+    // the marker goes with it and a follow-up activation rightly
+    // counts as a "first activation" for the new factor.
+    await mfa.disableMfa(userId);
+    const second = await mfa.setupTotp(userId, `${userId}@example.com`);
+    await mfa.verifyTotpAndActivate(
+      userId,
+      authenticator.generate(second.secret),
+    );
+
+    const rows = await db.execute<{ id: string }>(sql`
+      SELECT id FROM notifications_outbox
+       WHERE user_id = ${userId} AND event_type = 'mfa_activated';
+    `);
+    expect(rows.rows).toHaveLength(2);
+  });
+
+  it("regenerateBackupCodes enqueues a confirmation email each time the sheet is refreshed", async () => {
+    const userId = makeUserId();
+    const setup = await mfa.setupTotp(userId, `${userId}@example.com`);
+    authenticator.options = { window: 1, step: 30 };
+    await mfa.verifyTotpAndActivate(
+      userId,
+      authenticator.generate(setup.secret),
+    );
+
+    const codes1 = await mfa.regenerateBackupCodes(userId);
+    expect(codes1).not.toBeNull();
+    const codes2 = await mfa.regenerateBackupCodes(userId);
+    expect(codes2).not.toBeNull();
+
+    const rows = await db.execute<{
+      event_type: string;
+      channel: string;
+      payload: Record<string, unknown>;
+    }>(sql`
+      SELECT event_type, channel, payload
+        FROM notifications_outbox
+       WHERE user_id = ${userId}
+         AND event_type = 'mfa_backup_codes_regenerated'
+       ORDER BY created_at ASC;
+    `);
+    expect(rows.rows).toHaveLength(2);
+    for (const r of rows.rows) {
+      expect(r.channel).toBe("email");
+      const p = r.payload as Record<string, unknown>;
+      expect(String(p.url)).toBe("/account/security");
+      expect(String(p.title)).toMatch(/refreshed/i);
+    }
+  });
+
+  it("regenerateBackupCodes returns null and enqueues nothing when the user has no active enrolment", async () => {
+    const userId = makeUserId();
+    // No setup at all — regenerate must short-circuit cleanly.
+    const result = await mfa.regenerateBackupCodes(userId);
+    expect(result).toBeNull();
+
+    const rows = await db.execute<{ id: string }>(sql`
+      SELECT id FROM notifications_outbox
+       WHERE user_id = ${userId}
+         AND event_type = 'mfa_backup_codes_regenerated';
+    `);
+    expect(rows.rows).toHaveLength(0);
   });
 
   it("disableMfa removes both enrolment and challenge rows for the user", async () => {

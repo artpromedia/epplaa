@@ -26,6 +26,13 @@ const EVENT_CHANNEL_DEFAULTS: Record<EventType, ChannelKind[]> = {
   // reach a seller who hasn't opened the app in months, so transient
   // channels (push/whatsapp) aren't the right delivery surface.
   mfa_backup_codes_low: ["email"],
+  // Security confirmations — email only. These are paper-trail style
+  // notifications a seller can search their inbox for after the fact
+  // ("when did I turn on MFA?", "did I really regenerate codes on
+  // April 3rd?"). Push/SMS would be intrusive for a routine confirm
+  // and wouldn't survive a phone replacement.
+  mfa_activated: ["email"],
+  mfa_backup_codes_regenerated: ["email"],
 };
 
 /**
@@ -50,6 +57,12 @@ const EVENT_CATEGORY: Record<EventType, "orderUpdates" | "liveDrops" | "promos" 
   // Security: never gated by user preference categories — if you have
   // MFA enabled, you get told when your backup codes run out.
   mfa_backup_codes_low: null,
+  // Security confirmations: also ungated. A seller who has muted every
+  // marketing category still needs the audit trail when their account
+  // gains or rotates a second factor — that's the whole point of
+  // sending the email.
+  mfa_activated: null,
+  mfa_backup_codes_regenerated: null,
 };
 
 const COUNTRY_TZ: Record<string, string> = {

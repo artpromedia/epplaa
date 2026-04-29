@@ -53,6 +53,17 @@ export async function initSecuritySchema(): Promise<void> {
     ALTER TABLE mfa_enrollments
     ADD COLUMN IF NOT EXISTS last_low_backup_codes_nudge_threshold text;
   `);
+  // Bookkeeping for the "MFA enrolment confirmation" email. Set the
+  // first time `verifyTotpAndActivate` flips a row to active and never
+  // cleared. Ensures repeated re-enrolments on the same device (e.g. a
+  // user who rescans the QR code without ever disabling MFA) don't
+  // generate a fresh confirmation email each time. `disableMfa` deletes
+  // the row, so a true tear-down + fresh enrolment reissues the
+  // confirmation as expected.
+  await db.execute(sql`
+    ALTER TABLE mfa_enrollments
+    ADD COLUMN IF NOT EXISTS activation_email_sent_at timestamptz;
+  `);
 
   await db.execute(sql`
     CREATE TABLE IF NOT EXISTS mfa_challenges (

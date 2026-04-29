@@ -45,4 +45,6 @@ export type EventType =
   | "wallet_credit"
   | "low_stock"
   | "box_reservation_expired"
-  | "mfa_backup_codes_low";
+  | "mfa_backup_codes_low"
+  | "mfa_activated"
+  | "mfa_backup_codes_regenerated";

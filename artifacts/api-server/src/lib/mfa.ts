@@ -234,7 +234,78 @@ export async function verifyTotpAndActivate(
     WHERE user_id = ${userId} AND kind = 'totp';
   `);
   await recordChallenge(userId, "totp");
+  await sendActivationConfirmationIfFirst(userId);
   return true;
+}
+
+/**
+ * Atomically claim and send the "MFA was just enabled" confirmation
+ * email exactly once per active enrolment. The claim is a conditional
+ * UPDATE gated on `activation_email_sent_at IS NULL`, so two
+ * concurrent verifyTotpAndActivate calls (or a user who hammers verify
+ * after a re-setup on the same device) cannot both win the row and
+ * double-send. The marker is set to `now()` only when the UPDATE
+ * actually claims the row; if enqueueing fails we roll the marker
+ * back so the next successful activation gets a chance to retry,
+ * matching the "fail loudly + re-try later" pattern used by
+ * `nudgeLowBackupCodes`.
+ *
+ * Why a separate column rather than `enrolled_at`: `enrolled_at` is
+ * preserved across re-enrolment (`COALESCE(enrolled_at, now())`), so
+ * a user who re-runs setup on the same device would never trigger a
+ * fresh email — but that's a coincidence of the existing schema, not
+ * a guarantee. A dedicated marker makes the dedup intent explicit and
+ * survives any future change to how `enrolled_at` is maintained.
+ */
+async function sendActivationConfirmationIfFirst(userId: string): Promise<void> {
+  const claimed = await db.execute<{ id: string }>(sql`
+    UPDATE mfa_enrollments
+    SET activation_email_sent_at = now(),
+        updated_at = now()
+    WHERE user_id = ${userId}
+      AND kind = 'totp'
+      AND status = 'active'
+      AND activation_email_sent_at IS NULL
+    RETURNING id;
+  `);
+  if (claimed.rows.length === 0) return;
+  const { enqueueNotification } = await import("./notifications");
+  try {
+    await enqueueNotification({
+      userId,
+      eventType: "mfa_activated",
+      payload: {
+        title: "Two-factor sign-in is now on for your account",
+        body:
+          "You've enabled an authenticator app for two-factor sign-in. " +
+          "Make sure you've stored your backup codes somewhere safe — " +
+          "you'll need them if you ever lose access to your authenticator. " +
+          "If this wasn't you, change your password and contact support " +
+          "right away.",
+        url: "/account/security",
+      },
+    });
+  } catch (err) {
+    logger.warn(
+      { userId, err: (err as Error).message },
+      "mfa_activated_enqueue_failed",
+    );
+    // Roll the marker back so the next activation attempt can re-try.
+    // Gated on the marker still being a NON-NULL value we just set, so
+    // a concurrent disable / re-enrol race that nulled it back out
+    // (e.g. via row deletion) doesn't get clobbered.
+    await db
+      .execute(sql`
+        UPDATE mfa_enrollments
+        SET activation_email_sent_at = NULL,
+            updated_at = now()
+        WHERE user_id = ${userId}
+          AND kind = 'totp'
+          AND status = 'active'
+          AND activation_email_sent_at IS NOT NULL;
+      `)
+      .catch(() => undefined);
+  }
 }
 
 export async function verifyTotpAssertion(
@@ -315,6 +386,37 @@ export async function regenerateBackupCodes(
     RETURNING id;
   `);
   if (upd.rows.length === 0) return null;
+  // Audit-trail confirmation email — fires every time the sheet is
+  // refreshed, by design. Unlike the activation email this is NOT
+  // deduped: every regenerate is a security-relevant event the user
+  // should be able to find in their inbox after the fact. The route
+  // gates regenerate behind a recent assertion, so an attacker can't
+  // weaponise this into an email-bomb.
+  try {
+    const { enqueueNotification } = await import("./notifications");
+    await enqueueNotification({
+      userId,
+      eventType: "mfa_backup_codes_regenerated",
+      payload: {
+        title: "Your MFA backup codes were just refreshed",
+        body:
+          "A fresh set of backup codes was generated for your account. " +
+          "Your previous codes no longer work. Save the new sheet somewhere " +
+          "safe — you'll need it if you ever lose access to your " +
+          "authenticator. If this wasn't you, change your password and " +
+          "contact support right away.",
+        url: "/account/security",
+      },
+    });
+  } catch (err) {
+    // Best-effort: a notification failure must not fail the regenerate
+    // itself — the user already saw the new codes. Logged so the
+    // outbox-failure pattern is visible to ops.
+    logger.warn(
+      { userId, err: (err as Error).message },
+      "mfa_backup_codes_regenerated_enqueue_failed",
+    );
+  }
   return codes;
 }
 
