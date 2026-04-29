@@ -2,8 +2,12 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import {
   WebhookIncidentNotifier,
   buildPagerDutyDegradedPayload,
+  buildPagerDutyDegradedDurationPayload,
+  buildPagerDutyDegradedDurationRecoveredPayload,
   buildPagerDutyRecoveredPayload,
   buildSlackDegradedPayload,
+  buildSlackDegradedDurationPayload,
+  buildSlackDegradedDurationRecoveredPayload,
   buildSlackRecoveredPayload,
   type WebhookFetch,
 } from "./incidentNotifier";
@@ -482,5 +486,260 @@ describe("payload builders — pure functions", () => {
     ) as { dedup_key: string; event_action: string };
     expect(resolve.dedup_key).toBe(trigger.dedup_key);
     expect(resolve.event_action).toBe("resolve");
+  });
+});
+
+describe("duration-page payload builders (task #144)", () => {
+  // Critical invariant: the duration channel uses a DISTINCT dedup_key
+  // namespace from the transition channel. If they collided, the
+  // duration "trigger" event would silently resolve the live
+  // transition incident in PagerDuty (or vice versa) and on-call
+  // would lose visibility into the in-progress outage. The two
+  // namespaces are intentionally orthogonal so a single logical
+  // outage produces two separate, independently-resolvable PagerDuty
+  // incidents.
+  const TRANSITION_DEDUP_PREFIX = "rate-limit-store-degraded:";
+  const DURATION_DEDUP_PREFIX = "rate-limit-store-degraded-duration:";
+
+  it("buildSlackDegradedDurationPayload signals stuck-degraded with duration context", () => {
+    const body = JSON.parse(
+      buildSlackDegradedDurationPayload(
+        {
+          firstFailureAt: 1_700_000_000_000,
+          failureCount: 47,
+          durationThresholdMs: 600_000,
+          durationMs: 612_000,
+          pagedAt: 1_700_000_612_000,
+        },
+        "prod-7",
+      ),
+    ) as {
+      text: string;
+      attachments: Array<{
+        color: string;
+        fields: Array<{ title: string; value: string }>;
+      }>;
+    };
+    // Distinct text from the transition page so the operator can tell
+    // them apart at a glance in the Slack channel.
+    expect(body.text).toContain("STUCK");
+    expect(body.text).toContain("prod-7");
+    expect(body.attachments[0]!.color).toBe("danger");
+    const fieldMap = Object.fromEntries(
+      body.attachments[0]!.fields.map((f) => [f.title, f.value]),
+    );
+    expect(fieldMap["Failures so far"]).toBe("47");
+    // The duration in human-friendly form so on-call doesn't have to
+    // do millisecond math at 3am — present-tense for the trigger
+    // (still ongoing) and threshold included for context.
+    expect(fieldMap["Streak duration"]).toBe("612s");
+    expect(fieldMap["Duration threshold"]).toBe("600s");
+  });
+
+  it("buildSlackDegradedDurationRecoveredPayload uses the recovery colour and labels the channel", () => {
+    const body = JSON.parse(
+      buildSlackDegradedDurationRecoveredPayload(
+        { durationMs: 720_000, failureCount: 53, recoveredAt: 1 },
+        "prod-7",
+      ),
+    ) as {
+      text: string;
+      attachments: Array<{
+        color: string;
+        fields: Array<{ title: string; value: string }>;
+      }>;
+    };
+    // Case-insensitive: production text uses "recovered" lowercase
+    // but we don't want the assertion to break if a copy-edit picks
+    // a different case for the verb.
+    expect(body.text.toLowerCase()).toContain("recovered");
+    // Must be visibly distinct from the regular recovery message so
+    // the operator can correlate it with the duration trigger they
+    // saw earlier — not the transition trigger.
+    expect(body.text.toLowerCase()).toContain("stuck");
+    expect(body.attachments[0]!.color).toBe("good");
+  });
+
+  it("buildPagerDutyDegradedDurationPayload uses a distinct dedup_key namespace", () => {
+    const body = JSON.parse(
+      buildPagerDutyDegradedDurationPayload(
+        {
+          firstFailureAt: 1_700_000_000_000,
+          failureCount: 47,
+          durationThresholdMs: 600_000,
+          durationMs: 612_000,
+          pagedAt: 1_700_000_612_000,
+        },
+        "prod-7",
+        "pd-key",
+      ),
+    ) as {
+      routing_key: string;
+      event_action: string;
+      dedup_key: string;
+      payload: { severity: string; source: string };
+    };
+    expect(body.routing_key).toBe("pd-key");
+    expect(body.event_action).toBe("trigger");
+    expect(body.dedup_key).toBe(`${DURATION_DEDUP_PREFIX}prod-7`);
+    expect(body.dedup_key.startsWith(TRANSITION_DEDUP_PREFIX)).toBe(false);
+    expect(body.payload.severity).toBe("error");
+    expect(body.payload.source).toBe("prod-7");
+  });
+
+  it("buildPagerDutyDegradedDurationRecoveredPayload mirrors the duration dedup_key", () => {
+    const trigger = JSON.parse(
+      buildPagerDutyDegradedDurationPayload(
+        {
+          firstFailureAt: 1,
+          failureCount: 5,
+          durationThresholdMs: 600_000,
+          durationMs: 700_000,
+          pagedAt: 2,
+        },
+        "prod-7",
+        "pd-key",
+      ),
+    ) as { dedup_key: string };
+    const resolve = JSON.parse(
+      buildPagerDutyDegradedDurationRecoveredPayload(
+        { durationMs: 700_000, failureCount: 5, recoveredAt: 3 },
+        "prod-7",
+        "pd-key",
+      ),
+    ) as { dedup_key: string; event_action: string };
+    expect(resolve.dedup_key).toBe(trigger.dedup_key);
+    expect(resolve.event_action).toBe("resolve");
+  });
+
+  it("transition and duration dedup_keys for the same source are NOT equal", () => {
+    // Belt-and-braces guard against an accidental refactor that
+    // unifies the namespaces — if this ever fires, the two channels
+    // are now silently entangled in PagerDuty.
+    const transition = JSON.parse(
+      buildPagerDutyDegradedPayload(
+        {
+          failureCount: 1,
+          threshold: 5,
+          firstFailureAt: 1,
+          breachedAt: 1,
+        },
+        "prod-7",
+        "pd-key",
+      ),
+    ) as { dedup_key: string };
+    const duration = JSON.parse(
+      buildPagerDutyDegradedDurationPayload(
+        {
+          firstFailureAt: 1,
+          failureCount: 1,
+          durationThresholdMs: 600_000,
+          durationMs: 700_000,
+          pagedAt: 2,
+        },
+        "prod-7",
+        "pd-key",
+      ),
+    ) as { dedup_key: string };
+    expect(transition.dedup_key).not.toBe(duration.dedup_key);
+  });
+});
+
+describe("WebhookIncidentNotifier — duration page wiring", () => {
+  it("posts to BOTH Slack and PagerDuty for notifyDegradedDuration", async () => {
+    const { fetchImpl, calls } = makeRecorder();
+    const notifier = new WebhookIncidentNotifier({
+      fetchImpl,
+      env: {
+        RATE_LIMIT_INCIDENT_SLACK_WEBHOOK_URL: "https://slack.example/hook",
+        RATE_LIMIT_INCIDENT_PAGERDUTY_ROUTING_KEY: "pd-key",
+        RATE_LIMIT_INCIDENT_SOURCE: "prod-7",
+      },
+    });
+    notifier.notifyDegradedDuration({
+      firstFailureAt: 1_700_000_000_000,
+      failureCount: 47,
+      durationThresholdMs: 600_000,
+      durationMs: 612_000,
+      pagedAt: 1_700_000_612_000,
+    });
+    await flushAsync();
+    expect(calls).toHaveLength(2);
+    const pd = calls.find(
+      (c) => c.url === "https://events.pagerduty.com/v2/enqueue",
+    );
+    expect(pd).toBeDefined();
+    // Cross-check at the wiring layer (in addition to the builder
+    // tests) that the duration namespace makes it all the way out
+    // of the notifier — a builder unit test wouldn't catch a regression
+    // where the notifier accidentally calls the transition builder
+    // for the duration event.
+    expect((pd!.body as { dedup_key: string }).dedup_key).toBe(
+      "rate-limit-store-degraded-duration:prod-7",
+    );
+  });
+
+  it("posts a resolve to PagerDuty for notifyDegradedDurationRecovered with the duration namespace", async () => {
+    const { fetchImpl, calls } = makeRecorder();
+    const notifier = new WebhookIncidentNotifier({
+      fetchImpl,
+      env: {
+        RATE_LIMIT_INCIDENT_PAGERDUTY_ROUTING_KEY: "pd-key",
+        RATE_LIMIT_INCIDENT_SOURCE: "prod-7",
+      },
+    });
+    notifier.notifyDegradedDurationRecovered({
+      durationMs: 612_000,
+      failureCount: 47,
+      recoveredAt: 1_700_000_612_000,
+    });
+    await flushAsync();
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.body).toEqual({
+      routing_key: "pd-key",
+      event_action: "resolve",
+      dedup_key: "rate-limit-store-degraded-duration:prod-7",
+    });
+  });
+
+  it("does not throw when fetch rejects on a duration event (fire-and-forget)", async () => {
+    const { fetchImpl } = makeRecorder({
+      reject: new Error("network down"),
+    });
+    const notifier = new WebhookIncidentNotifier({
+      fetchImpl,
+      env: {
+        RATE_LIMIT_INCIDENT_SLACK_WEBHOOK_URL: "https://slack.example/hook",
+      },
+    });
+    expect(() =>
+      notifier.notifyDegradedDuration({
+        firstFailureAt: 1,
+        failureCount: 1,
+        durationThresholdMs: 600_000,
+        durationMs: 700_000,
+        pagedAt: 2,
+      }),
+    ).not.toThrow();
+    await flushAsync();
+  });
+
+  it("no-ops the duration event when neither target is configured", async () => {
+    const { fetchImpl, calls } = makeRecorder();
+    const notifier = new WebhookIncidentNotifier({ fetchImpl, env: {} });
+    notifier.notifyDegradedDuration({
+      firstFailureAt: 1,
+      failureCount: 1,
+      durationThresholdMs: 600_000,
+      durationMs: 700_000,
+      pagedAt: 2,
+    });
+    notifier.notifyDegradedDurationRecovered({
+      durationMs: 700_000,
+      failureCount: 1,
+      recoveredAt: 3,
+    });
+    await flushAsync();
+    expect(calls).toEqual([]);
   });
 });

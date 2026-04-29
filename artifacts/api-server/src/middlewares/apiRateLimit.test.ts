@@ -501,6 +501,10 @@ describe("RedisFailureWatcher incident-notifier wiring", () => {
         events.push({ kind: "degraded", payload: e }),
       notifyRecovered: (e: unknown) =>
         events.push({ kind: "recovered", payload: e }),
+      notifyDegradedDuration: (e: unknown) =>
+        events.push({ kind: "degraded_duration", payload: e }),
+      notifyDegradedDurationRecovered: (e: unknown) =>
+        events.push({ kind: "degraded_duration_recovered", payload: e }),
     };
     const watcher = new __test__.RedisFailureWatcher({
       threshold: 3,
@@ -541,6 +545,10 @@ describe("RedisFailureWatcher incident-notifier wiring", () => {
         events.push({ kind: "degraded", payload: e }),
       notifyRecovered: (e: unknown) =>
         events.push({ kind: "recovered", payload: e }),
+      notifyDegradedDuration: (e: unknown) =>
+        events.push({ kind: "degraded_duration", payload: e }),
+      notifyDegradedDurationRecovered: (e: unknown) =>
+        events.push({ kind: "degraded_duration_recovered", payload: e }),
     };
     const watcher = new __test__.RedisFailureWatcher({
       threshold: 2,
@@ -577,6 +585,10 @@ describe("RedisFailureWatcher incident-notifier wiring", () => {
     const notifier = {
       notifyDegraded: () => events.push({ kind: "degraded" }),
       notifyRecovered: () => events.push({ kind: "recovered" }),
+      notifyDegradedDuration: () =>
+        events.push({ kind: "degraded_duration" }),
+      notifyDegradedDurationRecovered: () =>
+        events.push({ kind: "degraded_duration_recovered" }),
     };
     const watcher = new __test__.RedisFailureWatcher({
       threshold: 5,
@@ -601,6 +613,10 @@ describe("RedisFailureWatcher incident-notifier wiring", () => {
     const notifier = {
       notifyDegraded: () => events.push({ kind: "degraded" }),
       notifyRecovered: () => events.push({ kind: "recovered" }),
+      notifyDegradedDuration: () =>
+        events.push({ kind: "degraded_duration" }),
+      notifyDegradedDurationRecovered: () =>
+        events.push({ kind: "degraded_duration_recovered" }),
     };
     const watcher = new __test__.RedisFailureWatcher({
       threshold: 2,
@@ -635,6 +651,12 @@ describe("RedisFailureWatcher incident-notifier wiring", () => {
       notifyRecovered: () => {
         throw new Error("transport down");
       },
+      notifyDegradedDuration: () => {
+        throw new Error("transport down");
+      },
+      notifyDegradedDurationRecovered: () => {
+        throw new Error("transport down");
+      },
     };
     const watcher = new __test__.RedisFailureWatcher({
       threshold: 2,
@@ -654,6 +676,313 @@ describe("RedisFailureWatcher incident-notifier wiring", () => {
     // Internal state is consistent: the streak closed normally even
     // though both notifier calls threw.
     expect(watcher.getSnapshot().state).toBe("healthy");
+  });
+});
+
+describe("RedisFailureWatcher stuck-degraded duration page (task #144)", () => {
+  // The duration page closes the gap between the rate-based Sentry
+  // alert (which only catches cliff-edge outages) and the external
+  // checkHealthzDegraded probe (which exits non-zero in CI but
+  // doesn't reach Slack/PagerDuty). It uses a distinct dedup_key
+  // namespace so a single logical incident produces TWO clearly-
+  // labelled out-of-band signals: "we just went bad" (transition)
+  // and "we've been bad too long" (duration).
+
+  function makeRecorder(): {
+    notifier: {
+      notifyDegraded: (e: unknown) => void;
+      notifyRecovered: (e: unknown) => void;
+      notifyDegradedDuration: (e: unknown) => void;
+      notifyDegradedDurationRecovered: (e: unknown) => void;
+    };
+    events: Array<{ kind: string; payload: unknown }>;
+  } {
+    const events: Array<{ kind: string; payload: unknown }> = [];
+    return {
+      events,
+      notifier: {
+        notifyDegraded: (e: unknown) =>
+          events.push({ kind: "degraded", payload: e }),
+        notifyRecovered: (e: unknown) =>
+          events.push({ kind: "recovered", payload: e }),
+        notifyDegradedDuration: (e: unknown) =>
+          events.push({ kind: "degraded_duration", payload: e }),
+        notifyDegradedDurationRecovered: (e: unknown) =>
+          events.push({ kind: "degraded_duration_recovered", payload: e }),
+      },
+    };
+  }
+
+  it("does NOT page when the streak duration stays under the threshold", () => {
+    const { notifier, events } = makeRecorder();
+    const watcher = new __test__.RedisFailureWatcher({
+      threshold: 999, // disable Sentry rate breach so we only assert duration semantics
+      cooldownMs: 60_000,
+      durationPageMs: 10_000,
+      incidentNotifier: notifier,
+    });
+    const t0 = 50_000_000;
+    watcher.record("rate_limit_redis_bump_failed", new Error("x"), t0);
+    // 9 seconds in — still under the 10s duration threshold.
+    watcher.record(
+      "rate_limit_redis_bump_failed",
+      new Error("x"),
+      t0 + 9_000,
+    );
+    expect(events.filter((e) => e.kind === "degraded_duration")).toHaveLength(
+      0,
+    );
+    // The transition page must still fire on the first failure — it's
+    // a separate signal with its own dedup_key.
+    expect(events.filter((e) => e.kind === "degraded")).toHaveLength(1);
+  });
+
+  it("pages exactly once when the streak crosses the duration threshold", () => {
+    const { notifier, events } = makeRecorder();
+    const watcher = new __test__.RedisFailureWatcher({
+      threshold: 999,
+      cooldownMs: 60_000,
+      durationPageMs: 10_000,
+      incidentNotifier: notifier,
+    });
+    const t0 = 51_000_000;
+    watcher.record("rate_limit_redis_bump_failed", new Error("x"), t0);
+    // 11 seconds in — first failure that crosses the duration threshold.
+    watcher.record(
+      "rate_limit_redis_bump_failed",
+      new Error("x"),
+      t0 + 11_000,
+    );
+    const durationEvents = events.filter(
+      (e) => e.kind === "degraded_duration",
+    );
+    expect(durationEvents).toHaveLength(1);
+    expect(durationEvents[0]!.payload).toMatchObject({
+      firstFailureAt: t0,
+      failureCount: 2,
+      durationThresholdMs: 10_000,
+      durationMs: 11_000,
+      pagedAt: t0 + 11_000,
+    });
+
+    // Subsequent failures inside the SAME stuck-degraded streak must
+    // NOT re-page — even though every one of them is still over the
+    // threshold. This is the "no spam" guarantee from the task spec.
+    for (let i = 1; i <= 5; i++) {
+      watcher.record(
+        "rate_limit_redis_bump_failed",
+        new Error("x"),
+        t0 + 11_000 + i * 5_000,
+      );
+    }
+    expect(events.filter((e) => e.kind === "degraded_duration")).toHaveLength(
+      1,
+    );
+  });
+
+  it("auto-resolves the duration page on degraded→healthy transition", () => {
+    const { notifier, events } = makeRecorder();
+    const watcher = new __test__.RedisFailureWatcher({
+      threshold: 999,
+      cooldownMs: 60_000,
+      durationPageMs: 10_000,
+      incidentNotifier: notifier,
+    });
+    const t0 = 52_000_000;
+    watcher.record("rate_limit_redis_bump_failed", new Error("x"), t0);
+    watcher.record(
+      "rate_limit_redis_bump_failed",
+      new Error("x"),
+      t0 + 11_000,
+    );
+    expect(events.filter((e) => e.kind === "degraded_duration")).toHaveLength(
+      1,
+    );
+
+    // Recovery: a single success closes the streak and emits the
+    // paired duration-recovered event so PagerDuty can auto-close.
+    watcher.recordSuccess(t0 + 15_000);
+    const recoveredEvents = events.filter(
+      (e) => e.kind === "degraded_duration_recovered",
+    );
+    expect(recoveredEvents).toHaveLength(1);
+    expect(recoveredEvents[0]!.payload).toMatchObject({
+      durationMs: 15_000,
+      failureCount: 2,
+      recoveredAt: t0 + 15_000,
+    });
+
+    // Multiple consecutive successes only emit ONE recovery — the
+    // per-incident `durationPagedThisIncident` flag was cleared on
+    // the first success.
+    watcher.recordSuccess(t0 + 15_010);
+    watcher.recordSuccess(t0 + 15_020);
+    expect(
+      events.filter((e) => e.kind === "degraded_duration_recovered"),
+    ).toHaveLength(1);
+  });
+
+  it("does NOT emit duration-recovered for a streak that never paged on duration", () => {
+    // Sub-threshold streak: transition page fires (first failure) and
+    // the regular recovery page fires on the success, but the
+    // DURATION channel stays silent in both directions because no
+    // duration trigger ever fired.
+    const { notifier, events } = makeRecorder();
+    const watcher = new __test__.RedisFailureWatcher({
+      threshold: 999,
+      cooldownMs: 60_000,
+      durationPageMs: 10_000,
+      incidentNotifier: notifier,
+    });
+    const t0 = 53_000_000;
+    watcher.record("rate_limit_redis_bump_failed", new Error("x"), t0);
+    watcher.recordSuccess(t0 + 1_000);
+    expect(events.map((e) => e.kind)).toEqual(["degraded", "recovered"]);
+  });
+
+  it("re-pages on a fresh stuck-degraded streak after a previous incident closed", () => {
+    // Per-incident gating, not for-all-time gating. After a stuck
+    // streak closes, the next streak that ALSO crosses the duration
+    // threshold must page again — otherwise a sequence of distinct
+    // outages would silently de-dupe into a single signal.
+    const { notifier, events } = makeRecorder();
+    const watcher = new __test__.RedisFailureWatcher({
+      threshold: 999,
+      cooldownMs: 60_000,
+      durationPageMs: 10_000,
+      incidentNotifier: notifier,
+    });
+    const t0 = 54_000_000;
+    watcher.record("rate_limit_redis_bump_failed", new Error("x"), t0);
+    watcher.record(
+      "rate_limit_redis_bump_failed",
+      new Error("x"),
+      t0 + 11_000,
+    );
+    watcher.recordSuccess(t0 + 12_000);
+    // Fresh outage 1 minute later, also stuck for >10s.
+    const t1 = t0 + 72_000;
+    watcher.record("rate_limit_redis_bump_failed", new Error("x"), t1);
+    watcher.record(
+      "rate_limit_redis_bump_failed",
+      new Error("x"),
+      t1 + 11_000,
+    );
+    expect(
+      events.filter((e) => e.kind === "degraded_duration").length,
+    ).toBe(2);
+  });
+
+  it("durationPageMs <= 0 disables the duration page entirely", () => {
+    // Opt-out path: a deploy that doesn't want the duplicate signal
+    // can set the threshold to 0. The transition page and Sentry
+    // breach detection are unaffected.
+    const { notifier, events } = makeRecorder();
+    const watcher = new __test__.RedisFailureWatcher({
+      threshold: 999,
+      cooldownMs: 60_000,
+      durationPageMs: 0,
+      incidentNotifier: notifier,
+    });
+    const t0 = 55_000_000;
+    watcher.record("rate_limit_redis_bump_failed", new Error("x"), t0);
+    // Even an obviously-stuck streak doesn't page when disabled.
+    watcher.record(
+      "rate_limit_redis_bump_failed",
+      new Error("x"),
+      t0 + 60 * 60_000,
+    );
+    expect(events.filter((e) => e.kind === "degraded_duration")).toHaveLength(
+      0,
+    );
+    // Transition page still fired (it's a different signal).
+    expect(events.filter((e) => e.kind === "degraded")).toHaveLength(1);
+  });
+
+  it("a throwing duration notifier does not break the bump path or leak the per-incident flag", () => {
+    const errors: unknown[] = [];
+    const notifier = {
+      notifyDegraded: () => {},
+      notifyRecovered: () => {},
+      notifyDegradedDuration: () => {
+        errors.push("duration");
+        throw new Error("transport down");
+      },
+      notifyDegradedDurationRecovered: () => {
+        errors.push("duration_recovered");
+        throw new Error("transport down");
+      },
+    };
+    const watcher = new __test__.RedisFailureWatcher({
+      threshold: 999,
+      cooldownMs: 60_000,
+      durationPageMs: 10_000,
+      incidentNotifier: notifier,
+    });
+    const t0 = 56_000_000;
+    expect(() => {
+      watcher.record("rate_limit_redis_bump_failed", new Error("x"), t0);
+      watcher.record(
+        "rate_limit_redis_bump_failed",
+        new Error("x"),
+        t0 + 11_000,
+      );
+      // Even though the duration notifier threw, additional in-streak
+      // failures must NOT re-attempt the page — the per-incident flag
+      // is set BEFORE the notifier call, so a throwing transport
+      // can't accidentally cause spam.
+      watcher.record(
+        "rate_limit_redis_bump_failed",
+        new Error("x"),
+        t0 + 12_000,
+      );
+      watcher.recordSuccess(t0 + 13_000);
+    }).not.toThrow();
+    expect(errors).toEqual(["duration", "duration_recovered"]);
+    expect(watcher.getSnapshot().state).toBe("healthy");
+  });
+
+  it("falls back to the env default when no constructor override is given", () => {
+    // The constructor should read RATE_LIMIT_DEGRADED_DURATION_PAGE_MS
+    // from process.env when the opts.durationPageMs is undefined.
+    const prev = process.env.RATE_LIMIT_DEGRADED_DURATION_PAGE_MS;
+    try {
+      process.env.RATE_LIMIT_DEGRADED_DURATION_PAGE_MS = "12345";
+      const watcher = new __test__.RedisFailureWatcher({});
+      expect(watcher.durationPageMs).toBe(12345);
+    } finally {
+      if (prev === undefined) {
+        delete process.env.RATE_LIMIT_DEGRADED_DURATION_PAGE_MS;
+      } else {
+        process.env.RATE_LIMIT_DEGRADED_DURATION_PAGE_MS = prev;
+      }
+    }
+  });
+
+  it("falls back to the 10-minute default for missing/invalid env values", () => {
+    // Defensive: any non-numeric / negative / NaN env value must
+    // default rather than disable or fire on every failure.
+    const prev = process.env.RATE_LIMIT_DEGRADED_DURATION_PAGE_MS;
+    try {
+      delete process.env.RATE_LIMIT_DEGRADED_DURATION_PAGE_MS;
+      expect(new __test__.RedisFailureWatcher({}).durationPageMs).toBe(
+        10 * 60_000,
+      );
+      process.env.RATE_LIMIT_DEGRADED_DURATION_PAGE_MS = "not-a-number";
+      expect(new __test__.RedisFailureWatcher({}).durationPageMs).toBe(
+        10 * 60_000,
+      );
+      process.env.RATE_LIMIT_DEGRADED_DURATION_PAGE_MS = "-500";
+      expect(new __test__.RedisFailureWatcher({}).durationPageMs).toBe(
+        10 * 60_000,
+      );
+    } finally {
+      if (prev === undefined) {
+        delete process.env.RATE_LIMIT_DEGRADED_DURATION_PAGE_MS;
+      } else {
+        process.env.RATE_LIMIT_DEGRADED_DURATION_PAGE_MS = prev;
+      }
+    }
   });
 });
 

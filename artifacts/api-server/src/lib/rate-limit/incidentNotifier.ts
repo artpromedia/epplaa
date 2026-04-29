@@ -166,16 +166,92 @@ export interface RecoveredTransitionEvent {
 }
 
 /**
+ * Fired exactly once per stuck-degraded streak when the streak's
+ * duration crosses `RATE_LIMIT_DEGRADED_DURATION_PAGE_MS` (default
+ * 10 min). Distinct from `DegradedTransitionEvent` because the
+ * underlying signal is "this incident has been going on too long",
+ * not "we just crossed healthy→degraded". The notifier uses a
+ * dedup_key namespaced to `rate-limit-store-degraded-duration:` so
+ * it cannot collide with the transition page.
+ *
+ * Why this exists (see task #144 / docs/runbooks/rate-limit-store.md):
+ * the transition page fires on the moment Redis flaps unhealthy, but a
+ * slow-burn outage that never crosses the per-minute Sentry rate
+ * threshold (or a streak the in-process detector keeps in `degraded`
+ * for many minutes) currently has no out-of-band paging signal —
+ * `scripts/checkHealthzDegraded.ts` exits non-zero in CI but doesn't
+ * reach Slack / PagerDuty. This event closes that gap from inside
+ * the api-server process.
+ *
+ * The event currently only carries rate-limit-store data — the
+ * duration-page builders below intentionally do NOT use the
+ * `eventSubsystem`/`eventLabel` generalisation that the transition
+ * builders adopted, because today there's only one caller and the
+ * dedup_key namespace + Slack copy are deliberately rate-limit
+ * specific. Adding the `subsystem`/`label` fields here would suggest
+ * the duration page already supports other subsystems, which it does
+ * not. Generalising it is a clean follow-up if/when the DB watcher
+ * (or another caller) wants its own duration page.
+ */
+export interface DegradedDurationTransitionEvent {
+  /** ms epoch when the streak began (set on the first failure). */
+  firstFailureAt: number;
+  /** Number of failures observed in the streak so far. */
+  failureCount: number;
+  /** Configured duration threshold in ms (e.g. 600_000). */
+  durationThresholdMs: number;
+  /** Actual streak duration when the page fired (>= durationThresholdMs). */
+  durationMs: number;
+  /** ms epoch when the duration probe noticed the breach (i.e. now). */
+  pagedAt: number;
+}
+
+/**
+ * Paired recovery event for `DegradedDurationTransitionEvent`. Only
+ * fired when the streak that recovered actually crossed the duration
+ * threshold (i.e. on-call was paged). Sub-threshold blips never page,
+ * so they have no duration-recovery to emit either — those streaks
+ * close via the regular `RecoveredTransitionEvent`.
+ */
+export interface DegradedDurationRecoveredEvent {
+  /** Total duration of the breached streak in ms. */
+  durationMs: number;
+  /** Number of failures observed during the streak. */
+  failureCount: number;
+  /** ms epoch when the recovery was observed. */
+  recoveredAt: number;
+}
+
+/**
  * Generic out-of-band incident notifier interface. Kept under the
  * legacy `RateLimitIncidentNotifier` name so existing imports
  * (`apiRateLimit.ts`, the rate-limit unit tests) stay unchanged; the
  * new `IncidentNotifier` alias is the recommended name for new
  * callers that want to make it obvious the notifier isn't rate-limit
- * specific.
+ * specific. The `notifyDegraded`/`notifyRecovered` pair is fully
+ * subsystem-aware (DB watcher, etc.); the duration-page pair is
+ * rate-limit specific for now (see `DegradedDurationTransitionEvent`).
  */
 export interface RateLimitIncidentNotifier {
   notifyDegraded(event: DegradedTransitionEvent): void;
   notifyRecovered(event: RecoveredTransitionEvent): void;
+  /**
+   * Out-of-band page when the rate-limit store has been stuck in
+   * `degraded` for longer than the configured duration threshold.
+   * Fires AT MOST ONCE per stuck-degraded streak — the watcher gates
+   * on a per-incident flag so a slow-burn outage doesn't spam on-call
+   * with a fresh page on every additional failure.
+   */
+  notifyDegradedDuration(event: DegradedDurationTransitionEvent): void;
+  /**
+   * Paired resolve for `notifyDegradedDuration`. Only fires when a
+   * duration-page actually fired during the closing streak — keeps
+   * the duration channel's incident timeline self-closing without
+   * coupling to the transition page's `dedup_key`.
+   */
+  notifyDegradedDurationRecovered(
+    event: DegradedDurationRecoveredEvent,
+  ): void;
 }
 export type IncidentNotifier = RateLimitIncidentNotifier;
 
@@ -392,6 +468,139 @@ export function buildPagerDutyRecoveredPayload(
 }
 
 /**
+ * Slack body for the duration-threshold page. Wording is intentionally
+ * distinct from the transition page (`DEGRADED` vs `STUCK DEGRADED`)
+ * so an operator scanning the channel can tell at a glance which
+ * signal fired — the transition page says "we just went bad", the
+ * duration page says "we've been bad too long".
+ */
+export function buildSlackDegradedDurationPayload(
+  event: DegradedDurationTransitionEvent,
+  source: string,
+): string {
+  const startedIso = new Date(event.firstFailureAt).toISOString();
+  const durationSeconds = Math.max(1, Math.round(event.durationMs / 1000));
+  const thresholdSeconds = Math.max(
+    1,
+    Math.round(event.durationThresholdMs / 1000),
+  );
+  return JSON.stringify({
+    text: `:rotating_light: Rate-limit store STUCK DEGRADED on ${source} (${durationSeconds}s)`,
+    attachments: [
+      {
+        color: "danger",
+        fields: [
+          { title: "Source", value: source, short: true },
+          {
+            title: "Streak duration",
+            value: `${durationSeconds}s`,
+            short: true,
+          },
+          {
+            title: "Duration threshold",
+            value: `${thresholdSeconds}s`,
+            short: true,
+          },
+          {
+            title: "Failures so far",
+            value: String(event.failureCount),
+            short: true,
+          },
+          { title: "Streak began", value: startedIso, short: true },
+        ],
+        footer:
+          "Rate-limit store has been degraded longer than " +
+          `${thresholdSeconds}s — slow-burn outage that the per-minute ` +
+          "rate threshold did not catch. Investigate Redis/backing store " +
+          "before the bypassable in-memory fallback shapes more traffic. " +
+          "See docs/runbooks/rate-limit-store.md.",
+      },
+    ],
+  });
+}
+
+export function buildSlackDegradedDurationRecoveredPayload(
+  event: DegradedDurationRecoveredEvent,
+  source: string,
+): string {
+  const recoveredIso = new Date(event.recoveredAt).toISOString();
+  const durationSeconds = Math.max(1, Math.round(event.durationMs / 1000));
+  return JSON.stringify({
+    text: `:white_check_mark: Rate-limit store recovered from STUCK DEGRADED on ${source}`,
+    attachments: [
+      {
+        color: "good",
+        fields: [
+          { title: "Source", value: source, short: true },
+          {
+            title: "Total streak duration",
+            value: `${durationSeconds}s`,
+            short: true,
+          },
+          {
+            title: "Failures during streak",
+            value: String(event.failureCount),
+            short: true,
+          },
+          { title: "Recovered at", value: recoveredIso, short: true },
+        ],
+      },
+    ],
+  });
+}
+
+/**
+ * PagerDuty payload for the duration-threshold page. The `dedup_key`
+ * is intentionally namespaced under `rate-limit-store-degraded-duration:`
+ * so it CANNOT collide with the transition page's `dedup_key`
+ * (`rate-limit-store-degraded:`) — a single logical incident produces
+ * two separate PagerDuty incidents (transition + duration), each with
+ * its own paired resolve, and operators can route them to different
+ * services / urgencies if they want. Same routing key, different
+ * dedup namespace.
+ */
+export function buildPagerDutyDegradedDurationPayload(
+  event: DegradedDurationTransitionEvent,
+  source: string,
+  routingKey: string,
+): string {
+  return JSON.stringify({
+    routing_key: routingKey,
+    event_action: "trigger",
+    dedup_key: `rate-limit-store-degraded-duration:${source}`,
+    payload: {
+      summary:
+        `Rate-limit store stuck DEGRADED on ${source} for ${Math.round(event.durationMs / 1000)}s ` +
+        `(> ${Math.round(event.durationThresholdMs / 1000)}s threshold, ${event.failureCount} failures)`,
+      source,
+      severity: "error",
+      component: "rate_limit_store",
+      group: "api-server",
+      class: "subsystem-stuck-degraded",
+      custom_details: {
+        firstFailureAt: event.firstFailureAt,
+        failureCount: event.failureCount,
+        durationThresholdMs: event.durationThresholdMs,
+        durationMs: event.durationMs,
+        pagedAt: event.pagedAt,
+      },
+    },
+  });
+}
+
+export function buildPagerDutyDegradedDurationRecoveredPayload(
+  _event: DegradedDurationRecoveredEvent,
+  source: string,
+  routingKey: string,
+): string {
+  return JSON.stringify({
+    routing_key: routingKey,
+    event_action: "resolve",
+    dedup_key: `rate-limit-store-degraded-duration:${source}`,
+  });
+}
+
+/**
  * Production singleton. Reads the env on every notify() call so a hot
  * rotation of the webhook URL / routing key is picked up by the next
  * incident without restarting the server.
@@ -457,6 +666,54 @@ export class WebhookIncidentNotifier implements RateLimitIncidentNotifier {
     }
   }
 
+  notifyDegradedDuration(event: DegradedDurationTransitionEvent): void {
+    const env = this.env();
+    const source = incidentSource(env);
+    const slackUrl = (env.RATE_LIMIT_INCIDENT_SLACK_WEBHOOK_URL ?? "").trim();
+    const pdKey = (
+      env.RATE_LIMIT_INCIDENT_PAGERDUTY_ROUTING_KEY ?? ""
+    ).trim();
+    if (slackUrl !== "") {
+      this.send(
+        slackUrl,
+        buildSlackDegradedDurationPayload(event, source),
+        "slack_degraded_duration",
+      );
+    }
+    if (pdKey !== "") {
+      this.send(
+        pagerDutyUrl(env),
+        buildPagerDutyDegradedDurationPayload(event, source, pdKey),
+        "pagerduty_degraded_duration",
+      );
+    }
+  }
+
+  notifyDegradedDurationRecovered(
+    event: DegradedDurationRecoveredEvent,
+  ): void {
+    const env = this.env();
+    const source = incidentSource(env);
+    const slackUrl = (env.RATE_LIMIT_INCIDENT_SLACK_WEBHOOK_URL ?? "").trim();
+    const pdKey = (
+      env.RATE_LIMIT_INCIDENT_PAGERDUTY_ROUTING_KEY ?? ""
+    ).trim();
+    if (slackUrl !== "") {
+      this.send(
+        slackUrl,
+        buildSlackDegradedDurationRecoveredPayload(event, source),
+        "slack_degraded_duration_recovered",
+      );
+    }
+    if (pdKey !== "") {
+      this.send(
+        pagerDutyUrl(env),
+        buildPagerDutyDegradedDurationRecoveredPayload(event, source, pdKey),
+        "pagerduty_degraded_duration_recovered",
+      );
+    }
+  }
+
   /**
    * Fire-and-forget POST. We deliberately do NOT await the result from
    * the watcher — it would couple the bump path's latency to the
@@ -500,4 +757,6 @@ export class WebhookIncidentNotifier implements RateLimitIncidentNotifier {
 export const NOOP_INCIDENT_NOTIFIER: RateLimitIncidentNotifier = {
   notifyDegraded() {},
   notifyRecovered() {},
+  notifyDegradedDuration() {},
+  notifyDegradedDurationRecovered() {},
 };

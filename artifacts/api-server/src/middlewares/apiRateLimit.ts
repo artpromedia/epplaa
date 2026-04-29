@@ -256,9 +256,18 @@ class RedisFailureWatcher {
   //   failuresSinceFirstFailure — how many failures it spans (for failureCount)
   //   breachedThisIncident    — gates whether we actually emit recovery
   //                             on the next success (avoid noise for blips)
+  //   durationPagedThisIncident — gates the out-of-band duration page
+  //                             so a slow-burn outage produces exactly
+  //                             one Slack/PagerDuty page per stuck
+  //                             streak rather than one per additional
+  //                             failure that crosses the threshold.
+  //                             Reset alongside `firstFailureAt` on
+  //                             every recordSuccess so the next streak
+  //                             can re-page if it also gets stuck.
   private firstFailureAt: number | null = null;
   private failuresSinceFirstFailure = 0;
   private breachedThisIncident = false;
+  private durationPagedThisIncident = false;
   // Wallclock timestamp of the most recent recordSuccess that closed an
   // active failure streak. Surfaced via /healthz so dashboards and
   // uptime probes can see when the store last recovered without
@@ -266,6 +275,25 @@ class RedisFailureWatcher {
   private lastRecoveredAt: number | null = null;
   readonly thresholdPerMin: number;
   readonly cooldownMs: number;
+  /**
+   * Stuck-degraded streak length (ms) at which an out-of-band page
+   * fires via the incident notifier with a distinct dedup namespace
+   * (`rate-limit-store-degraded-duration:`). Closes the gap between
+   * the rate-based Sentry alert (which only catches cliff-edge
+   * outages) and the external `scripts/checkHealthzDegraded.ts`
+   * probe (which exits non-zero in CI but doesn't reach Slack /
+   * PagerDuty). Configurable via
+   * `RATE_LIMIT_DEGRADED_DURATION_PAGE_MS`; default is 10 minutes
+   * — long enough to filter transient flaps, short enough that
+   * after-hours on-call still gets paged before a multi-hour
+   * silent degradation eats the rate-limit floor.
+   *
+   * A value <= 0 disables the duration page entirely (e.g. for
+   * tests or for opt-out deploys that don't want a duplicate
+   * signal). The healthy→degraded transition page and Sentry
+   * threshold breach are unaffected.
+   */
+  readonly durationPageMs: number;
   /**
    * Out-of-band paging sink (Slack / PagerDuty). Default is the
    * env-driven webhook notifier; tests inject a deterministic stub via
@@ -277,6 +305,13 @@ class RedisFailureWatcher {
   constructor(opts?: {
     threshold?: number;
     cooldownMs?: number;
+    /**
+     * Override for the stuck-degraded duration page threshold (ms).
+     * Tests pass a small number to avoid sleeping; production reads
+     * `RATE_LIMIT_DEGRADED_DURATION_PAGE_MS`. A value <= 0 disables
+     * the duration page (the rest of the watcher is unaffected).
+     */
+    durationPageMs?: number;
     incidentNotifier?: RateLimitIncidentNotifier;
   }) {
     this.thresholdPerMin =
@@ -285,6 +320,21 @@ class RedisFailureWatcher {
     this.cooldownMs =
       opts?.cooldownMs ??
       Number(process.env.RATE_LIMIT_REDIS_FAILURE_ALERT_COOLDOWN_MS ?? "60000");
+    // Sanitise the duration threshold the same way other env-driven
+    // numerics are: a missing / non-numeric / negative value falls
+    // back to the default rather than producing NaN (which would
+    // never trip) or a zero/negative value (which would page on
+    // every failure). 0 explicitly disables.
+    if (opts?.durationPageMs !== undefined) {
+      this.durationPageMs = Math.floor(opts.durationPageMs);
+    } else {
+      const raw = process.env.RATE_LIMIT_DEGRADED_DURATION_PAGE_MS;
+      const parsed = raw === undefined ? NaN : Number(raw);
+      this.durationPageMs =
+        Number.isFinite(parsed) && parsed >= 0
+          ? Math.floor(parsed)
+          : 10 * 60_000;
+    }
     this.incidentNotifier =
       opts?.incidentNotifier ?? new WebhookIncidentNotifier();
   }
@@ -367,6 +417,56 @@ class RedisFailureWatcher {
         fingerprint: ["rate-limit-redis-failure-threshold"],
       });
     }
+    // Slow-burn / stuck-degraded out-of-band page. Evaluated on every
+    // recorded failure so a sustained outage that produces a steady
+    // trickle of failures (which never crosses the per-minute Sentry
+    // threshold) still pages on-call once the streak is long enough.
+    // The per-incident gate inside maybePageOnDuration guarantees this
+    // fires AT MOST ONCE per stuck streak — no spam from subsequent
+    // failures within the same incident, and no re-page until the
+    // streak closes (recordSuccess) and a fresh streak crosses the
+    // threshold again.
+    this.maybePageOnDuration(now);
+  }
+
+  /**
+   * Out-of-band page when the current failure streak has been
+   * degraded for longer than `durationPageMs`. Distinct from the
+   * healthy→degraded transition page (different `dedup_key`
+   * namespace, different Slack wording) so a single logical
+   * incident produces two clearly-labelled signals: "we just went
+   * bad" and, if the outage drags on, "we've been bad too long".
+   *
+   * Called from inside `record()` rather than from a periodic timer
+   * so the page latency is bounded by the next failure rather than
+   * a setInterval cadence — and so the cost is zero on healthy
+   * processes that never see a failure.
+   */
+  private maybePageOnDuration(now: number): void {
+    if (this.durationPageMs <= 0) return;
+    if (this.firstFailureAt === null) return;
+    if (this.durationPagedThisIncident) return;
+    const durationMs = now - this.firstFailureAt;
+    if (durationMs <= this.durationPageMs) return;
+    this.durationPagedThisIncident = true;
+    try {
+      this.incidentNotifier.notifyDegradedDuration({
+        firstFailureAt: this.firstFailureAt,
+        failureCount: this.failuresSinceFirstFailure,
+        durationThresholdMs: this.durationPageMs,
+        durationMs,
+        pagedAt: now,
+      });
+    } catch (notifyErr) {
+      // Webhook outages must NEVER cascade into the rate-limit decision
+      // path. Sentry already has the underlying breach via the per-
+      // failure captureException above, so we lose only the duplicate
+      // out-of-band notification — not the incident itself.
+      logger.warn(
+        { err: (notifyErr as Error).message },
+        "rate_limit_incident_notify_degraded_duration_threw",
+      );
+    }
   }
 
   /**
@@ -390,6 +490,7 @@ class RedisFailureWatcher {
    */
   recordSuccess(now: number = Date.now()): void {
     const hadBreach = this.breachedThisIncident;
+    const hadDurationPage = this.durationPagedThisIncident;
     const startedAt = this.firstFailureAt;
     const failureCount = this.failuresSinceFirstFailure;
     // Reset recovery-incident state up front so a misbehaving Sentry
@@ -400,6 +501,7 @@ class RedisFailureWatcher {
     this.firstFailureAt = null;
     this.failuresSinceFirstFailure = 0;
     this.breachedThisIncident = false;
+    this.durationPagedThisIncident = false;
     // Stamp the recovery clock for any streak that actually recovered,
     // even sub-threshold blips. /healthz consumers want "when did the
     // store last come back" regardless of whether on-call was paged.
@@ -427,6 +529,27 @@ class RedisFailureWatcher {
         logger.warn(
           { err: (notifyErr as Error).message },
           "rate_limit_incident_notify_recovered_threw",
+        );
+      }
+    }
+    // Paired resolve for the duration page. Only fires when the closing
+    // streak actually paged (durationPagedThisIncident was set), so a
+    // sub-threshold streak never produces a spurious "recovered from
+    // stuck-degraded" event in the duration channel. The PagerDuty
+    // dedup_key uses the same `rate-limit-store-degraded-duration:`
+    // namespace as the trigger so the original incident closes itself.
+    if (hadDurationPage && startedAt !== null) {
+      const durationMs = Math.max(0, now - startedAt);
+      try {
+        this.incidentNotifier.notifyDegradedDurationRecovered({
+          durationMs,
+          failureCount,
+          recoveredAt: now,
+        });
+      } catch (notifyErr) {
+        logger.warn(
+          { err: (notifyErr as Error).message },
+          "rate_limit_incident_notify_degraded_duration_recovered_threw",
         );
       }
     }
@@ -491,6 +614,7 @@ class RedisFailureWatcher {
     this.firstFailureAt = null;
     this.failuresSinceFirstFailure = 0;
     this.breachedThisIncident = false;
+    this.durationPagedThisIncident = false;
     this.lastRecoveredAt = null;
   }
 
