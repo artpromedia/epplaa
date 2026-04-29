@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { evaluateLiveCounts, parseLiveCountsManifest } from "./verifyBackup";
+import {
+  evaluateLiveCounts,
+  evaluateWeekOverWeekDrops,
+  parseLiveCountsManifest,
+  parseWeekOverWeekHistory,
+} from "./verifyBackup";
 
 describe("evaluateLiveCounts", () => {
   it("returns no violations when restored exactly matches live", () => {
@@ -119,5 +124,212 @@ describe("parseLiveCountsManifest", () => {
 
   it("rejects null entry values", () => {
     expect(() => parseLiveCountsManifest(`{"a": null}`)).toThrow(/non-negative integer/);
+  });
+});
+
+describe("evaluateWeekOverWeekDrops", () => {
+  it("returns no drops when current matches prior", () => {
+    const prior = new Map([
+      ["audit_events", 1000],
+      ["orders", 500],
+    ]);
+    const current = new Map([
+      ["audit_events", 1000],
+      ["orders", 500],
+    ]);
+    expect(evaluateWeekOverWeekDrops(prior, current, 0.2)).toEqual([]);
+  });
+
+  it("returns no drops when current grew (one-directional check)", () => {
+    const prior = new Map([["audit_events", 1000]]);
+    const current = new Map([["audit_events", 1_000_000]]);
+    expect(evaluateWeekOverWeekDrops(prior, current, 0.2)).toEqual([]);
+  });
+
+  it("returns no drops when the drop is exactly at the threshold", () => {
+    // 20% drop = 800 from 1000. Threshold of 0.2 means "more than 20%
+    // is bad", so exactly-20% should pass — this matches the comparison
+    // operator (`> maxDropRatio`, not `>=`).
+    const prior = new Map([["audit_events", 1000]]);
+    const current = new Map([["audit_events", 800]]);
+    expect(evaluateWeekOverWeekDrops(prior, current, 0.2)).toEqual([]);
+  });
+
+  it("flags a table where the drop exceeds the threshold", () => {
+    const prior = new Map([["audit_events", 1000]]);
+    const current = new Map([["audit_events", 700]]);
+    const drops = evaluateWeekOverWeekDrops(prior, current, 0.2);
+    expect(drops).toEqual([
+      { table: "audit_events", prior: 1000, current: 700, dropRatio: 0.3 },
+    ]);
+  });
+
+  it("treats a missing current count as a 100% drop (catches silent table-skip)", () => {
+    const prior = new Map([["orders", 500]]);
+    const current = new Map<string, number>();
+    const drops = evaluateWeekOverWeekDrops(prior, current, 0.2);
+    expect(drops).toHaveLength(1);
+    expect(drops[0]).toMatchObject({ table: "orders", prior: 500, current: 0, dropRatio: 1 });
+  });
+
+  it("catches the motivating regression (orders 1.2M -> 5)", () => {
+    const prior = new Map([["orders", 1_200_000]]);
+    const current = new Map([["orders", 5]]);
+    const drops = evaluateWeekOverWeekDrops(prior, current, 0.2);
+    expect(drops).toHaveLength(1);
+    expect(drops[0]?.table).toBe("orders");
+    expect(drops[0]?.dropRatio).toBeGreaterThan(0.99);
+  });
+
+  it("skips tables whose prior count is zero (no meaningful baseline)", () => {
+    const prior = new Map([["empty_lookup", 0]]);
+    const current = new Map([["empty_lookup", 0]]);
+    expect(evaluateWeekOverWeekDrops(prior, current, 0.2)).toEqual([]);
+  });
+
+  it("ignores tables present in current but absent from prior (no baseline yet)", () => {
+    const prior = new Map<string, number>();
+    const current = new Map([["audit_events", 1000]]);
+    expect(evaluateWeekOverWeekDrops(prior, current, 0.2)).toEqual([]);
+  });
+
+  it("flags multiple violations across tables", () => {
+    const prior = new Map([
+      ["a", 1000],
+      ["b", 200],
+      ["c", 500],
+    ]);
+    const current = new Map([
+      ["a", 1000], // unchanged -> ok
+      ["b", 50], // 75% drop -> flagged
+      ["c", 100], // 80% drop -> flagged
+    ]);
+    const drops = evaluateWeekOverWeekDrops(prior, current, 0.2);
+    expect(drops.map((d) => d.table).sort()).toEqual(["b", "c"]);
+  });
+
+  it("respects a stricter threshold (zero tolerance)", () => {
+    const prior = new Map([["audit_events", 1000]]);
+    const current = new Map([["audit_events", 999]]);
+    expect(evaluateWeekOverWeekDrops(prior, current, 0)).toHaveLength(1);
+  });
+
+  it("respects a looser threshold (90% drop allowed)", () => {
+    const prior = new Map([["audit_events", 1000]]);
+    const current = new Map([["audit_events", 100]]);
+    expect(evaluateWeekOverWeekDrops(prior, current, 0.9)).toEqual([]);
+    expect(evaluateWeekOverWeekDrops(prior, current, 0.85)).toHaveLength(1);
+  });
+
+  it("disables itself when threshold is 1 (any drop tolerated)", () => {
+    const prior = new Map([["audit_events", 1000]]);
+    const current = new Map([["audit_events", 0]]);
+    expect(evaluateWeekOverWeekDrops(prior, current, 1)).toEqual([]);
+  });
+});
+
+describe("parseWeekOverWeekHistory", () => {
+  it("parses a valid versioned history file", () => {
+    const json = JSON.stringify({
+      version: 1,
+      entries: [
+        { timestamp: "2026-04-22T03:00:00.000Z", counts: { audit_events: 1000, orders: 500 } },
+        { timestamp: "2026-04-29T03:00:00.000Z", counts: { audit_events: 1100, orders: 510 } },
+      ],
+    });
+    const h = parseWeekOverWeekHistory(json);
+    expect(h.version).toBe(1);
+    expect(h.entries).toHaveLength(2);
+    expect(h.entries[1]?.counts.orders).toBe(510);
+  });
+
+  it("parses an empty entries array", () => {
+    const h = parseWeekOverWeekHistory(`{"version": 1, "entries": []}`);
+    expect(h.entries).toEqual([]);
+  });
+
+  it("rejects malformed JSON", () => {
+    expect(() => parseWeekOverWeekHistory(`not json`)).toThrow(/not valid JSON/);
+  });
+
+  it("rejects an array root", () => {
+    expect(() => parseWeekOverWeekHistory(`[]`)).toThrow(/object with .version, entries/);
+  });
+
+  it("rejects a null root", () => {
+    expect(() => parseWeekOverWeekHistory(`null`)).toThrow(/object with .version, entries/);
+  });
+
+  it("rejects an unknown version (forward-compat)", () => {
+    expect(() =>
+      parseWeekOverWeekHistory(`{"version": 2, "entries": []}`),
+    ).toThrow(/unknown version/);
+  });
+
+  it("rejects a missing entries field", () => {
+    expect(() =>
+      parseWeekOverWeekHistory(`{"version": 1}`),
+    ).toThrow(/entries.* must be an array/);
+  });
+
+  it("rejects an entry that's not an object", () => {
+    expect(() =>
+      parseWeekOverWeekHistory(`{"version": 1, "entries": ["not-an-object"]}`),
+    ).toThrow(/entry must be an object/);
+  });
+
+  it("rejects an entry with no timestamp", () => {
+    expect(() =>
+      parseWeekOverWeekHistory(
+        `{"version": 1, "entries": [{"counts": {"a": 1}}]}`,
+      ),
+    ).toThrow(/timestamp/);
+  });
+
+  it("rejects an entry with an empty timestamp", () => {
+    expect(() =>
+      parseWeekOverWeekHistory(
+        `{"version": 1, "entries": [{"timestamp": "", "counts": {"a": 1}}]}`,
+      ),
+    ).toThrow(/timestamp/);
+  });
+
+  it("rejects an entry with non-object counts", () => {
+    expect(() =>
+      parseWeekOverWeekHistory(
+        `{"version": 1, "entries": [{"timestamp": "t", "counts": [1, 2]}]}`,
+      ),
+    ).toThrow(/counts.* must be an object/);
+  });
+
+  it("rejects fractional count values", () => {
+    expect(() =>
+      parseWeekOverWeekHistory(
+        `{"version": 1, "entries": [{"timestamp": "t", "counts": {"a": 1.5}}]}`,
+      ),
+    ).toThrow(/non-negative integer/);
+  });
+
+  it("rejects negative count values", () => {
+    expect(() =>
+      parseWeekOverWeekHistory(
+        `{"version": 1, "entries": [{"timestamp": "t", "counts": {"a": -1}}]}`,
+      ),
+    ).toThrow(/non-negative integer/);
+  });
+
+  it("rejects string count values", () => {
+    expect(() =>
+      parseWeekOverWeekHistory(
+        `{"version": 1, "entries": [{"timestamp": "t", "counts": {"a": "1"}}]}`,
+      ),
+    ).toThrow(/non-negative integer/);
+  });
+
+  it("accepts a zero count (a genuinely empty table is operator-meaningful)", () => {
+    const h = parseWeekOverWeekHistory(
+      `{"version": 1, "entries": [{"timestamp": "t", "counts": {"a": 0}}]}`,
+    );
+    expect(h.entries[0]?.counts.a).toBe(0);
   });
 });

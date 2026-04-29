@@ -12,7 +12,7 @@ restorable live in this repo on two cadences:
 | Workflow | [`.github/workflows/backup-verify-nightly.yml`](../../.github/workflows/backup-verify-nightly.yml) | [`.github/workflows/backup-verify.yml`](../../.github/workflows/backup-verify.yml) |
 | Verifier script | [`scripts/src/verifyBackup.ts`](../../scripts/src/verifyBackup.ts) `--mode=smoke` | same script `--mode=full` |
 | Schedule | `0 3 * * 1-6` (Mon-Sat 03:00 UTC) — six per week | `0 3 * * 0` (Sunday 03:00 UTC) — once per week |
-| Probe surface | `pg_restore` of the latest `*.dump` into a throwaway sandbox DB, followed by freshness check, row-count smoke against `audit_events` / `payment_intents` / `orders`, optional live-vs-restored row-count comparison (when `LIVE_COUNTS_URL` or `LIVE_COUNTS_MANIFEST` is set), and required-extension presence check | smoke + anti-join FK integrity across `orders ↔ payment_intents ↔ users` + `VACUUM (ANALYZE)` (full heap scan, catches block-level corruption) + per-table inventory + best-effort `amcheck` btree validation + end-to-end audit-chain replay against `audit_events` |
+| Probe surface | `pg_restore` of the latest `*.dump` into a throwaway sandbox DB, followed by freshness check, row-count smoke against `audit_events` / `payment_intents` / `orders`, optional live-vs-restored row-count comparison (when `LIVE_COUNTS_URL` or `LIVE_COUNTS_MANIFEST` is set), week-over-week row-count drift check vs the prior verify run's persisted history, and required-extension presence check | smoke + anti-join FK integrity across `orders ↔ payment_intents ↔ users` + `VACUUM (ANALYZE)` (full heap scan, catches block-level corruption) + per-table inventory + best-effort `amcheck` btree validation + end-to-end audit-chain replay against `audit_events` |
 | Sentry Cron slug | `backup-verify-nightly` | `backup-verify` |
 | Pager channel | Sentry Cron monitor (heartbeat) + GitHub "Failed workflow run" mail (backstop) | same |
 
@@ -41,11 +41,12 @@ The verify pass exits non-zero and pages on:
 | 12   | `amcheck` `bt_index_check()` reported a corrupt btree index. **Note**: `amcheck` extension *missing* in the sandbox is downgraded to a `::warning::` and exit 0 — this code only fires when the extension is present and an index is actually broken. | full only | Platform team + DB owner |
 | 13   | Unknown `--mode` value (operator typo / workflow misconfig). | both | Repo owner (workflow YAML) |
 | 14   | Restored row counts are stale or incomplete vs the live source / manifest — the dump is restorable but its data lags production. **Distinct from exit 6** (which is "the dump *file* is older than `MAX_DUMP_AGE_HOURS`"): this code fires when the file mtime is fresh but its contents lag, which the file-mtime check cannot see. Names every offending table and the absolute / percentage delta in the failure line so on-call doesn't have to dig through logs. Skipped (with a `[verifyBackup]` notice and exit 0) when neither `LIVE_COUNTS_URL` nor `LIVE_COUNTS_MANIFEST` is set. | both | Platform team + DB owner |
+| 15   | Restored row counts dropped sharply vs the most recent prior verify run (the per-run history file under `WEEK_OVER_WEEK_HISTORY`, default `${BACKUP_DIR}/verify-row-counts-history.json`). One or more tables in `WEEK_OVER_WEEK_TABLES` (default `audit_events,payment_intents,orders`) shrunk by more than `WEEK_OVER_WEEK_MAX_DROP_RATIO` (default 20%) since last week. **Distinct from exit 14**: exit 14 compares restored vs *current* live, so it can't see the case where the producer regenerated the manifest off the same partial dump (manifest agrees with restored, but both regressed). Exit 15 compares restored vs *the prior verify's* restored, so it catches that case. Names every offending table + the prior count + the drop percentage. Recording a baseline (no prior history) does NOT page; only a real drop after a baseline exists does. | both | Platform team + DB owner |
 
 > **On-call routing tip:** the grouping above is the page-routing contract.
 > Codes 2/3/6/9/13 are about the transport / freshness / sandbox config /
 > workflow misconfig and belong to the platform team (or the repo owner
-> for code 13). Codes 4/5/7/10/11/12/14 are about the dump's internal
+> for code 13). Codes 4/5/7/10/11/12/14/15 are about the dump's internal
 > consistency / completeness and need both platform + the DB owner. Code
 > 8 is the audit-integrity invariant and is the only one that should
 > land in the audit/compliance owners' on-call queue. If you change the
@@ -327,6 +328,10 @@ secrets — they're not sensitive):
 | `REQUIRED_EXTENSIONS` | *(unset → check skipped)* | Comma-separated list of Postgres extensions that must be installed on the restored sandbox (e.g. `pgcrypto,pg_trgm`). When unset the extension check logs a notice and skips — set it once you know which extensions the production schema actually depends on. Mismatch → exit 9. |
 | `LIVE_COUNTS_TABLES` | `audit_events,payment_intents,orders` | Comma-separated list of tables the verifier queries via `LIVE_COUNTS_URL` for the live-vs-restored comparison. Only consulted in the `LIVE_COUNTS_URL` branch — the `LIVE_COUNTS_MANIFEST` branch trusts whatever tables the manifest lists, on the assumption that the platform's `pg_dump` cron is the source-of-truth for which tables matter. Keep the list small (count(*) on production tables is not free); the default covers the money-flow + audit chain. Each entry must be a plain table name or `schema.table` — alphanumerics + underscore only. |
 | `LIVE_COUNTS_MIN_RATIO` | `0.99` | Minimum fraction of the live count we tolerate seeing in the restored sandbox. `0.99` (the default) absorbs the small write-traffic gap between when `pg_dump` snapshotted and when the verifier reads the live count, without silently accepting a dump that's missing a meaningful chunk of rows. Lower it (e.g. `0.95`) if your write traffic is bursty enough that 1% drift produces false positives; **do not** lower it past `0.9` without the DB owner's sign-off — at that point a real partial-table-skip hides inside the threshold. Must be in `(0, 1]`. |
+| `WEEK_OVER_WEEK_HISTORY` | `${BACKUP_DIR}/verify-row-counts-history.json` | Path to the per-run row-count history file used by the week-over-week drift check (exit 15). Must be writable by the workflow user — point it somewhere persistent across runs (the same backup share where the dumps live works well; a runner-local path resets every run and silently disables the check). The file is a versioned JSON object — see `verifyBackup.ts` for the shape. Delete it to reset the baseline (the next run records a fresh baseline and skips the comparison). |
+| `WEEK_OVER_WEEK_TABLES` | `audit_events,payment_intents,orders` | Comma-separated list of tables the verifier counts and tracks across runs for the week-over-week comparison (exit 15). Same identifier rules as `LIVE_COUNTS_TABLES`. Default is the same three smoke / money-flow / audit-chain tables — keep the list small because each entry is one extra `count(*)` against the restored sandbox per run. Setting this to an empty value is a hard error (use `WEEK_OVER_WEEK_MAX_DROP_RATIO=1` to disable instead). **Caveat when shrinking the list**: the comparison iterates every table in the prior history entry, so removing a table from this list does NOT stop comparing it until the prior history entry rolls off (or you delete the history file to reset the baseline). Adding a table is safe — the new table is recorded on the next run and starts participating in comparisons one run later. |
+| `WEEK_OVER_WEEK_MAX_DROP_RATIO` | `0.2` | Maximum drop (as a fraction in `[0, 1]`) tolerated on any tracked table between two consecutive verify runs before exit 15 fires. `0.2` (the default) means a 20% drop pages — generous enough to absorb a one-off purge / archival pass without paging, tight enough to catch the motivating regression of a partial pg_dump (`orders` 1.2M -> 5). **Do not** lower below ~0.05 without DB owner sign-off (legitimate purges trip false positives) and **do not** raise above ~0.5 (real partial-table-skips hide inside the threshold). Set to exactly `1` to disable the check entirely without removing the env var. |
+| `WEEK_OVER_WEEK_MAX_HISTORY` | `12` | Number of history entries to retain in `WEEK_OVER_WEEK_HISTORY`. ~3 months of weekly entries by default; older entries are dropped FIFO. Only the most recent entry is consulted for comparison — the older entries exist for human triage when a page fires. Must be a positive integer. |
 
 ## Backup verification failed
 
@@ -450,6 +455,57 @@ itself is the problem — the scheduler is fine.
       production network reachability + the read-only role's
       grants; the `LIVE_COUNTS_MANIFEST_URL` path exists for exactly
       this case (runners that can't reach prod).
+15. **Exit 15 (week-over-week row-count drop, both modes)** — the dump
+    is restorable, the smoke + live-counts checks both passed, but
+    one or more tables in `WEEK_OVER_WEEK_TABLES` shrunk by more than
+    `WEEK_OVER_WEEK_MAX_DROP_RATIO` (default 20%) compared to the
+    most recent prior verify run's persisted counts. The verifier
+    names every offending table along with `current=`, `prior=`, the
+    drop percentage, and the absolute delta in the `fail()` line —
+    read that first; it tells you which write path is at risk and by
+    how much. **Important**: this is **not** the same as exit 14.
+    Exit 14 compares restored vs *current* live, so it cannot see
+    the case where the producer regenerated the manifest off the
+    same partial dump (manifest agrees with restored, but both have
+    regressed). Exit 15 compares restored vs *the prior verify's*
+    restored, which catches that case. Triage:
+    - **One table dropped to ~0 with the others unchanged** — almost
+      certainly a `pg_dump` argument regression (e.g.
+      `--exclude-table` accidentally matched it, or a partial dump
+      was published over the good one). Page the platform team and
+      pull the producer logs for the most recent run.
+    - **All tables dropped by similar percentages (e.g. 30-40%
+      across the board)** — likely a real bulk-delete / archival
+      pass landed on the source DB. Confirm with the DB owner that
+      the deletion is intentional. Once confirmed, accept the new
+      baseline by deleting the history file
+      (`WEEK_OVER_WEEK_HISTORY`) on the backup share and re-running
+      the workflow — the next run will record a fresh baseline and
+      pass.
+    - **A single table dropped by just over the threshold (e.g.
+      21%)** — could be a legitimate one-off purge. Re-run once: if
+      the next run's counts are stable around the new value, it's
+      real and you can clear the history file to accept the new
+      baseline (after DB owner sign-off). If it keeps shrinking
+      week-over-week, the producer is silently losing data.
+    - **`WEEK_OVER_WEEK_HISTORY` is unreadable / malformed** — also
+      exits 15 with a `cannot read week-over-week history` or `…
+      not valid JSON / unknown version` message. Most likely a
+      half-written file from a previous crash; delete it and re-run
+      to record a fresh baseline. Investigate the storage backend
+      if the corruption recurs.
+    - **`fail()` line says "cannot write …"** — the history path is
+      not writable by the workflow user. Either fix the directory
+      permissions on the backup share or point
+      `WEEK_OVER_WEEK_HISTORY` somewhere writable. Without a
+      writable history path the next run cannot establish a
+      baseline, leaving us blind to this failure mode.
+
+    The history file is **intentionally not updated** when this code
+    fires, so the page keeps firing on every subsequent run until
+    either the data is restored OR the operator clears the history
+    file to accept the new baseline. Do not silence the workflow as
+    the recovery path.
 
 In all cases, **do not silence the workflow** as the recovery path —
 the page is telling you the dump is bad, and silencing it will mask the
@@ -584,3 +640,34 @@ To rehearse each new failure mode against a local sandbox:
   `LIVE_COUNTS_URL` branch, point it at any read-only Postgres with
   the relevant tables and re-run; the comparison branch is the same
   past the source-resolution step.
+- **Exit 15 (week-over-week row-count drop):** the cleanest local
+  rehearsal is to record a baseline against the real restored counts,
+  then rewrite the saved baseline to claim a much higher prior count
+  for one table — guaranteed to breach the default 20% drop threshold
+  on the next run:
+  ```sh
+  rm -f /tmp/backups/verify-row-counts-history.json
+  # First run: records a baseline against the real restored counts
+  # and exits 0 (no prior history -> nothing to compare against).
+  BACKUP_DIR=/tmp/backups \
+  RESTORE_DATABASE_URL='postgres://verify:verify@localhost:5432/sandbox' \
+    pnpm --filter @workspace/scripts exec tsx src/verifyBackup.ts \
+      --mode=smoke
+  # Inflate the baseline's orders count 10x so the next run sees a
+  # ~90% drop, well past the 20% default threshold.
+  python3 -c "
+  import json, sys
+  p = '/tmp/backups/verify-row-counts-history.json'
+  h = json.load(open(p))
+  h['entries'][-1]['counts']['orders'] *= 10
+  json.dump(h, open(p, 'w'))
+  "
+  # Second run: comparison fires -> exit 15.
+  BACKUP_DIR=/tmp/backups \
+  RESTORE_DATABASE_URL='postgres://verify:verify@localhost:5432/sandbox' \
+    pnpm --filter @workspace/scripts exec tsx src/verifyBackup.ts \
+      --mode=smoke
+  ```
+  The verifier should exit 15 with a `fail()` line naming `orders`
+  and the inflated drop percentage. `rm` the history file to clear
+  the rehearsal; the next run will record a fresh baseline.

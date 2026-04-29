@@ -97,18 +97,29 @@
  *       mtime stale": this catches the case where the file is fresh and
  *       restorable but its *contents* lag the live DB, which the
  *       file-mtime check cannot see).
+ *   15  restored row counts have dropped sharply vs the most recent
+ *       prior verify run (the per-run history file under BACKUP_DIR /
+ *       WEEK_OVER_WEEK_HISTORY). Catches the case where smoke +
+ *       live-counts both agree this week's dump is "fine" because the
+ *       producer regenerated the manifest off the same partial dump,
+ *       but the data has shrunk sharply vs last week's healthy baseline
+ *       (e.g. orders went from 1.2M -> 5 because a partial pg_dump was
+ *       published over the good one). Distinct from exit 14 because
+ *       exit 14 compares restored vs *current* live; exit 15 compares
+ *       restored vs *the prior verify's* restored.
  *
  * Ownership grouping (matches the runbook's page-routing contract):
  *   transport / freshness / sandbox config -> platform team (2, 3, 6, 9)
  *   dump-internal corruption                -> platform team + DB owner
- *                                              (4, 5, 7, 10, 11, 12, 14)
+ *                                              (4, 5, 7, 10, 11, 12, 14,
+ *                                              15)
  *   audit-chain integrity                   -> audit / compliance owner
  *                                              (8)
  *   operator / workflow misconfig           -> repo owner (13)
  */
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 type Mode = "smoke" | "full";
@@ -157,6 +168,70 @@ const LIVE_COUNTS_TABLES = (
 const LIVE_COUNTS_MIN_RATIO = Number(process.env.LIVE_COUNTS_MIN_RATIO ?? 0.99);
 
 /**
+ * Week-over-week row-count drift comparison knobs. Catches the
+ * specific failure mode that smoke + live-counts do not cover: a dump
+ * that landed on time, has rows in the smoke tables, and matches the
+ * platform's manifest, but whose row counts have dropped sharply vs
+ * the LAST successful verify run (e.g. `orders` went from 1.2M -> 5
+ * because a partial pg_dump was published over the good one AND the
+ * accompanying manifest was regenerated against the same partial
+ * dump, so the live-counts comparison happily passes against the
+ * regressed manifest).
+ *
+ * On every run the verifier appends `{timestamp, counts}` to a small
+ * JSON history file (default `${BACKUP_DIR}/verify-row-counts-history.json`,
+ * override via WEEK_OVER_WEEK_HISTORY) and compares the current
+ * restored counts against the most recent prior entry. A drop greater
+ * than WEEK_OVER_WEEK_MAX_DROP_RATIO (default 0.20 -> 20%) on any
+ * tracked table exits 15.
+ *
+ * Behavior worth being explicit about:
+ *  - First run on a brand-new backup share (no history file): record
+ *    a baseline entry, log a `[verifyBackup]` notice, do NOT compare.
+ *    There's nothing to compare against yet, and we don't want a
+ *    fresh sandbox to false-page on its first tick.
+ *  - On exit 15 the history file is intentionally NOT updated. If we
+ *    rolled the new (regressed) counts into history, the NEXT run
+ *    would compare regressed-vs-regressed and silently re-pass.
+ *    Keeping the prior baseline in place means the page keeps firing
+ *    every run until either the data is restored OR the operator
+ *    explicitly clears the history file to accept the new baseline.
+ *  - History is capped at WEEK_OVER_WEEK_MAX_HISTORY entries (default
+ *    12, ~3 months of weekly entries) so the file stays small. Only
+ *    the most recent entry drives the comparison; the older entries
+ *    exist for human triage.
+ *  - WEEK_OVER_WEEK_TABLES defaults to the same three smoke tables
+ *    (`audit_events,payment_intents,orders`) — the money-flow + audit
+ *    chain that the rest of the verifier already treats as critical.
+ *    Set WEEK_OVER_WEEK_MAX_DROP_RATIO=1 to disable the check
+ *    entirely without removing the env var (a 100% drop is permitted
+ *    so nothing trips).
+ *  - The comparison iterates every table present in the *prior history
+ *    entry*, not just the currently configured WEEK_OVER_WEEK_TABLES.
+ *    That means *adding* a table is safe (it gets recorded on the next
+ *    run and participates in comparisons one run later), but *removing*
+ *    a table from the config does NOT stop comparing it until the
+ *    prior history entry rolls off — clear the history file (or wait
+ *    for the FIFO cap) if shrinking the list and you don't want to
+ *    keep paging on the dropped table.
+ */
+const WEEK_OVER_WEEK_HISTORY =
+  process.env.WEEK_OVER_WEEK_HISTORY ??
+  path.join(BACKUP_DIR, "verify-row-counts-history.json");
+const WEEK_OVER_WEEK_TABLES = (
+  process.env.WEEK_OVER_WEEK_TABLES ?? "audit_events,payment_intents,orders"
+)
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
+const WEEK_OVER_WEEK_MAX_DROP_RATIO = Number(
+  process.env.WEEK_OVER_WEEK_MAX_DROP_RATIO ?? 0.2,
+);
+const WEEK_OVER_WEEK_MAX_HISTORY = Number(
+  process.env.WEEK_OVER_WEEK_MAX_HISTORY ?? 12,
+);
+
+/**
  * Exit codes. Stable contract — the runbook (and any external monitor /
  * Sentry alert routing) keys on these values to decide who to page.
  */
@@ -175,6 +250,7 @@ const EXIT = {
   AMCHECK_FAILED: 12,
   UNKNOWN_MODE: 13,
   STALE_DATA: 14,
+  WEEK_OVER_WEEK_DROP: 15,
 } as const;
 
 function fail(msg: string, code: number = EXIT.GENERIC): never {
@@ -546,6 +622,119 @@ export function parseLiveCountsManifest(json: string): Map<string, number> {
 }
 
 /**
+ * Pure helper: compare prior restored counts against the current
+ * restored counts and return the tables whose count has dropped by
+ * more than `maxDropRatio`. Exported for unit testing — the I/O
+ * wrapper `checkWeekOverWeekDrop` below handles history-file +
+ * psql wiring.
+ *
+ * Special cases:
+ *  - A prior count of 0 is skipped (no meaningful drop ratio for a
+ *    table that was empty last run; the first non-zero entry will
+ *    establish the baseline for next time).
+ *  - A table that's in `prior` but missing from `current` is treated
+ *    as current=0, i.e. a 100% drop. That's the dominant failure
+ *    mode this check exists to catch (silent table drop in the new
+ *    dump).
+ *  - A table in `current` but not in `prior` is ignored — there is
+ *    no baseline to compare against. It will be recorded into
+ *    history and start participating in comparisons next run.
+ *  - "Drop" is one-directional: a count that GREW since last week is
+ *    fine. Growth is the normal mode of an append-heavy table like
+ *    `audit_events`; this check is specifically about regressions.
+ */
+export interface WeekOverWeekDrop {
+  table: string;
+  prior: number;
+  current: number;
+  dropRatio: number;
+}
+export function evaluateWeekOverWeekDrops(
+  prior: ReadonlyMap<string, number>,
+  current: ReadonlyMap<string, number>,
+  maxDropRatio: number,
+): WeekOverWeekDrop[] {
+  const drops: WeekOverWeekDrop[] = [];
+  for (const [table, priorCount] of prior) {
+    if (priorCount <= 0) continue;
+    const currentCount = current.get(table) ?? 0;
+    const dropRatio = (priorCount - currentCount) / priorCount;
+    if (dropRatio > maxDropRatio) {
+      drops.push({ table, prior: priorCount, current: currentCount, dropRatio });
+    }
+  }
+  return drops;
+}
+
+/**
+ * Pure helper: parse + validate a week-over-week history file. Shape
+ * is `{version: 1, entries: [{timestamp: string, counts: {table:
+ * non-negative-integer, ...}}, ...]}`. Anything else is a hard error
+ * rather than a silent reset to an empty history (silent reset would
+ * mean the next run has no baseline to compare against, which would
+ * mask exactly the failure mode this check exists to catch).
+ * Exported for tests.
+ */
+export interface WeekOverWeekHistoryEntry {
+  timestamp: string;
+  counts: Record<string, number>;
+}
+export interface WeekOverWeekHistoryFile {
+  version: 1;
+  entries: WeekOverWeekHistoryEntry[];
+}
+export function parseWeekOverWeekHistory(json: string): WeekOverWeekHistoryFile {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(json);
+  } catch (err) {
+    throw new Error(
+      `week-over-week history file is not valid JSON: ${(err as Error).message}`,
+    );
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error(
+      `week-over-week history file must be a JSON object with {version, entries}`,
+    );
+  }
+  const obj = parsed as Record<string, unknown>;
+  if (obj.version !== 1) {
+    throw new Error(
+      `week-over-week history file has unknown version ${JSON.stringify(obj.version)} ` +
+        `(this verifier only handles version 1)`,
+    );
+  }
+  if (!Array.isArray(obj.entries)) {
+    throw new Error(`week-over-week history file 'entries' field must be an array`);
+  }
+  const entries: WeekOverWeekHistoryEntry[] = [];
+  for (const e of obj.entries) {
+    if (e === null || typeof e !== "object" || Array.isArray(e)) {
+      throw new Error(`week-over-week history entry must be an object`);
+    }
+    const er = e as Record<string, unknown>;
+    if (typeof er.timestamp !== "string" || er.timestamp.length === 0) {
+      throw new Error(`week-over-week history entry is missing a 'timestamp' string`);
+    }
+    if (er.counts === null || typeof er.counts !== "object" || Array.isArray(er.counts)) {
+      throw new Error(`week-over-week history entry 'counts' must be an object`);
+    }
+    const counts: Record<string, number> = {};
+    for (const [k, v] of Object.entries(er.counts as Record<string, unknown>)) {
+      if (typeof v !== "number" || !Number.isFinite(v) || !Number.isInteger(v) || v < 0) {
+        throw new Error(
+          `week-over-week history entry counts['${k}'] is not a non-negative integer ` +
+            `(got ${JSON.stringify(v)})`,
+        );
+      }
+      counts[k] = v;
+    }
+    entries.push({ timestamp: er.timestamp, counts });
+  }
+  return { version: 1, entries };
+}
+
+/**
  * Run a single `count(*)` query against an arbitrary connection
  * string. Used for both the live source (LIVE_COUNTS_URL) and the
  * restored sandbox (RESTORE_DATABASE_URL) — the comparison check
@@ -708,6 +897,159 @@ function checkLiveCounts(): void {
   );
 }
 
+/**
+ * Week-over-week row-count drift comparison. The smoke check proves
+ * the tables are non-empty and the live-counts check proves they
+ * match the producer's manifest, but neither catches the case where
+ * the producer's *own* dump regressed in lockstep with its manifest
+ * (a partial pg_dump was published over the good one and the
+ * manifest was regenerated against the partial dump - so live-counts
+ * is satisfied even though the data has shrunk by orders of
+ * magnitude vs last week's healthy baseline).
+ *
+ * This check persists `{timestamp, counts}` to a small JSON history
+ * file (default `${BACKUP_DIR}/verify-row-counts-history.json`) on
+ * every successful run, and on the next run compares the current
+ * restored counts against the most recent prior entry. A drop above
+ * WEEK_OVER_WEEK_MAX_DROP_RATIO on any tracked table exits 15.
+ *
+ * Failures intentionally DO NOT update the history file - rolling the
+ * regressed counts forward would silently re-pass on the next run.
+ * The page keeps firing until either the data is restored OR the
+ * operator clears the history file to accept the new baseline.
+ */
+function checkWeekOverWeekDrop(): void {
+  if (WEEK_OVER_WEEK_TABLES.length === 0) {
+    fail(
+      `WEEK_OVER_WEEK_TABLES must list at least one table (set ` +
+        `WEEK_OVER_WEEK_MAX_DROP_RATIO=1 to disable the check entirely instead)`,
+      EXIT.GENERIC,
+    );
+  }
+  if (
+    !Number.isFinite(WEEK_OVER_WEEK_MAX_DROP_RATIO) ||
+    WEEK_OVER_WEEK_MAX_DROP_RATIO < 0 ||
+    WEEK_OVER_WEEK_MAX_DROP_RATIO > 1
+  ) {
+    fail(
+      `WEEK_OVER_WEEK_MAX_DROP_RATIO must be a number in [0, 1] ` +
+        `(got ${process.env.WEEK_OVER_WEEK_MAX_DROP_RATIO})`,
+      EXIT.GENERIC,
+    );
+  }
+  if (
+    !Number.isFinite(WEEK_OVER_WEEK_MAX_HISTORY) ||
+    !Number.isInteger(WEEK_OVER_WEEK_MAX_HISTORY) ||
+    WEEK_OVER_WEEK_MAX_HISTORY < 1
+  ) {
+    fail(
+      `WEEK_OVER_WEEK_MAX_HISTORY must be a positive integer ` +
+        `(got ${process.env.WEEK_OVER_WEEK_MAX_HISTORY})`,
+      EXIT.GENERIC,
+    );
+  }
+
+  const current = queryCountsViaPsql(
+    RESTORE_DATABASE_URL!,
+    WEEK_OVER_WEEK_TABLES,
+    EXIT.WEEK_OVER_WEEK_DROP,
+  );
+
+  let history: WeekOverWeekHistoryFile = { version: 1, entries: [] };
+  let raw: string | null = null;
+  try {
+    raw = readFileSync(WEEK_OVER_WEEK_HISTORY, "utf8");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+      fail(
+        `cannot read week-over-week history at ${WEEK_OVER_WEEK_HISTORY}: ` +
+          `${(err as Error).message}`,
+        EXIT.WEEK_OVER_WEEK_DROP,
+      );
+    }
+  }
+  if (raw !== null) {
+    try {
+      history = parseWeekOverWeekHistory(raw);
+    } catch (err) {
+      fail(
+        `${(err as Error).message}. Delete ${WEEK_OVER_WEEK_HISTORY} to reset the ` +
+          `baseline if the file is genuinely corrupt (this re-arms the check on the ` +
+          `next run with no comparison).`,
+        EXIT.WEEK_OVER_WEEK_DROP,
+      );
+    }
+  }
+
+  const prior = history.entries[history.entries.length - 1];
+  const currentSummary = WEEK_OVER_WEEK_TABLES.map((t) => `${t}=${current.get(t) ?? 0}`).join(
+    ", ",
+  );
+  const pct = (WEEK_OVER_WEEK_MAX_DROP_RATIO * 100).toFixed(2);
+  if (prior === undefined) {
+    console.log(
+      `[verifyBackup] no prior week-over-week history at ${WEEK_OVER_WEEK_HISTORY} ` +
+        `— recording baseline (${currentSummary}); next run will compare against this.`,
+    );
+  } else {
+    const priorMap = new Map(Object.entries(prior.counts));
+    const drops = evaluateWeekOverWeekDrops(priorMap, current, WEEK_OVER_WEEK_MAX_DROP_RATIO);
+    if (drops.length > 0) {
+      const lines = drops
+        .map(
+          (d) =>
+            `${d.table}: current=${d.current}, prior=${d.prior} ` +
+            `(drop=${(d.dropRatio * 100).toFixed(2)}%, delta=${d.prior - d.current})`,
+        )
+        .join("; ");
+      fail(
+        `restored row counts dropped by more than ${pct}% vs prior verify run ` +
+          `(timestamp=${prior.timestamp}): ${lines}. The dump is restorable and the ` +
+          `smoke + live-counts checks passed, but the data has shrunk sharply since ` +
+          `the last successful verify — strong signal a partial pg_dump was published ` +
+          `over a good one. Distinct from exit 14 (live-vs-restored) because the ` +
+          `producer's manifest / live source can ALSO regress in lockstep, leaving ` +
+          `exit 14 happy. The history file ${WEEK_OVER_WEEK_HISTORY} is intentionally ` +
+          `NOT updated on this exit so the page keeps firing until either the data ` +
+          `is restored OR the operator clears the file to accept the new baseline.`,
+        EXIT.WEEK_OVER_WEEK_DROP,
+      );
+    }
+    const summary = WEEK_OVER_WEEK_TABLES.map(
+      (t) => `${t}=${current.get(t) ?? 0} (was ${prior.counts[t] ?? "?"})`,
+    ).join(", ");
+    console.log(
+      `[verifyBackup] week-over-week OK vs ${prior.timestamp} (max drop ${pct}%): ${summary}`,
+    );
+  }
+
+  // Append + cap history. Atomic via temp + rename so a crash mid-write
+  // doesn't leave a half-written file the next run cannot parse.
+  const updated: WeekOverWeekHistoryFile = {
+    version: 1,
+    entries: [
+      ...history.entries,
+      {
+        timestamp: new Date().toISOString(),
+        counts: Object.fromEntries(current),
+      },
+    ].slice(-WEEK_OVER_WEEK_MAX_HISTORY),
+  };
+  const tmp = `${WEEK_OVER_WEEK_HISTORY}.tmp`;
+  try {
+    writeFileSync(tmp, JSON.stringify(updated, null, 2) + "\n", "utf8");
+    renameSync(tmp, WEEK_OVER_WEEK_HISTORY);
+  } catch (err) {
+    fail(
+      `cannot write week-over-week history at ${WEEK_OVER_WEEK_HISTORY}: ` +
+        `${(err as Error).message}. Without this file the next run cannot compare ` +
+        `against the current baseline — either fix the directory permissions or ` +
+        `set WEEK_OVER_WEEK_HISTORY to a writable path.`,
+      EXIT.WEEK_OVER_WEEK_DROP,
+    );
+  }
+}
+
 function runVacuumAnalyze(): void {
   // VACUUM (ANALYZE) reads every heap page of every table, which is the
   // cheapest way to surface block-level corruption that pg_restore's
@@ -867,6 +1209,16 @@ function main(): void {
   // are stale, the deeper integrity checks would mis-attribute "last
   // month's data" as "this week's healthy state".
   checkLiveCounts();
+
+  // Week-over-week row-count drift. Runs in both modes and is on by
+  // default — catches the regression that smoke + live-counts both
+  // miss when the producer regenerated the manifest off the same
+  // partial dump (so live-counts is happy but the data has shrunk vs
+  // last week's healthy baseline). Sequenced after live-counts so the
+  // "absolute floor" failure mode trips first; before extensions / FK
+  // because data shrinkage is a higher-signal page than a config or
+  // integrity follow-on.
+  checkWeekOverWeekDrop();
 
   // Extensions check runs in both modes — the "production app boots
   // against this sandbox" property is a smoke-grade invariant, and the
