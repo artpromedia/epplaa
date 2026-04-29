@@ -1,0 +1,403 @@
+name: Rehearse production-hostname-pattern post-deploy gate (manual)
+
+# End-to-end rehearsal of the post-deploy hostname-pattern gate
+# wired into `release.yml` (see Task #100).
+#
+# Why this workflow exists:
+# `.github/workflows/check-production-hostname-pattern.yml` is the
+# reusable workflow that release.yml's `post-deploy-config-check` job
+# invokes via `uses:` as the final post-deploy gate. Its job is to
+# fail the release run synchronously when production reports
+# `config.productionHostnamePattern === "missing"` on `/readyz`.
+#
+# The probe CLI (`src/scripts/checkProductionHostnamePattern.ts`) and
+# the `/readyz` config block (`getReadyzConfigBlock` in
+# `routes/health.ts`) both have unit tests covering their decision
+# matrices and exit-code mappings. What was *not* covered until this
+# workflow existed: the end-to-end "called from a deploy workflow ->
+# probe exits non-zero -> the release run actually fails" path.
+#
+# An upgrade to the reusable workflow that broke the call path —
+#
+#   - a renamed env var (`READYZ_URL`, `READYZ_PROBE_TIMEOUT_MS`),
+#   - a syntax error in the heredoc that wraps the probe (the script
+#     is materialised to `$RUNNER_TEMP/probe.sh` and invoked either
+#     directly or under `sentry-cli monitors run`),
+#   - a regressed exit-code mapping (e.g. a future refactor that
+#     swallowed `code=$?` or replaced `exit "$code"` with `exit 0`),
+#   - a renamed `pnpm` script (the workflow invokes `pnpm --silent
+#     --filter @workspace/api-server run check-production-hostname-pattern`
+#     by name),
+#
+# would only be discovered the next time a real production deploy
+# happened to be misconfigured — exactly the failure mode this gate
+# exists to prevent. This rehearsal stands up a tiny local `/readyz`
+# mock that returns each branch of the probe's decision matrix, then
+# invokes the same `pnpm` script the reusable workflow uses against
+# every fixture and asserts the expected exit code AND the expected
+# structured-stdout JSON shape land. The "missing" fixture in
+# particular is the case the gate exists for: if THAT step doesn't
+# exit 2, the gate would silently let a misconfigured production
+# deploy through.
+#
+# Mirrors the manual-rehearsal pattern established by
+# `rehearse-healthz-degraded.yml`'s direct probe invocation against a
+# deliberately-broken target. Unlike the healthz rehearsal, this
+# workflow does not need a dedicated Sentry rehearsal project — the
+# Sentry forwarding inside `check-production-hostname-pattern.yml` is
+# a thin `sentry-cli send-event` call wrapping the probe, and a
+# regression there would be caught by the analogous wrapper-script
+# logic (which is itself uniform with the healthz wrapper) rather
+# than by an end-to-end Sentry round trip. Keeping this rehearsal
+# self-contained (no Sentry credentials required, no network egress
+# beyond loopback) means an on-call can re-run it immediately after
+# touching either the reusable workflow OR the `/readyz` config block
+# shape, without first wrangling a rehearsal Sentry project.
+#
+# When to re-run (see also `docs/runbooks/staging-only-endpoints.md`,
+# Post-deploy verifier section):
+#
+#   - After editing `.github/workflows/check-production-hostname-pattern.yml`
+#     (the reusable gate). The probe step's heredoc, env vars, exit-
+#     code propagation, and `pnpm` script name are all exercised here.
+#   - After editing `getReadyzConfigBlock` in
+#     `artifacts/api-server/src/routes/health.ts`. A change to the
+#     `config.productionHostnamePattern` field's tri-state shape
+#     ("configured" / "not_required" / "missing") is exactly what the
+#     fixtures below assert against — if the rehearsal still passes,
+#     the probe still understands the new shape.
+#   - After editing `artifacts/api-server/src/scripts/checkProductionHostnamePattern.ts`
+#     (the probe CLI itself). The probe's unit tests already cover
+#     the decision matrix; this rehearsal additionally verifies that
+#     the CLI still propagates the right exit codes through `pnpm
+#     run` and returns the right JSON line on stdout.
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  # At most one rehearsal at a time. The mock server binds a fixed
+  # loopback port so two concurrent runs would collide on EADDRINUSE.
+  group: rehearse-production-hostname-pattern
+  cancel-in-progress: false
+
+jobs:
+  rehearse:
+    name: "Rehearse: probe gate against fixtures (missing -> exit 2)"
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    env:
+      # Loopback-only so the mock server can never accept off-runner
+      # traffic. Port chosen high enough to not collide with anything
+      # on the GitHub-hosted runner image.
+      MOCK_HOST: "127.0.0.1"
+      MOCK_PORT: "9999"
+      # Match the reusable workflow's default so we exercise the same
+      # timeout path. The mock server responds in <1ms, so this only
+      # matters for the probe's no-response branch (which we don't
+      # rehearse here — that's covered by the probe CLI's unit test
+      # for AbortError handling).
+      READYZ_PROBE_TIMEOUT_MS: "5000"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Materialise mock /readyz server
+        # Quoted-terminator heredoc so nothing inside expands at
+        # heredoc time. The mock uses Node's built-in `http` module
+        # (no extra deps to install) and serves a separate URL path
+        # per fixture so each probe step exercises one branch of
+        # `evaluateReadyz`'s decision matrix in isolation.
+        run: |
+          cat > "$RUNNER_TEMP/mock-readyz.cjs" <<'MOCK'
+          const http = require('node:http');
+          const fixtures = {
+            // The case the gate EXISTS for: a 200-ready production
+            // deploy whose /readyz says the hostname pattern is
+            // missing. The probe must exit 2 (page) here, otherwise
+            // the gate would let the misconfigured deploy through.
+            '/readyz/missing': {
+              status: 200,
+              body: { status: 'ready', config: { productionHostnamePattern: 'missing' } },
+            },
+            // Same misconfiguration but during a downstream outage
+            // (DB / Redis unreachable so /readyz returns 503). The
+            // probe MUST still page on the missing pattern even when
+            // the replica is draining — gating on a 200 here would
+            // silently paper over the misconfiguration during the
+            // worst-possible window. This step asserts the probe's
+            // documented "200 OR 503 -> evaluate config block" path.
+            '/readyz/missing-503': {
+              status: 503,
+              body: { status: 'not_ready', config: { productionHostnamePattern: 'missing' } },
+            },
+            // Healthy production deploy with the env var set. The
+            // probe must exit 0 (silent on healthy) so the gate
+            // doesn't false-fail every release.
+            '/readyz/configured': {
+              status: 200,
+              body: { status: 'ready', config: { productionHostnamePattern: 'configured' } },
+            },
+            // Non-production deploy (staging / dev / preview). The
+            // probe must exit 0 so the same workflow can fan out
+            // across envs without flapping on staging.
+            '/readyz/not_required': {
+              status: 200,
+              body: { status: 'ready', config: { productionHostnamePattern: 'not_required' } },
+            },
+            // Response-shape regression: the api-server we hit is
+            // serving an unexpected /readyz body that omits the
+            // config block entirely. The probe must exit 1 (probe
+            // error) so a human looks instead of the gate silently
+            // treating the missing block as healthy.
+            '/readyz/no-config-block': {
+              status: 200,
+              body: { status: 'ready' },
+            },
+            // Response-shape regression: the config block is present
+            // but the value is unrecognised (e.g. a typo, a future
+            // value the probe doesn't know about, a rolling-deploy
+            // version skew). Same reasoning as no-config-block —
+            // exit 1, escalate to a human.
+            '/readyz/unknown-value': {
+              status: 200,
+              body: { status: 'ready', config: { productionHostnamePattern: 'wat' } },
+            },
+          };
+          const server = http.createServer((req, res) => {
+            const path = (req.url || '').split('?')[0];
+            const fixture = fixtures[path];
+            if (!fixture) {
+              res.writeHead(404, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ error: 'fixture not found', path }));
+              return;
+            }
+            res.writeHead(fixture.status, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify(fixture.body));
+          });
+          const host = process.env.MOCK_HOST || '127.0.0.1';
+          const port = parseInt(process.env.MOCK_PORT || '9999', 10);
+          server.listen(port, host, () => {
+            console.log(`mock /readyz listening on http://${host}:${port}`);
+          });
+          MOCK
+          echo "mock script materialised at $RUNNER_TEMP/mock-readyz.cjs"
+
+      - name: Start mock /readyz server in background
+        id: start_mock
+        run: |
+          set -e
+          # `nohup ... &` so the mock survives this step's shell exit
+          # and remains available to subsequent probe steps. PID is
+          # persisted in the job env so the cleanup step can kill it.
+          nohup node "$RUNNER_TEMP/mock-readyz.cjs" > "$RUNNER_TEMP/mock.log" 2>&1 &
+          mock_pid=$!
+          echo "mock_pid=$mock_pid" >> "$GITHUB_OUTPUT"
+          echo "MOCK_PID=$mock_pid" >> "$GITHUB_ENV"
+          # Poll until the mock answers — guards against a race where
+          # the first probe step fires before `listen()` has bound.
+          for i in $(seq 1 50); do
+            if curl -sS -o /dev/null -w '%{http_code}' "http://${MOCK_HOST}:${MOCK_PORT}/readyz/configured" 2>/dev/null | grep -q '^200$'; then
+              echo "mock ready after ${i} attempts (pid=$mock_pid)"
+              exit 0
+            fi
+            sleep 0.1
+          done
+          echo "::error::mock /readyz did not become ready within 5s"
+          cat "$RUNNER_TEMP/mock.log" || true
+          exit 1
+
+      # The six steps below exercise every branch of
+      # `evaluateReadyz`'s decision matrix. Each step:
+      #
+      #   - sets `READYZ_URL` to the matching fixture
+      #   - invokes the SAME pnpm script the reusable workflow uses
+      #   - asserts the expected exit code (the gate's behaviour)
+      #   - asserts the expected outcome on the structured stdout
+      #     JSON line (the page body's shape, which on-call sees)
+      #
+      # Standard fail-fast applies: a failed assertion in any
+      # fixture step stops subsequent fixture steps. The cleanup +
+      # summary steps below carry `if: always()` so the mock server
+      # is still torn down and the run page still shows a one-line
+      # outcome. The "missing" fixture is intentionally first
+      # because it's the case the gate exists for — if the run
+      # stops there, the most actionable signal ("the gate would
+      # NOT fail a release with a misconfigured production deploy")
+      # is still surfaced front-and-center on the run page.
+
+      - name: 'Fixture: missing (200 ready) -> assert exit 2 + outcome=missing'
+        env:
+          READYZ_URL: http://127.0.0.1:9999/readyz/missing
+        run: |
+          set +e
+          out=$(pnpm --silent --filter @workspace/api-server run check-production-hostname-pattern 2>&1)
+          code=$?
+          set -e
+          printf '%s\n' "$out"
+          if [ "$code" != "2" ]; then
+            echo "::error::expected exit 2 (page on-call), got $code — the gate would NOT fail a release with a misconfigured production deploy"
+            exit 1
+          fi
+          outcome=$(printf '%s' "$out" | jq -r '.outcome // empty')
+          if [ "$outcome" != "missing" ]; then
+            echo "::error::expected outcome=missing on stdout JSON, got outcome=$outcome — the page body would not name the misconfigured env var"
+            exit 1
+          fi
+          echo "OK: missing -> exit 2, outcome=missing"
+
+      - name: 'Fixture: missing (503 not_ready) -> assert exit 2 + outcome=missing'
+        env:
+          READYZ_URL: http://127.0.0.1:9999/readyz/missing-503
+        run: |
+          set +e
+          out=$(pnpm --silent --filter @workspace/api-server run check-production-hostname-pattern 2>&1)
+          code=$?
+          set -e
+          printf '%s\n' "$out"
+          if [ "$code" != "2" ]; then
+            echo "::error::expected exit 2 even on 503 (the probe must page on missing pattern during a downstream outage), got $code"
+            exit 1
+          fi
+          outcome=$(printf '%s' "$out" | jq -r '.outcome // empty')
+          if [ "$outcome" != "missing" ]; then
+            echo "::error::expected outcome=missing on the 503 path, got outcome=$outcome"
+            exit 1
+          fi
+          echo "OK: missing-503 -> exit 2, outcome=missing"
+
+      - name: 'Fixture: configured -> assert exit 0 + outcome=configured'
+        env:
+          READYZ_URL: http://127.0.0.1:9999/readyz/configured
+        run: |
+          set +e
+          out=$(pnpm --silent --filter @workspace/api-server run check-production-hostname-pattern 2>&1)
+          code=$?
+          set -e
+          printf '%s\n' "$out"
+          if [ "$code" != "0" ]; then
+            echo "::error::expected exit 0 on healthy production, got $code — the gate would false-fail every release"
+            exit 1
+          fi
+          outcome=$(printf '%s' "$out" | jq -r '.outcome // empty')
+          if [ "$outcome" != "configured" ]; then
+            echo "::error::expected outcome=configured, got outcome=$outcome"
+            exit 1
+          fi
+          echo "OK: configured -> exit 0, outcome=configured"
+
+      - name: 'Fixture: not_required -> assert exit 0 + outcome=not_required'
+        env:
+          READYZ_URL: http://127.0.0.1:9999/readyz/not_required
+        run: |
+          set +e
+          out=$(pnpm --silent --filter @workspace/api-server run check-production-hostname-pattern 2>&1)
+          code=$?
+          set -e
+          printf '%s\n' "$out"
+          if [ "$code" != "0" ]; then
+            echo "::error::expected exit 0 on non-prod deploy, got $code — the same workflow would flap when fanned out across envs"
+            exit 1
+          fi
+          outcome=$(printf '%s' "$out" | jq -r '.outcome // empty')
+          if [ "$outcome" != "not_required" ]; then
+            echo "::error::expected outcome=not_required, got outcome=$outcome"
+            exit 1
+          fi
+          echo "OK: not_required -> exit 0, outcome=not_required"
+
+      - name: 'Fixture: no-config-block (response-shape regression) -> assert exit 1'
+        env:
+          READYZ_URL: http://127.0.0.1:9999/readyz/no-config-block
+        run: |
+          set +e
+          out=$(pnpm --silent --filter @workspace/api-server run check-production-hostname-pattern 2>&1)
+          code=$?
+          set -e
+          printf '%s\n' "$out"
+          if [ "$code" != "1" ]; then
+            echo "::error::expected exit 1 on missing config block, got $code — a response-shape regression would silently pass the gate"
+            exit 1
+          fi
+          outcome=$(printf '%s' "$out" | jq -r '.outcome // empty')
+          if [ "$outcome" != "probe_error" ]; then
+            echo "::error::expected outcome=probe_error on missing config block, got outcome=$outcome"
+            exit 1
+          fi
+          echo "OK: no-config-block -> exit 1, outcome=probe_error"
+
+      - name: 'Fixture: unknown-value (response-shape regression) -> assert exit 1'
+        env:
+          READYZ_URL: http://127.0.0.1:9999/readyz/unknown-value
+        run: |
+          set +e
+          out=$(pnpm --silent --filter @workspace/api-server run check-production-hostname-pattern 2>&1)
+          code=$?
+          set -e
+          printf '%s\n' "$out"
+          if [ "$code" != "1" ]; then
+            echo "::error::expected exit 1 on unrecognised config value, got $code — an unknown value would silently pass the gate"
+            exit 1
+          fi
+          outcome=$(printf '%s' "$out" | jq -r '.outcome // empty')
+          if [ "$outcome" != "probe_error" ]; then
+            echo "::error::expected outcome=probe_error on unrecognised value, got outcome=$outcome"
+            exit 1
+          fi
+          echo "OK: unknown-value -> exit 1, outcome=probe_error"
+
+      - name: Stop mock /readyz server
+        # `if: always()` so a failed assertion above still cleans up
+        # the background process. Without this, a re-dispatch of the
+        # workflow on the same self-hosted runner would EADDRINUSE on
+        # MOCK_PORT (a non-issue on GitHub-hosted runners which are
+        # ephemeral, but cheap insurance for the self-hosted case).
+        if: always()
+        run: |
+          if [ -n "${MOCK_PID:-}" ]; then
+            kill "$MOCK_PID" 2>/dev/null || true
+            echo "stopped mock pid=$MOCK_PID"
+          fi
+          if [ -f "$RUNNER_TEMP/mock.log" ]; then
+            echo "--- mock server log ---"
+            cat "$RUNNER_TEMP/mock.log"
+          fi
+
+      - name: Rehearsal summary
+        # Always-run summary so the GitHub UI shows a one-line
+        # outcome on the run page even when an assertion fails. The
+        # individual step's `::error::` annotation already names the
+        # specific failing fixture; this is the at-a-glance view.
+        if: always()
+        run: |
+          {
+            echo "## Production hostname-pattern gate rehearsal"
+            echo ""
+            echo "Exercises every branch of \`evaluateReadyz\`'s decision matrix"
+            echo "against a local mock \`/readyz\`. The 'missing' fixtures are"
+            echo "the cases the post-deploy gate exists for: if either fails to"
+            echo "exit 2 the gate would let a misconfigured production deploy"
+            echo "through."
+            echo ""
+            echo "Re-run after editing:"
+            echo "  - .github/workflows/check-production-hostname-pattern.yml"
+            echo "  - artifacts/api-server/src/routes/health.ts (getReadyzConfigBlock)"
+            echo "  - artifacts/api-server/src/scripts/checkProductionHostnamePattern.ts"
+            echo ""
+            echo "Runbook: docs/runbooks/staging-only-endpoints.md (Post-deploy verifier section)"
+          } >> "$GITHUB_STEP_SUMMARY"

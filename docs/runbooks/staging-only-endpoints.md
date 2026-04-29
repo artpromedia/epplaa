@@ -127,6 +127,85 @@ path log-throttling for the compiled hostname-pattern cache).
   `lib/productionSignals.ts`'s helper unit tests, and
   `scripts/checkProductionHostnamePattern.test.ts` (decision matrix +
   CLI exit-code mapping + structured stdout/stderr lines).
+- Rehearsal (Task #102):
+  [`.github/workflows/rehearse-production-hostname-pattern.yml`](../../.github/workflows/rehearse-production-hostname-pattern.yml).
+  Manual `workflow_dispatch` only — mirrors the
+  `rehearse-healthz-degraded.yml` pattern (direct probe invocation
+  against a deliberately-broken target, see "Automated weekly
+  rehearsal" in `docs/runbooks/rate-limit-store.md` for the
+  analogous chain). The unit tests above cover the probe CLI's
+  decision matrix and the `/readyz` route shape in isolation, but
+  nothing else exercises the end-to-end "called from a deploy
+  workflow → probe exits non-zero → the release run actually fails"
+  path. An upgrade to the reusable workflow that broke the call
+  path — a renamed env var (`READYZ_URL`,
+  `READYZ_PROBE_TIMEOUT_MS`), a syntax error in the `$RUNNER_TEMP/probe.sh`
+  heredoc, a regressed exit-code mapping, a renamed `pnpm` script —
+  would only be discovered the next time a real production deploy
+  happened to be misconfigured, exactly the failure mode this gate
+  exists to prevent.
+
+  The rehearsal stands up a tiny Node-based mock `/readyz` server
+  on loopback (`127.0.0.1:9999`, no extra deps — uses the built-in
+  `http` module) that returns one fixture per branch of
+  `evaluateReadyz`'s decision matrix:
+
+  | Fixture path                  | HTTP | `config.productionHostnamePattern` | Expected exit | Expected outcome |
+  | ----------------------------- | ---- | ---------------------------------- | ------------- | ---------------- |
+  | `/readyz/missing`             | 200  | `"missing"`                        | `2`           | `missing`        |
+  | `/readyz/missing-503`         | 503  | `"missing"`                        | `2`           | `missing`        |
+  | `/readyz/configured`          | 200  | `"configured"`                     | `0`           | `configured`     |
+  | `/readyz/not_required`        | 200  | `"not_required"`                   | `0`           | `not_required`   |
+  | `/readyz/no-config-block`     | 200  | (omitted)                          | `1`           | `probe_error`    |
+  | `/readyz/unknown-value`       | 200  | `"wat"` (unrecognised)             | `1`           | `probe_error`    |
+
+  For each fixture the rehearsal invokes the SAME `pnpm --silent
+  --filter @workspace/api-server run check-production-hostname-pattern`
+  command the reusable workflow uses, asserts the expected exit
+  code, and asserts the structured stdout JSON's `outcome` field
+  matches. The two `missing` fixtures are the cases the gate
+  exists for: if either fails to exit `2` the gate would let a
+  misconfigured production deploy through. The `503 not_ready`
+  variant additionally re-asserts the documented "200 OR 503 →
+  evaluate config block anyway" path so a downstream outage can't
+  silently mask the misconfiguration.
+
+  Self-contained by design: no Sentry credentials required, no
+  network egress beyond loopback, no shared rehearsal Sentry
+  project to wrangle. The Sentry forwarding inside
+  `check-production-hostname-pattern.yml` is a thin `sentry-cli
+  send-event` wrapping the probe — uniform with the healthz wrapper
+  whose alerting chain `rehearse-healthz-degraded.yml` already
+  exercises end-to-end against a dedicated rehearsal Sentry project.
+
+  When to re-run:
+  - **After editing
+    `.github/workflows/check-production-hostname-pattern.yml`**
+    (the reusable gate). The probe step's heredoc, env vars, exit-
+    code propagation, and `pnpm` script name are all exercised here.
+  - **After editing `getReadyzConfigBlock` in
+    `artifacts/api-server/src/routes/health.ts`.** A change to the
+    `config.productionHostnamePattern` field's tri-state shape
+    (`"configured"` / `"not_required"` / `"missing"`) is exactly
+    what the fixtures above assert against — if the rehearsal still
+    passes, the probe still understands the new shape. (If you add
+    a new tri-state field instead, see the analogous rehearsal hook
+    point under the Task #101 verifier section below.)
+  - **After editing
+    `artifacts/api-server/src/scripts/checkProductionHostnamePattern.ts`.**
+    The probe's unit tests already cover the decision matrix in
+    isolation; this rehearsal additionally verifies that the CLI
+    still propagates the right exit codes through `pnpm run` and
+    returns the right JSON line on stdout.
+
+  How to re-run: GitHub Actions UI → Workflows → "Rehearse
+  production-hostname-pattern post-deploy gate (manual)" → "Run
+  workflow". The job takes ~1 minute on a GitHub-hosted runner.
+  A red run names the specific failing fixture in the step's
+  `::error::` annotation (e.g. "expected exit 2 (page on-call),
+  got 0 — the gate would NOT fail a release with a misconfigured
+  production deploy") so the regression is unambiguous from the
+  notification alone.
 
 ### Post-deploy verifier: full readyz config block (Task #101)
 
