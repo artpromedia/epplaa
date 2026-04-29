@@ -5,6 +5,7 @@ import qrcode from "qrcode";
 import { db } from "./db";
 import { newSafeId } from "./ids";
 import { logger } from "./logger";
+import { detectNonHostnameProductionSignals } from "./productionSignals";
 
 /**
  * TOTP MFA primitives.
@@ -28,6 +29,78 @@ import { logger } from "./logger";
 const ALG = "aes-256-gcm";
 const KEY_BYTES = 32;
 const IV_BYTES = 12;
+
+/**
+ * Boot-time sanity check: production deploys MUST set
+ * `MFA_ENCRYPTION_KEY`.
+ *
+ * `encryptionKey()` (below) throws `"MFA_ENCRYPTION_KEY is required
+ * in production"` lazily on the first MFA enrollment / verification
+ * when `NODE_ENV=production` and the env var is unset. Two problems:
+ *
+ *   1. The throw is gated on `NODE_ENV === "production"` only —
+ *      a deploy that uses `REPLIT_DEPLOYMENT=1` /
+ *      `DEPLOYMENT_ENVIRONMENT=production` (other production-shape
+ *      signals) without `NODE_ENV=production` would silently encrypt
+ *      TOTP secrets under a SESSION_SECRET-derived key. That makes
+ *      MFA secrets only as strong as SESSION_SECRET on those deploys.
+ *   2. Even on a `NODE_ENV=production` deploy, the failure mode is
+ *      lazy: boot looks healthy, then the next user attempting to
+ *      enroll MFA gets a 5xx and on-call only finds out via a Sentry
+ *      capture from inside the route handler.
+ *
+ * This boot-time warning catches both — production-shape is detected
+ * via `detectNonHostnameProductionSignals` (so all three signals are
+ * covered, not just NODE_ENV), and the warning fires at boot rather
+ * than at first MFA enrollment.
+ *
+ * Modelled on the other `assertXxxConfiguredForProduction` helpers
+ * (see `docs/runbooks/production-secrets.md`). Warning, not a hard
+ * failure — the lazy throw at first enrollment is still the
+ * authoritative fail-closed control. Operators wire a Sentry / log-
+ * aggregator alert on the
+ * `mfa_encryption_key_missing_for_production` message tag.
+ *
+ * Pure function — takes `env` and a `log` sink so the unit test can
+ * exercise the staging-skipped, production-warned, and configured-
+ * silent paths without poisoning `process.env` or piping pino output.
+ */
+export type MfaEncryptionKeyConfigOutcome =
+  | { ok: true }
+  | { ok: false; reason: string };
+
+export function assertMfaEncryptionKeyConfiguredForProduction(
+  env: NodeJS.ProcessEnv,
+  log: { warn: (obj: unknown, msg: string) => void },
+): MfaEncryptionKeyConfigOutcome {
+  const productionSignals = detectNonHostnameProductionSignals(env);
+  if (productionSignals.length === 0) return { ok: true };
+  const raw = env.MFA_ENCRYPTION_KEY;
+  if (raw && raw.trim() !== "") return { ok: true };
+  const signalDetails = productionSignals.map((s) => s.detail).join("; ");
+  const reason =
+    "MFA_ENCRYPTION_KEY is not set on this production deploy. The " +
+    "lib/mfa.ts encryptionKey() lazy-throw is gated on NODE_ENV=production " +
+    "ONLY, so a deploy that uses REPLIT_DEPLOYMENT=1 or " +
+    "DEPLOYMENT_ENVIRONMENT=production without NODE_ENV=production would " +
+    "silently encrypt TOTP secrets under a SESSION_SECRET-derived key. " +
+    "Even on a NODE_ENV=production deploy, the failure mode is lazy " +
+    "(boot looks healthy, then the next MFA enrollment 5xxs). " +
+    `Detected production signal(s): ${signalDetails}. ` +
+    "Set MFA_ENCRYPTION_KEY (32 bytes hex/base64 preferred) — see " +
+    "docs/runbooks/production-secrets.md (MFA_ENCRYPTION_KEY section).";
+  log.warn(
+    {
+      node_env: env.NODE_ENV,
+      replit_deployment: env.REPLIT_DEPLOYMENT,
+      deployment_environment: env.DEPLOYMENT_ENVIRONMENT,
+      mfa_encryption_key: raw ? "[set-but-empty]" : null,
+      production_signals: productionSignals.map((s) => s.signal),
+    },
+    `mfa_encryption_key_missing_for_production: ${reason}`,
+  );
+  return { ok: false, reason };
+}
 
 function encryptionKey(): Buffer {
   const raw = process.env.MFA_ENCRYPTION_KEY;

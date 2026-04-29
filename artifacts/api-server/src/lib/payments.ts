@@ -13,6 +13,123 @@ import {
 } from "@workspace/payments";
 import { db, schema } from "./db";
 import { logger } from "./logger";
+import { detectNonHostnameProductionSignals } from "./productionSignals";
+
+/**
+ * Boot-time sanity check: production deploys MUST set at least one of
+ * `PAYSTACK_SECRET_KEY` or `FLUTTERWAVE_SECRET_KEY` (and
+ * `FLUTTERWAVE_WEBHOOK_HASH` if Flutterwave is the only gateway —
+ * see notes below).
+ *
+ * If neither real gateway is configured, `selectPrimaryAndSecondary`
+ * (below) selects the `DevMockGateway` for both slots — a fake
+ * payment processor that always returns `{ ok: true }` without
+ * touching a real card. On a production deploy that means
+ * **buyers cannot actually pay**: the checkout flow will appear to
+ * succeed (and order rows will be created), but no real authorization
+ * has happened. The `payments_initialized` info log surfaces
+ * `mode: "dev-mock"` at boot but it's exactly the kind of one-line
+ * boot signal that gets lost in normal startup chatter.
+ *
+ * The check WARNS when:
+ *
+ *   - production-shape is detected (any of `NODE_ENV=production`,
+ *     `REPLIT_DEPLOYMENT=1`, `DEPLOYMENT_ENVIRONMENT=production`),
+ *   - AND neither `PAYSTACK_SECRET_KEY` nor `FLUTTERWAVE_SECRET_KEY`
+ *     is set / non-empty.
+ *
+ * It also warns when only `FLUTTERWAVE_SECRET_KEY` is set without
+ * `FLUTTERWAVE_WEBHOOK_HASH` (the gateway will accept charges but
+ * cannot verify webhooks — silent settlement loss).
+ *
+ * Modelled on the other `assertXxxConfiguredForProduction` helpers
+ * (see `docs/runbooks/production-secrets.md`). Warning, not a hard
+ * failure: an internal-only deploy may legitimately ship without
+ * real payments while it's being stood up. Operators wire a Sentry /
+ * log-aggregator alert on the
+ * `payment_provider_missing_for_production` message tag.
+ *
+ * Pure function — takes `env` and a `log` sink so the unit test can
+ * exercise the staging-skipped, production-warned, and configured-
+ * silent paths without poisoning `process.env` or piping pino output.
+ */
+export type PaymentProviderConfigOutcome =
+  | { ok: true }
+  | { ok: false; reason: string };
+
+export function assertPaymentProviderConfiguredForProduction(
+  env: NodeJS.ProcessEnv,
+  log: { warn: (obj: unknown, msg: string) => void },
+): PaymentProviderConfigOutcome {
+  const productionSignals = detectNonHostnameProductionSignals(env);
+  if (productionSignals.length === 0) return { ok: true };
+  const paystack = (env.PAYSTACK_SECRET_KEY ?? "").trim();
+  const flutterwave = (env.FLUTTERWAVE_SECRET_KEY ?? "").trim();
+  const flutterwaveHash = (env.FLUTTERWAVE_WEBHOOK_HASH ?? "").trim();
+  const hasPaystack = paystack !== "";
+  const hasFlutterwave = flutterwave !== "";
+  const flutterwaveOnly = !hasPaystack && hasFlutterwave;
+  if (hasPaystack || hasFlutterwave) {
+    if (flutterwaveOnly && flutterwaveHash === "") {
+      // Charges would work, webhook verification would silently
+      // accept any payload — settlement events could be spoofed or
+      // dropped without notice.
+      const signalDetails = productionSignals
+        .map((s) => s.detail)
+        .join("; ");
+      const reason =
+        "FLUTTERWAVE_SECRET_KEY is set but FLUTTERWAVE_WEBHOOK_HASH is " +
+        "not, and Flutterwave is the only configured gateway. The " +
+        "gateway will accept charges but cannot verify webhooks, so " +
+        "settlement events may be spoofed or silently dropped. " +
+        `Detected production signal(s): ${signalDetails}. ` +
+        "Set FLUTTERWAVE_WEBHOOK_HASH — see " +
+        "docs/runbooks/production-secrets.md (Payments section).";
+      log.warn(
+        {
+          node_env: env.NODE_ENV,
+          replit_deployment: env.REPLIT_DEPLOYMENT,
+          deployment_environment: env.DEPLOYMENT_ENVIRONMENT,
+          paystack_secret_key: hasPaystack ? "[set]" : null,
+          flutterwave_secret_key: hasFlutterwave ? "[set]" : null,
+          flutterwave_webhook_hash: null,
+          missing: ["FLUTTERWAVE_WEBHOOK_HASH"],
+          production_signals: productionSignals.map((s) => s.signal),
+        },
+        `payment_provider_missing_for_production: ${reason}`,
+      );
+      return { ok: false, reason };
+    }
+    return { ok: true };
+  }
+  const signalDetails = productionSignals.map((s) => s.detail).join("; ");
+  const reason =
+    "Neither PAYSTACK_SECRET_KEY nor FLUTTERWAVE_SECRET_KEY is set on " +
+    "this production deploy. lib/payments.ts selectPrimaryAndSecondary " +
+    "falls back to DevMockGateway, which always returns { ok: true } " +
+    "without touching a real card. Buyers cannot actually pay — the " +
+    "checkout will appear to succeed but no real authorization has " +
+    "happened. " +
+    `Detected production signal(s): ${signalDetails}. ` +
+    "Set at least one of PAYSTACK_SECRET_KEY or FLUTTERWAVE_SECRET_KEY " +
+    "(and FLUTTERWAVE_WEBHOOK_HASH if Flutterwave is the only " +
+    "gateway) — see docs/runbooks/production-secrets.md " +
+    "(Payments section).";
+  log.warn(
+    {
+      node_env: env.NODE_ENV,
+      replit_deployment: env.REPLIT_DEPLOYMENT,
+      deployment_environment: env.DEPLOYMENT_ENVIRONMENT,
+      paystack_secret_key: null,
+      flutterwave_secret_key: null,
+      flutterwave_webhook_hash: null,
+      missing: ["PAYSTACK_SECRET_KEY", "FLUTTERWAVE_SECRET_KEY"],
+      production_signals: productionSignals.map((s) => s.signal),
+    },
+    `payment_provider_missing_for_production: ${reason}`,
+  );
+  return { ok: false, reason };
+}
 import { newPaymentAttemptId, newPaymentIntentId, newPaymentReference } from "./ids";
 import { requiredTierForOrder } from "./kyc";
 import { sellerSanctionsBlocked, manufacturerSanctionsBlocked } from "./sanctions";

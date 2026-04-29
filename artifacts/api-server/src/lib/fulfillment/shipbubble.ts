@@ -1,5 +1,94 @@
 import { logger } from "../logger";
-import { isProductionEnvironment } from "../productionSignals";
+import {
+  detectNonHostnameProductionSignals,
+  isProductionEnvironment,
+} from "../productionSignals";
+
+/**
+ * Boot-time sanity check: production deploys MUST set
+ * `SHIPBUBBLE_API_KEY` and `SHIPBUBBLE_SENDER_CODE`, plus
+ * `SHIPBUBBLE_WEBHOOK_SECRET` for inbound webhook verification.
+ *
+ * `ShipbubbleCarrier.isConfigured()` (below) only returns `true`
+ * when `SHIPBUBBLE_API_KEY` is set. If unset, every quote / dispatch
+ * call returns three deterministic stub service tiers
+ * (standard / express / same-day) priced from a small linear
+ * function of declared value + weight. The runtime
+ * `allowStubFallback()` production-signal guard already refuses to
+ * substitute the stub at runtime when production-shape is detected
+ * AND keys are configured (so a real-call failure fails closed
+ * instead of dispatching a synthetic shipment), but a deploy that
+ * never set the keys at all bypasses that guard entirely — the
+ * stub IS the carrier on a misconfigured production deploy. Buyers
+ * see fake rates and orders ship under fake tracking numbers.
+ *
+ * `SHIPBUBBLE_SENDER_CODE` is required for the real return-address
+ * call (used in dispatch); without it real Shipbubble dispatches
+ * return 4xx but the misconfiguration would only surface at the
+ * first dispatch attempt.
+ *
+ * `SHIPBUBBLE_WEBHOOK_SECRET` is required to verify the
+ * `x-shipbubble-signature` header on inbound tracking webhooks; if
+ * unset, the webhook handler in `routes/fulfillmentWebhooks.ts`
+ * cannot authenticate Shipbubble's callbacks and tracking events
+ * are silently dropped.
+ *
+ * Modelled on the other `assertXxxConfiguredForProduction` helpers
+ * (see `docs/runbooks/production-secrets.md`). Warning, not a hard
+ * failure — the runtime guards still fail closed at the consumer
+ * site for a partial misconfiguration. Operators wire a Sentry /
+ * log-aggregator alert on the
+ * `shipbubble_credentials_missing_for_production` message tag.
+ *
+ * Pure function — takes `env` and a `log` sink so the unit test can
+ * exercise the staging-skipped, production-warned (each var missing
+ * individually + multiple missing), and configured-silent paths
+ * without poisoning `process.env` or piping pino output.
+ */
+export type ShipbubbleConfigOutcome =
+  | { ok: true }
+  | { ok: false; reason: string };
+
+export function assertShipbubbleConfiguredForProduction(
+  env: NodeJS.ProcessEnv,
+  log: { warn: (obj: unknown, msg: string) => void },
+): ShipbubbleConfigOutcome {
+  const productionSignals = detectNonHostnameProductionSignals(env);
+  if (productionSignals.length === 0) return { ok: true };
+  const apiKey = (env.SHIPBUBBLE_API_KEY ?? "").trim();
+  const senderCode = (env.SHIPBUBBLE_SENDER_CODE ?? "").trim();
+  const webhookSecret = (env.SHIPBUBBLE_WEBHOOK_SECRET ?? "").trim();
+  const missing: string[] = [];
+  if (apiKey === "") missing.push("SHIPBUBBLE_API_KEY");
+  if (senderCode === "") missing.push("SHIPBUBBLE_SENDER_CODE");
+  if (webhookSecret === "") missing.push("SHIPBUBBLE_WEBHOOK_SECRET");
+  if (missing.length === 0) return { ok: true };
+  const signalDetails = productionSignals.map((s) => s.detail).join("; ");
+  const reason =
+    `${missing.join(" + ")} not set on this production deploy. ` +
+    "Without SHIPBUBBLE_API_KEY the carrier returns three deterministic " +
+    "stub service tiers and orders ship under fake tracking numbers; " +
+    "without SHIPBUBBLE_SENDER_CODE real dispatches 4xx; without " +
+    "SHIPBUBBLE_WEBHOOK_SECRET inbound tracking events fail signature " +
+    "verification and are silently dropped. " +
+    `Detected production signal(s): ${signalDetails}. ` +
+    "Set the missing env var(s) — see docs/runbooks/production-secrets.md " +
+    "(Shipbubble section).";
+  log.warn(
+    {
+      node_env: env.NODE_ENV,
+      replit_deployment: env.REPLIT_DEPLOYMENT,
+      deployment_environment: env.DEPLOYMENT_ENVIRONMENT,
+      shipbubble_api_key: apiKey === "" ? null : "[set]",
+      shipbubble_sender_code: senderCode === "" ? null : "[set]",
+      shipbubble_webhook_secret: webhookSecret === "" ? null : "[set]",
+      missing,
+      production_signals: productionSignals.map((s) => s.signal),
+    },
+    `shipbubble_credentials_missing_for_production: ${reason}`,
+  );
+  return { ok: false, reason };
+}
 import type {
   Carrier,
   DispatchRequest,

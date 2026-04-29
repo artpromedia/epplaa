@@ -1,6 +1,83 @@
 import { createHash } from "node:crypto";
 import { logger } from "../logger";
-import { isProductionEnvironment } from "../productionSignals";
+import {
+  detectNonHostnameProductionSignals,
+  isProductionEnvironment,
+} from "../productionSignals";
+
+/**
+ * Boot-time sanity check: production deploys MUST set both
+ * `OKHI_API_KEY` and `OKHI_BRANCH_ID`.
+ *
+ * `isConfigured()` (below) only returns `true` when BOTH are set; if
+ * either is missing the verification result is derived from a
+ * deterministic stub of the input hash. The `allowStubFallback()`
+ * production-signal guard already refuses to substitute the stub at
+ * runtime when production-shape is detected (so the misconfiguration
+ * fails closed at the next address-verification call), but the boot
+ * itself looks healthy and the misconfiguration only surfaces when a
+ * buyer tries to verify their address. This boot-time warning turns
+ * the runbook recommendation that "production must set OkHi creds"
+ * into an automated signal so on-call sees it within minutes of the
+ * next deploy.
+ *
+ * Modelled on the other `assertXxxConfiguredForProduction` helpers
+ * (see `docs/runbooks/production-secrets.md`). Warning, not a hard
+ * failure: an internal-only deploy may legitimately ship without
+ * OkHi while it's being stood up. Operators wire a Sentry / log-
+ * aggregator alert on the `okhi_credentials_missing_for_production`
+ * message tag.
+ *
+ * Pure function — takes `env` and a `log` sink so the unit test can
+ * exercise the staging-skipped, production-warned (each var missing
+ * individually + both missing), and configured-silent paths without
+ * poisoning `process.env` or piping pino output.
+ */
+export type OkHiConfigOutcome =
+  | { ok: true }
+  | { ok: false; reason: string };
+
+export function assertOkHiConfiguredForProduction(
+  env: NodeJS.ProcessEnv,
+  log: { warn: (obj: unknown, msg: string) => void },
+): OkHiConfigOutcome {
+  const productionSignals = detectNonHostnameProductionSignals(env);
+  if (productionSignals.length === 0) return { ok: true };
+  const apiKey = env.OKHI_API_KEY;
+  const branchId = env.OKHI_BRANCH_ID;
+  const apiKeyOk = Boolean(apiKey && apiKey.trim() !== "");
+  const branchOk = Boolean(branchId && branchId.trim() !== "");
+  if (apiKeyOk && branchOk) return { ok: true };
+  const missing: string[] = [];
+  if (!apiKeyOk) missing.push("OKHI_API_KEY");
+  if (!branchOk) missing.push("OKHI_BRANCH_ID");
+  const signalDetails = productionSignals.map((s) => s.detail).join("; ");
+  const reason =
+    `${missing.join(" + ")} not set on this production deploy. ` +
+    "OkHi address verification falls back to a deterministic stub " +
+    "place id derived from the input hash (lib/fulfillment/okhi.ts). " +
+    "The runtime production-signal guard in `allowStubFallback()` " +
+    "fails the next address-verification call closed, but boot looks " +
+    "healthy until then — every buyer who reaches the address-" +
+    "verification step sees a 5xx instead of a clear operator-facing " +
+    "alert. " +
+    `Detected production signal(s): ${signalDetails}. ` +
+    "Set the missing env var(s) — see docs/runbooks/production-secrets.md " +
+    "(OkHi section).";
+  log.warn(
+    {
+      node_env: env.NODE_ENV,
+      replit_deployment: env.REPLIT_DEPLOYMENT,
+      deployment_environment: env.DEPLOYMENT_ENVIRONMENT,
+      okhi_api_key: apiKeyOk ? "[set]" : apiKey ? "[set-but-empty]" : null,
+      okhi_branch_id: branchOk ? "[set]" : branchId ? "[set-but-empty]" : null,
+      missing,
+      production_signals: productionSignals.map((s) => s.signal),
+    },
+    `okhi_credentials_missing_for_production: ${reason}`,
+  );
+  return { ok: false, reason };
+}
 
 /**
  * OkHi address verification. Real integration uses the OkHi REST API to

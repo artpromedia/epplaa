@@ -1,7 +1,16 @@
 import { createServer } from "node:http";
 import { logger } from "./lib/logger";
 import { assertStubFulfillmentSafe } from "./lib/fulfillment/bootGuard";
+import { assertOkHiConfiguredForProduction } from "./lib/fulfillment/okhi";
+import { assertShipbubbleConfiguredForProduction } from "./lib/fulfillment/shipbubble";
+import { assertInternalApiKeyConfiguredForProduction } from "./lib/internalApiKey";
+import { assertMfaEncryptionKeyConfiguredForProduction } from "./lib/mfa";
+import { assertTermiiConfiguredForProduction } from "./lib/notifications/termii";
+import { assertPaymentProviderConfiguredForProduction } from "./lib/payments";
+import { assertSentryDsnConfiguredForProduction } from "./lib/sentry";
+import { assertSessionSecretConfiguredForProduction } from "./lib/sessionSecret";
 import { assertRateLimitStoreConfiguredForProduction } from "./middlewares/apiRateLimit";
+import { assertClerkSecretKeyConfiguredForProduction } from "./middlewares/clerkProxyMiddleware";
 import {
   assertProductionHostnamePatternConfigured,
   assertRehearsalKillSwitchSafe,
@@ -92,6 +101,96 @@ if (!stubFulfillmentGuard.ok) {
   process.exit(1);
 }
 
+// Boot-time sanity check (task #91): on production-shaped deploys,
+// warn loudly if SENTRY_DSN is unset. Without a DSN, initSentryServer
+// silently swaps the SDK for a no-op and every captureException call
+// becomes a drop — meaning every alert layered on top of Sentry
+// (rate_limit_redis_failure_threshold_breached, audit-chain anomaly
+// captures, etc.) is dead at the source. The runbook
+// (`docs/runbooks/production-secrets.md`) recommends configuring it
+// on every production deploy; this check turns that recommendation
+// into an automated boot-time signal. Warning, not a hard failure —
+// crash-looping every deploy that hasn't yet wired Sentry would be
+// more disruptive than the marginal observability gain. The
+// canonical alert for THIS specific check has to live in the log
+// aggregator (not Sentry) — Sentry can't tell you Sentry is off.
+assertSentryDsnConfiguredForProduction(process.env, logger);
+
+// Boot-time sanity check (task #91): on production-shaped deploys,
+// warn loudly if CLERK_SECRET_KEY is unset. Three code paths silently
+// fall back to insecure defaults when missing: the /api/__clerk
+// proxy strips the secret-key header, /auth/otp/verify returns a
+// noClerk stub that never provisions a Clerk user, and Socket.IO
+// connections skip token verification and join as anonymous viewers.
+// The runbook (`docs/runbooks/production-secrets.md`) covers how to
+// wire the alert. Warning, not a hard failure — a brand-new
+// production deploy may legitimately ship with auth disabled while
+// it's being stood up.
+assertClerkSecretKeyConfiguredForProduction(process.env, logger);
+
+// Boot-time sanity check (task #91): on production-shaped deploys,
+// warn loudly if SESSION_SECRET is unset / too short (< 16 chars).
+// SESSION_SECRET signs shipping-quote and address-verification
+// tokens and encrypts KYC documents at rest. Each consumer fails
+// closed at first use, so the misconfiguration is not silently
+// exploitable, but the failure mode is per-request 5xx storms
+// (KYC uploads bounce, checkout breaks) rather than a clean
+// operator-facing alert. The runbook
+// (`docs/runbooks/production-secrets.md`) covers how to wire the
+// alert. Warning, not a hard failure — the per-request throws at
+// the consumer sites are still the hard fail-closed control.
+assertSessionSecretConfiguredForProduction(process.env, logger);
+
+// Boot-time sanity check (task #91): on production-shaped deploys,
+// warn loudly if MFA_ENCRYPTION_KEY is unset. The lib/mfa.ts
+// encryptionKey() lazy throw is gated on NODE_ENV=production ONLY,
+// so a deploy that uses REPLIT_DEPLOYMENT=1 / DEPLOYMENT_ENVIRONMENT=production
+// without NODE_ENV=production would silently encrypt TOTP secrets
+// under a SESSION_SECRET-derived key. See
+// docs/runbooks/production-secrets.md.
+assertMfaEncryptionKeyConfiguredForProduction(process.env, logger);
+
+// Boot-time sanity check (task #91): on production-shaped deploys,
+// warn loudly if INTERNAL_API_KEY is unset. The /pudo, /promos, and
+// /referrals/payout cross-service webhooks all return 503
+// not_configured to every caller — fail-closed (no auth bypass) but
+// partner integrations stop working until the key is set. See
+// docs/runbooks/production-secrets.md.
+assertInternalApiKeyConfiguredForProduction(process.env, logger);
+
+// Boot-time sanity check (task #91): on production-shaped deploys,
+// warn loudly if TERMII_API_KEY is unset. The OTP issuer flips into
+// devEcho mode and returns the OTP code in the API response — every
+// phone OTP becomes trivially bypassable. SECURITY-CRITICAL. See
+// docs/runbooks/production-secrets.md.
+assertTermiiConfiguredForProduction(process.env, logger);
+
+// Boot-time sanity check (task #91): on production-shaped deploys,
+// warn loudly if neither PAYSTACK_SECRET_KEY nor FLUTTERWAVE_SECRET_KEY
+// is set, or if Flutterwave is the only gateway and
+// FLUTTERWAVE_WEBHOOK_HASH is unset. Without real gateway keys
+// lib/payments.ts falls back to DevMockGateway and buyers cannot
+// actually pay (checkout appears to succeed but no real authorization).
+// See docs/runbooks/production-secrets.md.
+assertPaymentProviderConfiguredForProduction(process.env, logger);
+
+// Boot-time sanity check (task #91): on production-shaped deploys,
+// warn loudly if OkHi creds (OKHI_API_KEY + OKHI_BRANCH_ID) are
+// unset. The runtime allowStubFallback() guard fails the next
+// address-verification call closed, but boot looks healthy until
+// then — every buyer who reaches the address-verification step sees
+// a 5xx. See docs/runbooks/production-secrets.md.
+assertOkHiConfiguredForProduction(process.env, logger);
+
+// Boot-time sanity check (task #91): on production-shaped deploys,
+// warn loudly if Shipbubble creds (SHIPBUBBLE_API_KEY +
+// SHIPBUBBLE_SENDER_CODE + SHIPBUBBLE_WEBHOOK_SECRET) are unset.
+// Without the API key the carrier returns deterministic stub rates
+// and orders ship under fake tracking numbers; without the webhook
+// secret inbound tracking events fail signature verification and are
+// silently dropped. See docs/runbooks/production-secrets.md.
+assertShipbubbleConfiguredForProduction(process.env, logger);
+
 // Test-only affordance for `src/index.boot.test.ts` (task #92). When set
 // to the exact sentinel value below, the entrypoint exits cleanly AFTER
 // all boot-time guards have run but BEFORE the PORT check /
@@ -101,11 +200,14 @@ if (!stubFulfillmentGuard.ok) {
 // (`RATE_LIMIT_STORE_ALLOW_MEMORY_IN_PRODUCTION=1`) reaches an exit-0
 // state without spinning up the full app on the test runner.
 //
-// The check is intentionally placed AFTER all boot-time guards so a
-// future refactor that drops the exit on a guard failure or reorders
-// the guards is still caught — the spawn test for the failing-guard
-// cases sees exit code 1 from the guard, not exit code 0 from this
-// affordance.
+// The check is intentionally placed AFTER all boot-time guards (the
+// hard-exit guards above and the warning-only secret asserts from
+// task #91) so a future refactor that drops the exit on a guard
+// failure or reorders the guards is still caught — the spawn test
+// for the failing-guard cases sees exit code 1 from the guard, not
+// exit code 0 from this affordance. Placing the sentinel last also
+// ensures the test exercises every boot-time check before exit, so
+// regressions in the warning asserts surface in the boot test too.
 //
 // Defense-in-depth against accidental production misuse:
 //   1. The env var name is double-underscored so it can't be confused

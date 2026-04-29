@@ -1,5 +1,6 @@
 import * as Sentry from "@sentry/node";
 import { logger } from "./logger";
+import { detectNonHostnameProductionSignals } from "./productionSignals";
 
 /**
  * Sentry server SDK init. Reads SENTRY_DSN; if absent we install a no-op
@@ -130,6 +131,91 @@ function buildCaptureContext(options?: CaptureOptions) {
   if (options.fingerprint) ctx.fingerprint = options.fingerprint;
   if (options.extra) ctx.extra = scrubObject(options.extra);
   return ctx;
+}
+
+/**
+ * Boot-time sanity check: production deploys MUST set `SENTRY_DSN`.
+ *
+ * Without a DSN, `initSentryServer` silently swaps the SDK for a no-op
+ * (`logger.info("sentry_disabled_no_dsn")`) and every call to
+ * `captureException` / `captureMessage` becomes a no-op. The fallout
+ * is severe and silent: every alert channel layered on top of Sentry
+ * is dead at the source. The `rate_limit_redis_failure_threshold_breached`
+ * fatal page, the `rate_limit_store_stuck_degraded` cron page, the
+ * per-failure `subsystem=rate_limit` rule, the audit-chain anomaly
+ * captures — none of them reach on-call. The `sentry_disabled_no_dsn`
+ * info log is the only signal an operator gets, and it's exactly the
+ * kind of one-line boot log that gets lost in normal startup chatter.
+ *
+ * Modelled on `assertRateLimitStoreConfiguredForProduction` (see
+ * `middlewares/apiRateLimit.ts`):
+ *
+ *   - If a production-shaped deploy is detected (any of `NODE_ENV=production`,
+ *     `REPLIT_DEPLOYMENT=1`, `DEPLOYMENT_ENVIRONMENT=production`),
+ *   - AND `SENTRY_DSN` is unset / empty / whitespace-only,
+ *   - THEN emit a loud structured warning naming the missing env var,
+ *     the production signals that triggered the check, and the
+ *     runbook section to read.
+ *
+ * Warning, not a hard failure: a single-replica internal-only
+ * production deploy may legitimately ship without Sentry while it's
+ * being stood up, and crash-looping every existing deploy that has
+ * not yet wired Sentry would be more disruptive than the marginal
+ * observability gain. Operators wire a Sentry / log-aggregator alert
+ * on the `sentry_dsn_missing_for_production` message tag (see
+ * `docs/runbooks/production-secrets.md`) so the misconfiguration
+ * shows up within minutes — though obviously the very alert pipe is
+ * what's being checked, so the LOG-AGGREGATOR alert is the canonical
+ * one for this specific check (Sentry can't tell you Sentry is off).
+ *
+ * Pure function — takes `env` and a `log` sink so the unit test can
+ * exercise the staging-skipped, production-warned, and configured-
+ * silent paths without poisoning `process.env` or piping pino output.
+ */
+export type SentryDsnConfigOutcome =
+  | { ok: true }
+  | { ok: false; reason: string };
+
+export function assertSentryDsnConfiguredForProduction(
+  env: NodeJS.ProcessEnv,
+  log: { warn: (obj: unknown, msg: string) => void },
+): SentryDsnConfigOutcome {
+  const productionSignals = detectNonHostnameProductionSignals(env);
+  if (productionSignals.length === 0) {
+    // Not a production deploy — Sentry is optional on staging / dev /
+    // preview environments. Nothing to warn about.
+    return { ok: true };
+  }
+  const raw = env.SENTRY_DSN;
+  if (raw && raw.trim() !== "") {
+    // Configured. We deliberately do NOT try to validate the DSN
+    // syntax here — `Sentry.init` will surface that at boot if the
+    // DSN is malformed, and re-validating would either duplicate the
+    // SDK's parser or drift from it.
+    return { ok: true };
+  }
+  const signalDetails = productionSignals.map((s) => s.detail).join("; ");
+  const reason =
+    "SENTRY_DSN is not set on this production deploy — initSentryServer " +
+    "will install a no-op shim and every captureException/captureMessage " +
+    "call will silently drop. Every alert layered on top of Sentry " +
+    "(rate_limit_redis_failure_threshold_breached, " +
+    "rate_limit_store_stuck_degraded, audit-chain anomaly captures, " +
+    "etc.) is dead at the source. " +
+    `Detected production signal(s): ${signalDetails}. ` +
+    "Set SENTRY_DSN — see docs/runbooks/production-secrets.md " +
+    "(SENTRY_DSN section) for the project-level DSN to use.";
+  log.warn(
+    {
+      node_env: env.NODE_ENV,
+      replit_deployment: env.REPLIT_DEPLOYMENT,
+      deployment_environment: env.DEPLOYMENT_ENVIRONMENT,
+      sentry_dsn: raw ?? null,
+      production_signals: productionSignals.map((s) => s.signal),
+    },
+    `sentry_dsn_missing_for_production: ${reason}`,
+  );
+  return { ok: false, reason };
 }
 
 export function captureException(err: unknown, options?: CaptureOptions): void {
