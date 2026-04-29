@@ -1,10 +1,10 @@
 import { Router, type IRouter, type Request, type Response } from "express";
-import { createHash } from "node:crypto";
-import { eq, and, inArray, or, sql } from "drizzle-orm";
+import { eq, inArray, or } from "drizzle-orm";
 import { db, schema } from "../lib/db";
 import { logger } from "../lib/logger";
-import { newShipmentEventId, newManifestRunId } from "../lib/ids";
+import { newManifestRunId } from "../lib/ids";
 import { ingestTrackingEvents } from "../lib/fulfillment/dispatch";
+import { buildManifestCsv } from "../lib/pudo/manifest";
 
 /**
  * PUDO partner endpoints. Third-party pickup-drop-off operators (Pargo,
@@ -43,71 +43,44 @@ router.get("/pudo/:partnerCode/manifest", async (req, res) => {
   if (!(await authPartner(req, res, partnerCode))) return;
 
   const today = new Date().toISOString().slice(0, 10);
-  // Find all locations operated by this PUDO partner.
-  const locations = await db
-    .select({ id: schema.fulfillmentLocationsTable.id, name: schema.fulfillmentLocationsTable.name, city: schema.fulfillmentLocationsTable.city })
-    .from(schema.fulfillmentLocationsTable)
-    .where(eq(schema.fulfillmentLocationsTable.partnerCode, partnerCode));
-  if (locations.length === 0) {
+  // CSV generation lives in `lib/pudo/manifest.ts` so the daily push
+  // cron (`lib/pudo/delivery.ts`, task #16) and this pull endpoint
+  // produce byte-identical bytes — that's what makes `contentHash` a
+  // useful dedupe key across both code paths.
+  const built = await buildManifestCsv(partnerCode);
+  if (built.locationIds.length === 0) {
     res.status(404).json({ error: "no_locations_for_partner" });
     return;
   }
-  const locIds = locations.map((l) => l.id);
-
-  // Pending PUDO shipments are box-carrier shipments whose order pickup
-  // location belongs to this partner and whose status is not yet collected
-  // or returned.
-  const orders = await db
-    .select()
-    .from(schema.ordersTable)
-    .where(
-      and(
-        sql`${schema.ordersTable.fulfillment} ->> 'locationId' IN (${sql.raw(locIds.map((id) => `'${id.replace(/'/g, "''")}'`).join(","))})`,
-        sql`${schema.ordersTable.status} IN ('ready_for_pickup','out_for_delivery','placed')`,
-      ),
-    );
-
-  const locationsById = new Map(locations.map((l) => [l.id, l]));
-  const lines: string[] = ["order_id,buyer_name,location_id,location_name,city,pickup_otp,created_at"];
-  for (const o of orders) {
-    const f = (o.fulfillment as Record<string, unknown>) ?? {};
-    const locId = String(f.locationId ?? "");
-    const loc = locationsById.get(locId);
-    const buyer = ((o.payment as { recipientName?: string } | null) ?? {}).recipientName ?? "";
-    const cells = [
-      o.id,
-      buyer,
-      locId,
-      loc?.name ?? "",
-      loc?.city ?? "",
-      o.pickupOtp ?? "",
-      o.createdAt.toISOString(),
-    ].map(csvCell);
-    lines.push(cells.join(","));
-  }
-  const csv = lines.join("\n");
 
   // Audit row — one per (partner, day). Re-runs on the same day update
   // the count + content hash so we can detect when nothing has changed.
-  const contentHash = createHash("sha256").update(csv).digest("hex").slice(0, 16);
+  // We DO NOT touch the delivery columns here (`status`, `destination`,
+  // `delivered_at`, `attempts`, `last_error`) — those are owned by the
+  // cron and overwriting them on a partner pull would lie about the
+  // push delivery state.
   await db
     .insert(schema.pudoManifestRunsTable)
     .values({
       id: newManifestRunId(),
       partnerCode,
       forDate: today,
-      shipmentCount: orders.length,
-      contentHash,
+      shipmentCount: built.shipmentCount,
+      contentHash: built.contentHash,
     })
     .onConflictDoUpdate({
       target: [schema.pudoManifestRunsTable.partnerCode, schema.pudoManifestRunsTable.forDate],
-      set: { shipmentCount: orders.length, contentHash, createdAt: new Date() },
+      set: {
+        shipmentCount: built.shipmentCount,
+        contentHash: built.contentHash,
+        createdAt: new Date(),
+      },
     });
 
   res
     .setHeader("content-type", "text/csv; charset=utf-8")
     .setHeader("content-disposition", `attachment; filename="${partnerCode}-${today}.csv"`)
-    .send(csv);
+    .send(built.csv);
 });
 
 router.post("/pudo/:partnerCode/collected", async (req, res) => {
@@ -178,11 +151,5 @@ router.post("/pudo/:partnerCode/collected", async (req, res) => {
   logger.info({ partnerCode, processed, rejected }, "pudo_collected_processed");
   res.json({ ok: true, processed, rejected });
 });
-
-function csvCell(s: string | null | undefined): string {
-  const v = String(s ?? "");
-  if (/[",\n]/.test(v)) return `"${v.replace(/"/g, '""')}"`;
-  return v;
-}
 
 export default router;

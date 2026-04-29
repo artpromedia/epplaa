@@ -19,6 +19,8 @@ import { runDailyReconciliation, recoverStuckRefundLocks } from "./lib/reconcili
 import { processDuePayouts } from "./lib/payments";
 import { drainOutbox } from "./lib/notifications";
 import { autoReturnExpiredBoxReservations } from "./routes/box";
+import { initPudoDeliverySchema } from "./lib/pudo/schema";
+import { runDailyPudoManifestDelivery } from "./lib/pudo/delivery";
 import { auditMutations, auditPiiReads, initAuditChain } from "./lib/audit";
 import { startAuditDlqMonitor } from "./lib/auditDlqMonitor";
 import { initAdminSchema } from "./lib/roles";
@@ -198,6 +200,24 @@ function startScheduledJobs(): void {
       );
     }, BOX_AUTO_RETURN_INTERVAL_MS);
   }, 120_000);
+  // PUDO daily manifest push (task #16): every 15 minutes the cron
+  // walks every active partner and, for those whose local clock has
+  // crossed 06:00 today, builds + delivers the manifest CSV via
+  // email or SFTP. The contentHash dedupe + per-(partner, day) row
+  // make overlapping ticks a no-op once the day's run is `sent`.
+  // Pull-mode partners (`delivery_method='none'`) are silently
+  // skipped — they keep using `GET /pudo/:partnerCode/manifest`.
+  const PUDO_DELIVERY_INTERVAL_MS = 15 * 60 * 1000;
+  setTimeout(() => {
+    void runDailyPudoManifestDelivery().catch((err) =>
+      logger.error({ err: (err as Error).message }, "pudo_manifest_delivery_failed"),
+    );
+    setInterval(() => {
+      void runDailyPudoManifestDelivery().catch((err) =>
+        logger.error({ err: (err as Error).message }, "pudo_manifest_delivery_failed"),
+      );
+    }, PUDO_DELIVERY_INTERVAL_MS);
+  }, 240_000);
   // NDPR processor: every 5 minutes pick up pending requests (assemble
   // export bundles, apply effective erases, etc.). Erase requests honour
   // the 30-day grace window via `effective_at`.
@@ -352,6 +372,14 @@ if (process.env.NODE_ENV !== "test") {
   // next scheduled tick lands.
   void initRetentionSchema().catch((err) =>
     logger.error({ err: (err as Error).message }, "retention_schema_init_failed"),
+  );
+  // PUDO daily-push delivery schema additions (Task #16): adds
+  // delivery configuration columns to `pudo_partners` and per-run
+  // delivery audit columns to `pudo_manifest_runs`. Strictly additive
+  // (`ADD COLUMN IF NOT EXISTS`), so old rows back-fill to safe
+  // defaults and the manifest endpoint keeps working unchanged.
+  void initPudoDeliverySchema().catch((err) =>
+    logger.error({ err: (err as Error).message }, "pudo_delivery_schema_init_failed"),
   );
   // OpenTelemetry SDK init. No-op when OTEL_EXPORTER_OTLP_ENDPOINT is
   // unset, which is the normal case in dev. In prod it ships traces from
