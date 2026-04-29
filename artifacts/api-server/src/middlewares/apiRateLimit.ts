@@ -933,6 +933,39 @@ export function getRateLimitStoreKind(): "memory" | "redis" {
 }
 
 /**
+ * Shared sliding-window bucket bump for OTHER middlewares that want
+ * the same Redis-backed counter store as `apiRateLimit`.
+ *
+ * Today this is consumed by `ipRateLimit` (OTP-send / high-cost public
+ * endpoints) so a multi-replica deploy with `RATE_LIMIT_STORE=redis`
+ * shares one set of per-IP counters across every api-server replica.
+ * Without sharing, each replica would own its own in-process counter
+ * and an attacker spreading traffic across replicas would multiply the
+ * effective cap by the replica count — exactly the bypass this task
+ * (#33) was filed to close. In dev / single-replica deploys (the
+ * default `RATE_LIMIT_STORE=memory` path) this falls back to the same
+ * `InMemoryStore` instance the api limiter uses, so behaviour is
+ * unchanged.
+ *
+ * Degrade posture matches `apiRateLimit`: on Redis outage the underlying
+ * `RedisStore.bump` returns `{ allowed: true }` and pages on-call via
+ * the shared `RedisFailureWatcher` rather than 429ing legitimate
+ * traffic. See `docs/runbooks/rate-limit-store.md`.
+ *
+ * Callers MUST namespace their `key` with a unique prefix (e.g.
+ * `"iprl:otp_start:..."`) so unrelated middlewares don't collide on a
+ * shared bucket. The Lua script keys directly off the passed string.
+ */
+export function bumpRateLimitBucket(
+  key: string,
+  windowMs: number,
+  max: number,
+  now: number = Date.now(),
+): Promise<BumpResult> {
+  return store.bump(key, now, windowMs, max);
+}
+
+/**
  * Rehearsal-only accessor for the singleton RedisFailureWatcher. Used
  * by the staging-only routes/healthzRehearsal.ts to inject a synthetic
  * stuck-degraded streak without breaking Redis. Exporting the watcher

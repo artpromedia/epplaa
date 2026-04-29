@@ -658,6 +658,21 @@ export async function getMfaStatus(userId: string): Promise<MfaStatus> {
   };
 }
 
+/**
+ * Persist a fresh "user X just satisfied MFA" record so subsequent
+ * mutating requests within `ASSERTION_TTL_MS` can pass the `requireMfa`
+ * gate without re-prompting.
+ *
+ * Cross-replica safety (task #33): the row lives in Postgres, NOT in
+ * an in-process Map, so an MFA challenge satisfied on api-server
+ * replica A is immediately visible to a follow-up mutation routed to
+ * replica B. A per-process cache would let an attacker reuse a
+ * one-shot challenge against multiple replicas (or, equivalently,
+ * fail-closed for legitimate users whose follow-up request landed on
+ * a different replica than the one that issued the assertion). The
+ * `mfa_challenges` table is the shared source of truth for every
+ * replica.
+ */
 async function recordChallenge(userId: string, kind: string): Promise<void> {
   const id = newSafeId("mfc_");
   const expiresAt = new Date(Date.now() + ASSERTION_TTL_MS);
@@ -667,6 +682,13 @@ async function recordChallenge(userId: string, kind: string): Promise<void> {
   `);
 }
 
+/**
+ * Read the shared `mfa_challenges` table to decide whether the user
+ * has a still-valid MFA assertion. See `recordChallenge` for the
+ * cross-replica rationale — the comparison uses Postgres `now()` so
+ * every replica reads the same authoritative clock and the same row
+ * set, even when `Date.now()` skews between hosts.
+ */
 export async function hasRecentChallenge(userId: string): Promise<boolean> {
   const row = await db.execute<{ id: string }>(sql`
     SELECT id FROM mfa_challenges
