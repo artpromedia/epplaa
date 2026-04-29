@@ -337,3 +337,250 @@ d("notifications outbox — exactly-once under retries", () => {
     }
   }, 60_000);
 });
+
+/**
+ * Email suppression contract for the outbox (task #141).
+ *
+ * Co-located with the lease tests because both suites need real DB +
+ * the `__setOutboxChannelResolverForTests` seam, and Vitest pools
+ * give each test FILE its own worker — keeping these in the same
+ * file means they cannot race against the lease tests for shared DB
+ * rows (a separate file's drain in another worker would otherwise
+ * happily claim and ConsoleChannel-deliver our staged email rows).
+ *
+ * Three behaviours we cannot allow to regress:
+ *
+ *   1. Pre-suppressed addresses short-circuit at drain time — the
+ *      provider adapter is not called and the row is marked
+ *      `delivered` with `last_error = 'suppressed'`.
+ *
+ *   2. Postmark `406` ("inactive recipient") suppresses the address
+ *      AND marks the offending row `delivered/suppressed` so we stop
+ *      pummelling a known-bad recipient.
+ *
+ *   3. SendGrid `5xx` is treated identically as a hard bounce.
+ *
+ * Skips when DATABASE_URL is unset, matching the lease suite above.
+ */
+const SUPP_TEST_PREFIX = "test_outbox_supp_";
+
+d("notifications outbox — email suppression", () => {
+  type Db = typeof import("../../db")["db"];
+  type Schema = typeof import("../../db")["schema"];
+  type Sql = typeof import("drizzle-orm")["sql"];
+  type Eq = typeof import("drizzle-orm")["eq"];
+  type Outbox = typeof import("../outbox");
+  type Suppressions = typeof import("../suppressions");
+  type ChannelKind = import("../types").ChannelKind;
+  type NotificationChannel = import("../types").NotificationChannel;
+  type NotificationMessage = import("../types").NotificationMessage;
+  type SendResult = import("../types").SendResult;
+
+  let db: Db;
+  let schema: Schema;
+  let sql: Sql;
+  let eq: Eq;
+  let outbox: Outbox;
+  let supp: Suppressions;
+  let registryChannels: typeof import("../registry")["channels"];
+
+  async function cleanup(): Promise<void> {
+    await db.execute(
+      sql`DELETE FROM notifications_outbox WHERE id LIKE ${SUPP_TEST_PREFIX + "%"};`,
+    );
+    await db.execute(
+      sql`DELETE FROM notification_suppressions WHERE email LIKE ${SUPP_TEST_PREFIX + "%"};`,
+    );
+    await db.execute(
+      sql`DELETE FROM users WHERE clerk_id LIKE ${SUPP_TEST_PREFIX + "%"};`,
+    );
+  }
+
+  /**
+   * Insert a `users` row + a pending email outbox row keyed on the
+   * same id so the drain's `users.email` lookup resolves to the email
+   * we want to send to. `_to: '*'` is the marker the email branch
+   * uses to trigger that lookup at drain time. Antedated so the row
+   * sorts to the front of the FIFO and gets claimed in the first
+   * batch.
+   */
+  async function stageEmailRow(opts: { email: string }): Promise<{
+    rowId: string;
+    userId: string;
+    email: string;
+  }> {
+    const rowId = `${SUPP_TEST_PREFIX}${crypto.randomBytes(8).toString("hex")}`;
+    const userId = `${SUPP_TEST_PREFIX}u_${crypto.randomBytes(6).toString("hex")}`;
+    await db.insert(schema.usersTable).values({ clerkId: userId, email: opts.email });
+    await db.insert(schema.notificationsOutboxTable).values({
+      id: rowId,
+      userId,
+      eventType: "promo",
+      channel: "email",
+      payload: { _to: "*", title: "hi", body: "b" },
+      status: "pending",
+      attempts: 0,
+      nextAttemptAt: ANTEDATE,
+    });
+    return { rowId, userId, email: opts.email };
+  }
+
+  /**
+   * Build an email-channel adapter the test fully controls. Records
+   * every call so we can assert "provider was/was not invoked" — the
+   * central guarantee of the suppression short-circuit.
+   */
+  function buildEmailChannel(opts: {
+    response?: SendResult;
+  } = {}): { adapter: NotificationChannel; calls: NotificationMessage[] } {
+    const calls: NotificationMessage[] = [];
+    const adapter: NotificationChannel = {
+      kind: "email",
+      isConfigured: () => true,
+      send: async (msg: NotificationMessage): Promise<SendResult> => {
+        calls.push(msg);
+        return opts.response ?? { ok: true, providerMessageId: "pm_test", provider: "postmark" };
+      },
+    };
+    return { adapter, calls };
+  }
+
+  /**
+   * Resolver returning the supplied email adapter ONLY for the email
+   * channel; other channels fall through to the real registry so an
+   * unrelated SMS/push row caught by the same drain doesn't crash.
+   */
+  function emailOnlyResolver(
+    emailAdapter: NotificationChannel,
+  ): import("../outbox").OutboxTestChannelResolver {
+    return (kind: ChannelKind, pushKind?: "fcm" | "web") => {
+      if (kind === "email") return emailAdapter;
+      return registryChannels.for(kind, pushKind);
+    };
+  }
+
+  beforeAll(async () => {
+    ({ db, schema } = await import("../../db"));
+    ({ sql, eq } = await import("drizzle-orm"));
+    outbox = await import("../outbox");
+    supp = await import("../suppressions");
+    ({ channels: registryChannels } = await import("../registry"));
+    await cleanup();
+  }, 30_000);
+
+  afterEach(async () => {
+    outbox.__setOutboxChannelResolverForTests(null);
+    await cleanup();
+  });
+
+  afterAll(async () => {
+    await cleanup();
+  });
+
+  it("(d) skips a pre-suppressed address: provider not called, row marked delivered/suppressed", async () => {
+    const email = `${SUPP_TEST_PREFIX}sup_${crypto.randomBytes(4).toString("hex")}@example.com`;
+    await supp.suppressEmail({ email, reason: "account_deleted", source: "ndpr" });
+    const { rowId } = await stageEmailRow({ email });
+
+    const { adapter, calls } = buildEmailChannel();
+    outbox.__setOutboxChannelResolverForTests(emailOnlyResolver(adapter));
+
+    await outbox.drainOutbox();
+
+    expect(calls.filter((c) => c.to === email)).toHaveLength(0);
+    const [row] = await db
+      .select()
+      .from(schema.notificationsOutboxTable)
+      .where(eq(schema.notificationsOutboxTable.id, rowId));
+    expect(row?.status).toBe("delivered");
+    expect(row?.lastError).toBe("suppressed");
+    expect(row?.deliveredAt).toBeTruthy();
+  }, 30_000);
+
+  it("(e) Postmark 406 response suppresses the address and marks the row delivered/suppressed", async () => {
+    const email = `${SUPP_TEST_PREFIX}pm406_${crypto.randomBytes(4).toString("hex")}@example.com`;
+    const { rowId } = await stageEmailRow({ email });
+
+    const { adapter } = buildEmailChannel({
+      response: {
+        ok: false,
+        errorCode: "406",
+        errorMessage: "Inactive recipient",
+        provider: "postmark",
+      },
+    });
+    outbox.__setOutboxChannelResolverForTests(emailOnlyResolver(adapter));
+
+    await outbox.drainOutbox();
+
+    expect(await supp.isEmailSuppressed(email)).toBe(true);
+    const [supRow] = await db
+      .select()
+      .from(schema.notificationSuppressionsTable)
+      .where(eq(schema.notificationSuppressionsTable.email, email.toLowerCase()));
+    expect(supRow?.reason).toBe("inactive_recipient");
+    expect(supRow?.source).toBe("postmark");
+
+    const [row] = await db
+      .select()
+      .from(schema.notificationsOutboxTable)
+      .where(eq(schema.notificationsOutboxTable.id, rowId));
+    expect(row?.status).toBe("delivered");
+    expect(row?.lastError).toBe("suppressed");
+  }, 30_000);
+
+  it("(f) SendGrid 5xx response suppresses the address as a hard bounce", async () => {
+    const email = `${SUPP_TEST_PREFIX}sg5xx_${crypto.randomBytes(4).toString("hex")}@example.com`;
+    const { rowId } = await stageEmailRow({ email });
+
+    const { adapter } = buildEmailChannel({
+      response: {
+        ok: false,
+        errorCode: "503",
+        errorMessage: "service unavailable",
+        provider: "sendgrid",
+      },
+    });
+    outbox.__setOutboxChannelResolverForTests(emailOnlyResolver(adapter));
+
+    await outbox.drainOutbox();
+
+    const [supRow] = await db
+      .select()
+      .from(schema.notificationSuppressionsTable)
+      .where(eq(schema.notificationSuppressionsTable.email, email.toLowerCase()));
+    expect(supRow?.reason).toBe("hard_bounce");
+    expect(supRow?.source).toBe("sendgrid");
+    const [row] = await db
+      .select()
+      .from(schema.notificationsOutboxTable)
+      .where(eq(schema.notificationsOutboxTable.id, rowId));
+    expect(row?.status).toBe("delivered");
+    expect(row?.lastError).toBe("suppressed");
+  }, 30_000);
+
+  it("(g) transient errors do NOT suppress — they fall through to the normal retry/backoff path", async () => {
+    const email = `${SUPP_TEST_PREFIX}trans_${crypto.randomBytes(4).toString("hex")}@example.com`;
+    const { rowId } = await stageEmailRow({ email });
+
+    const { adapter } = buildEmailChannel({
+      response: {
+        ok: false,
+        errorCode: "exception",
+        errorMessage: "ECONNRESET",
+        provider: "postmark",
+      },
+    });
+    outbox.__setOutboxChannelResolverForTests(emailOnlyResolver(adapter));
+
+    await outbox.drainOutbox();
+
+    expect(await supp.isEmailSuppressed(email)).toBe(false);
+    const [row] = await db
+      .select()
+      .from(schema.notificationsOutboxTable)
+      .where(eq(schema.notificationsOutboxTable.id, rowId));
+    expect(row?.status).toBe("pending");
+    expect(row?.lastError).toContain("ECONNRESET");
+  }, 30_000);
+});

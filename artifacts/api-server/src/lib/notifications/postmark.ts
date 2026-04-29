@@ -95,11 +95,17 @@ export class PostmarkEmailChannel implements NotificationChannel {
           ok: false,
           errorCode,
           errorMessage: data.Message ?? `http ${res.status}`,
+          provider: "postmark",
         };
       }
-      return { ok: true, providerMessageId: data.MessageID };
+      return { ok: true, providerMessageId: data.MessageID, provider: "postmark" };
     } catch (err) {
-      return { ok: false, errorCode: "exception", errorMessage: (err as Error).message };
+      return {
+        ok: false,
+        errorCode: "exception",
+        errorMessage: (err as Error).message,
+        provider: "postmark",
+      };
     }
   }
 }

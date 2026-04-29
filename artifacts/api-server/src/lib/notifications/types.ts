@@ -16,6 +16,16 @@ export interface SendResult {
   providerMessageId?: string;
   errorCode?: string;
   errorMessage?: string;
+  /**
+   * Identifies which underlying adapter produced this result. Set by
+   * each adapter (e.g. `"postmark"`, `"sendgrid"`) so the outbox can
+   * route provider-specific error codes through
+   * `classifyEmailErrorForSuppression()` — Postmark `406` and SendGrid
+   * `5xx` both mean "stop sending to this address" but they share no
+   * vocabulary. Optional because legacy adapters and the console stub
+   * do not need it.
+   */
+  provider?: string;
 }
 
 export type ChannelKind = "sms" | "whatsapp" | "push" | "email";

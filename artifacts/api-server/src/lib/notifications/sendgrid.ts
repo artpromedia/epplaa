@@ -60,6 +60,7 @@ export class SendGridEmailChannel implements NotificationChannel {
         ok: false,
         errorCode: "bad_from",
         errorMessage: `EMAIL_FROM is not a valid mailbox: ${fromMailbox}`,
+        provider: "sendgrid",
       };
     }
 
@@ -89,7 +90,7 @@ export class SendGridEmailChannel implements NotificationChannel {
       // and the message id in the X-Message-Id response header.
       if (res.status === 202 || (res.status >= 200 && res.status < 300)) {
         const providerMessageId = res.headers.get("x-message-id") ?? undefined;
-        return { ok: true, providerMessageId };
+        return { ok: true, providerMessageId, provider: "sendgrid" };
       }
       const data = (await res.json().catch(() => ({}))) as {
         errors?: { message?: string }[];
@@ -103,9 +104,15 @@ export class SendGridEmailChannel implements NotificationChannel {
         ok: false,
         errorCode: String(res.status),
         errorMessage: message,
+        provider: "sendgrid",
       };
     } catch (err) {
-      return { ok: false, errorCode: "exception", errorMessage: (err as Error).message };
+      return {
+        ok: false,
+        errorCode: "exception",
+        errorMessage: (err as Error).message,
+        provider: "sendgrid",
+      };
     }
   }
 }

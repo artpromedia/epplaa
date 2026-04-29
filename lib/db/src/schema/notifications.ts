@@ -84,3 +84,46 @@ export const notificationsOutboxTable = pgTable(
 );
 
 export type OutboxRow = typeof notificationsOutboxTable.$inferSelect;
+
+/**
+ * Suppression list for transactional email. Entries are keyed by the
+ * lowercased recipient email (the granularity at which providers reject
+ * mail) and explain WHY the address is not allowed to receive further
+ * mail. The drain step in `notifications/outbox.ts` short-circuits any
+ * email aimed at a suppressed address — marking the row delivered with
+ * `last_error = 'suppressed'` rather than letting it count as a real
+ * send.
+ *
+ * `reason` values:
+ *   - `hard_bounce`         — provider returned a permanent failure
+ *   - `inactive_recipient`  — Postmark code 406 / SendGrid invalid
+ *   - `unsubscribe`         — recipient explicitly opted out
+ *   - `account_deleted`     — user removed their account (NDPR erase)
+ *
+ * `source` records which subsystem inserted the row (`postmark`,
+ * `sendgrid`, `ndpr`, `system`) so operators can audit suppression
+ * trends per provider. `userId` is best-effort — for bounce-driven
+ * suppressions we may not know the originating user.
+ *
+ * The unique index on `email` makes inserts idempotent via
+ * `ON CONFLICT DO NOTHING`; the first reason wins so an account
+ * deletion does not get overwritten by a subsequent stale bounce.
+ */
+export const notificationSuppressionsTable = pgTable(
+  "notification_suppressions",
+  {
+    id: text("id").primaryKey(),
+    email: text("email").notNull(),
+    reason: text("reason").notNull(),
+    source: text("source").notNull().default(""),
+    userId: text("user_id"),
+    details: jsonb("details").$type<Record<string, unknown>>().notNull().default({}),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    uniqEmail: uniqueIndex("notification_suppressions_email_uniq").on(t.email),
+    byCreatedAt: index("notification_suppressions_created_idx").on(t.createdAt),
+  }),
+);
+
+export type NotificationSuppressionRow = typeof notificationSuppressionsTable.$inferSelect;

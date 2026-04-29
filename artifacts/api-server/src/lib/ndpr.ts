@@ -5,6 +5,7 @@ import { db, schema } from "./db";
 import { logger } from "./logger";
 import { recordAudit } from "./audit";
 import { getUserId } from "./auth";
+import { suppressUserEmail } from "./notifications/suppressions";
 
 const ERASE_GRACE_MS = 30 * 24 * 3600 * 1000;
 const EXPORT_RATE_LIMIT_MS = 30 * 24 * 3600 * 1000; // one export per 30 days
@@ -149,6 +150,14 @@ function buildExportPdf(bundle: {
  *   user identifier where possible (orders keep userId for FIRS audits).
  */
 export async function applyErase(userId: string): Promise<void> {
+  // NDPR: stop talking to a deleted account. The suppression must be
+  // recorded BEFORE we anonymise the row — once `email` is overwritten
+  // with the `<id>@erased.invalid` placeholder the original address is
+  // lost and a stray queued notification could still be drained against
+  // the new email of any future user that ever reuses the address. We
+  // also clear any pending outbox rows below, but the suppression entry
+  // is the durable guard against future enqueues.
+  await suppressUserEmail(userId, "account_deleted", "ndpr", { trigger: "applyErase" });
   const anonymised = `erased_${userId.slice(-6)}`;
   await db
     .update(schema.usersTable)

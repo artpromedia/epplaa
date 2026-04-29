@@ -4,6 +4,11 @@ import { logger } from "../logger";
 import { newSafeId } from "../ids";
 import { channels } from "./registry";
 import { resolveChannelsForEvent } from "./prefs";
+import {
+  classifyEmailErrorForSuppression,
+  isEmailSuppressed,
+  suppressEmail,
+} from "./suppressions";
 import type {
   ChannelKind,
   EventType,
@@ -250,6 +255,21 @@ export async function drainOutbox(): Promise<{ delivered: number; failed: number
         delivered++;
         continue;
       }
+      // Honour the suppression list BEFORE invoking the provider. A
+      // suppressed address (hard bounce, NDPR account-deleted, etc) is
+      // a permanent terminal state — re-sending damages our sender
+      // reputation and, in the deletion case, is an NDPR breach. We
+      // count the row as `delivered` (the message had nowhere to go
+      // and never will) with `last_error = 'suppressed'` so dashboards
+      // can distinguish real successful sends from suppressed skips.
+      if (await isEmailSuppressed(u.email)) {
+        await db
+          .update(schema.notificationsOutboxTable)
+          .set({ status: "delivered", deliveredAt: new Date(), lastError: "suppressed" })
+          .where(eq(schema.notificationsOutboxTable.id, row.id));
+        delivered++;
+        continue;
+      }
       const adapter = resolveChannel("email");
       const result = await adapter.send({ to: u.email, title, body, url, payload });
       if (result.ok) {
@@ -259,6 +279,45 @@ export async function drainOutbox(): Promise<{ delivered: number; failed: number
           .set({ status: "delivered", deliveredAt: new Date() })
           .where(eq(schema.notificationsOutboxTable.id, row.id));
       } else {
+        // Permanent provider failures (Postmark "inactive recipient",
+        // SendGrid 5xx hard bounce per task #141) populate the
+        // suppression list and stop retrying — repeated retries to a
+        // known-bad address damage deliverability for legitimate mail.
+        // Transient errors stay null and fall through to the normal
+        // retry/backoff path below.
+        const reason = classifyEmailErrorForSuppression(result.provider, result.errorCode);
+        if (reason) {
+          await suppressEmail({
+            email: u.email,
+            reason,
+            source: (result.provider === "postmark" || result.provider === "sendgrid")
+              ? result.provider
+              : "system",
+            userId: row.userId,
+            details: {
+              outboxId: row.id,
+              eventType: row.eventType,
+              errorCode: result.errorCode,
+              errorMessage: result.errorMessage,
+            },
+          });
+          logger.info(
+            {
+              outboxId: row.id,
+              userId: row.userId,
+              reason,
+              provider: result.provider,
+              errorCode: result.errorCode,
+            },
+            "email_suppressed_after_provider_error",
+          );
+          await db
+            .update(schema.notificationsOutboxTable)
+            .set({ status: "delivered", deliveredAt: new Date(), lastError: "suppressed" })
+            .where(eq(schema.notificationsOutboxTable.id, row.id));
+          delivered++;
+          continue;
+        }
         await rescheduleOrFail(row.id, row.attempts, result.errorMessage ?? "email_failed");
         failed++;
       }
