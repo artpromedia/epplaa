@@ -467,12 +467,31 @@ export interface MfaStatus {
 
 const ASSERTION_TTL_MS = 15 * 60 * 1000; // 15 min
 
+/**
+ * Normalize a timestamp column from `db.execute` raw SQL into a real
+ * `Date`. Drizzle's typed query builder runs values through its column
+ * type parsers (giving you a `Date`), but `db.execute(sql\`…\`)` returns
+ * the row as the underlying `pg` driver delivered it, where TIMESTAMPTZ
+ * arrives as a string like `"2026-04-29 02:24:19.178034+00"`. Calling
+ * `.toISOString()` on that string blows up with TypeError, which is
+ * exactly the 500 the `/mfa/status` route was hitting in production.
+ *
+ * Returning `null` for unparseable inputs keeps the route serializable
+ * even if the driver ever surfaces something unexpected.
+ */
+function toDateOrNull(value: Date | string | null | undefined): Date | null {
+  if (value == null) return null;
+  if (value instanceof Date) return value;
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
 export async function getMfaStatus(userId: string): Promise<MfaStatus> {
   const row = await db.execute<{
     kind: string;
     status: string;
-    enrolled_at: Date | null;
-    last_used_at: Date | null;
+    enrolled_at: Date | string | null;
+    last_used_at: Date | string | null;
     backup_codes_hashed: string[];
   }>(sql`
     SELECT kind, status, enrolled_at, last_used_at, backup_codes_hashed
@@ -493,8 +512,8 @@ export async function getMfaStatus(userId: string): Promise<MfaStatus> {
   return {
     enrolled: true,
     kind: r.kind === "totp" ? "totp" : null,
-    enrolledAt: r.enrolled_at,
-    lastUsedAt: r.last_used_at,
+    enrolledAt: toDateOrNull(r.enrolled_at),
+    lastUsedAt: toDateOrNull(r.last_used_at),
     backupCodesRemaining: r.backup_codes_hashed.length,
     recentlyAsserted: recently,
   };
