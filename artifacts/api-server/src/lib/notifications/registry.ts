@@ -2,7 +2,8 @@ import { ConsoleChannel } from "./console";
 import { TermiiChannel } from "./termii";
 import { AfricasTalkingSmsChannel } from "./africastalking";
 import { FcmChannel, WebPushChannel } from "./push";
-import { EmailChannel } from "./email";
+import { PostmarkEmailChannel } from "./postmark";
+import { SendGridEmailChannel } from "./sendgrid";
 import { logger } from "../logger";
 import type { ChannelKind, NotificationChannel, NotificationMessage, SendResult } from "./types";
 
@@ -99,7 +100,19 @@ class ChannelRegistry {
     this.whatsapp = buildChannel("whatsapp", [new TermiiChannel("whatsapp")]);
     this.fcm = new FcmChannel();
     this.webpush = new WebPushChannel();
-    this.email = new EmailChannel();
+    // Email: Postmark is the primary transactional provider (purpose-
+    // built segregated transactional pool — better deliverability for
+    // single-recipient security nudges like the MFA backup-codes
+    // email). SendGrid is the secondary so a Postmark outage rolls
+    // over to a real provider, NOT to the no-op stub that this
+    // channel used to default to (which silently marked outbox rows
+    // delivered without anyone receiving the email — see task #72).
+    // buildChannel() filters out unconfigured providers and only
+    // wraps in FailoverChannel when 2+ real providers are present;
+    // when zero are configured (local dev) it falls back to the
+    // ConsoleChannel so the enqueue → drain → delivered pipeline
+    // still completes without external services.
+    this.email = buildChannel("email", [new PostmarkEmailChannel(), new SendGridEmailChannel()]);
   }
 
   for(kind: ChannelKind, pushKind?: "fcm" | "web"): NotificationChannel {
