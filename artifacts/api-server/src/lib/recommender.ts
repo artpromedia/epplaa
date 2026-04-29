@@ -1,5 +1,6 @@
 import { sql } from "drizzle-orm";
 import { db } from "./db";
+import { toDateOrNull } from "./dbTimestamps";
 import { logger } from "./logger";
 import type { SearchProductRow } from "./search";
 
@@ -124,6 +125,11 @@ export async function trendingStreams(limit = 10): Promise<TrendingStream[]> {
     return cache.value.slice(0, limit);
   }
   try {
+    // Note: `started_at` is typed as `Date | string | null` because raw
+    // `db.execute` SQL returns TIMESTAMPTZ as the pg driver string, NOT
+    // as a `Date` (the typed query builder is what runs the column type
+    // parser). Always normalise via `toDateOrNull()` before doing date
+    // arithmetic — see `./dbTimestamps` for the full pitfall write-up.
     const rows = await db.execute<{
       id: string;
       title: string;
@@ -133,7 +139,7 @@ export async function trendingStreams(limit = 10): Promise<TrendingStream[]> {
       is_live: boolean;
       current_viewers: number;
       peak_viewers: number;
-      started_at: Date | null;
+      started_at: Date | string | null;
     }>(sql`
       SELECT id, title, host_name, host_avatar, poster_image, is_live,
              current_viewers, peak_viewers, started_at
@@ -146,7 +152,8 @@ export async function trendingStreams(limit = 10): Promise<TrendingStream[]> {
       LIMIT 100
     `);
     const scored: TrendingStream[] = rows.rows.map((r) => {
-      const ageSec = r.started_at ? Math.max(1, (now - new Date(r.started_at).getTime()) / 1000) : 900;
+      const startedAt = toDateOrNull(r.started_at);
+      const ageSec = startedAt ? Math.max(1, (now - startedAt.getTime()) / 1000) : 900;
       const growth = r.current_viewers / Math.sqrt(ageSec / 60 + 1);
       const score = (r.is_live ? 100 : 0) + growth + r.peak_viewers * 0.05;
       return {
