@@ -14,6 +14,10 @@ import {
 import { db, schema } from "./db";
 import { logger } from "./logger";
 import { detectNonHostnameProductionSignals } from "./productionSignals";
+import {
+  getPaymentGatewayWatcher,
+  registerPaymentGatewayWatcher,
+} from "./subsystemHealth";
 
 /**
  * Boot-time sanity check: production deploys MUST set at least one of
@@ -191,6 +195,28 @@ class DbHealthStore implements HealthStore {
           lastEventAt: new Date(),
         },
       });
+    // Also feed the in-process SubsystemFailureWatcher so the same
+    // success/failure stream that powers the in-DB circuit breaker
+    // also drives the duration-based stuck-degraded alert via
+    // /healthz's `subsystems` map. We deliberately do this AFTER the
+    // DB write so a failure to persist the counter row doesn't also
+    // hide the health signal from /healthz — but a thrown DB error
+    // would skip the watcher update, which is fine because the call
+    // site (`GatewayRouter.recordAndMaybeTrip`) already treats a
+    // health-store throw as "best effort".
+    //
+    // Watchers are only registered for real, configured gateways
+    // (registered at module init below). The dev-mock gateway is
+    // never registered: its "success" is fake and a permanently-
+    // healthy `paymentGatewayDevmock` entry would actively mislead
+    // on-call. `getPaymentGatewayWatcher` returns undefined for
+    // unregistered gateways, so we silently no-op rather than
+    // throwing.
+    const watcher = getPaymentGatewayWatcher(gateway);
+    if (watcher) {
+      if (ok) watcher.recordSuccess();
+      else watcher.record();
+    }
   }
 
   async openCircuit(gateway: GatewayName, until: Date): Promise<void> {
@@ -242,6 +268,24 @@ const selection = selectPrimaryAndSecondary();
 export const gatewayRouter = new GatewayRouter(selection.primary, selection.secondary, healthStore);
 export const gateways = { paystack, flutterwave, devMock };
 export const PAYMENTS_MODE = selection.effectiveMode;
+
+// Register a SubsystemFailureWatcher per real, configured gateway so
+// /healthz's `subsystems` map exposes a stable entry per gateway from
+// boot — even before the first charge — and the duration alert
+// (`scripts/checkHealthzDegraded.ts`) can iterate them. We only
+// register configured real gateways: a dev-mock fallback would
+// publish a permanently-healthy `paymentGatewayDevmock` entry that
+// hides the matching `payment_provider_missing_for_production` boot
+// warning, and an unconfigured gateway would publish a stuck-healthy
+// entry that confuses on-call during triage.
+//
+// Registration is idempotent so a hot-reload that re-evaluates this
+// module does not lose the existing in-process streak state.
+for (const gw of [paystack, flutterwave]) {
+  if (gw.isConfigured()) {
+    registerPaymentGatewayWatcher(gw.name);
+  }
+}
 
 logger.info(
   { mode: PAYMENTS_MODE, primary: selection.primary.name, secondary: selection.secondary.name },

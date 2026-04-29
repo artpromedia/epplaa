@@ -419,10 +419,24 @@ The `subsystems` map currently exposes:
   duration-alert envelope as the other two subsystems; no extra
   polling required because every audited request acts as a
   heartbeat.
+- `paymentGateway<Name>` — one entry per real, configured payment
+  gateway (e.g. `paymentGatewayPaystack`, `paymentGatewayFlutterwave`).
+  Fed by the same gateway success/failure stream that powers the
+  in-DB circuit-breaker counters in `gateway_health` (see
+  `lib/payments.ts:DbHealthStore.record`). Per-gateway rather than a
+  single combined `paymentGateway` entry: Paystack and Flutterwave
+  are independent upstreams with independent circuit breakers, and a
+  combined watcher would reset the moment EITHER gateway saw a
+  success — masking the case where Paystack has been stuck for an
+  hour while Flutterwave silently absorbs failover traffic. Watchers
+  are only registered for gateways whose secret is configured; a
+  dev-mock-only deploy exposes no `paymentGateway*` entries (the
+  matching `payment_provider_missing_for_production` boot warning is
+  what surfaces that misconfiguration).
 
-New subsystems (payment-gateway circuit breakers, …) can be added
-by creating a `SubsystemFailureWatcher` instance and including its
-snapshot in the map; the probe will pick them up automatically.
+New subsystems can be added by creating a `SubsystemFailureWatcher`
+instance and including its snapshot in the map; the probe will pick
+them up automatically.
 
 The page reason names the offending subsystem (e.g. `db degraded for
 540123ms (> threshold 300000ms)`) so on-call doesn't have to re-curl

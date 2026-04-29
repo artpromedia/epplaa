@@ -66,9 +66,12 @@ vi.mock("../lib/logger", () => ({
   },
 }));
 
-const { auditHealthWatcher, dbHealthWatcher } = await import(
-  "../lib/subsystemHealth"
-);
+const {
+  auditHealthWatcher,
+  dbHealthWatcher,
+  registerPaymentGatewayWatcher,
+  __resetPaymentGatewayWatchersForTests,
+} = await import("../lib/subsystemHealth");
 const { default: healthRouter, getReadyzConfigBlock } = await import("./health");
 const { __resetProductionEnvCacheForTests } = await import(
   "../lib/productionSignals"
@@ -154,6 +157,7 @@ beforeEach(() => {
   storeKindMock = "redis";
   dbHealthWatcher.__reset();
   auditHealthWatcher.__reset();
+  __resetPaymentGatewayWatchersForTests();
   clearProductionConfigEnv();
   __resetProductionEnvCacheForTests();
 });
@@ -313,6 +317,125 @@ describe("GET /healthz (liveness)", () => {
     expect(res.body.subsystems.db.failureCount).toBeGreaterThanOrEqual(1);
     // Other subsystems remain healthy — only the failing one is flagged.
     expect(res.body.subsystems.rateLimitStore.state).toBe("healthy");
+  });
+
+  it("exposes one entry per registered payment gateway under paymentGateway<Name> keys, healthy by default", async () => {
+    // The map shape is the contract the duration alert
+    // (`scripts/checkHealthzDegraded.ts`) iterates: each registered
+    // real gateway must show up with the same `{ state,
+    // failureCount, firstFailureAt, lastRecoveredAt }` shape as the
+    // existing rateLimitStore + db entries so the probe doesn't
+    // need per-subsystem branching.
+    registerPaymentGatewayWatcher("paystack");
+    registerPaymentGatewayWatcher("flutterwave");
+    const res = await request(buildApp()).get("/healthz");
+    expect(res.status).toBe(200);
+    expect(res.body.subsystems.paymentGatewayPaystack).toEqual({
+      state: "healthy",
+      failureCount: 0,
+      firstFailureAt: null,
+      lastRecoveredAt: null,
+    });
+    expect(res.body.subsystems.paymentGatewayFlutterwave).toEqual({
+      state: "healthy",
+      failureCount: 0,
+      firstFailureAt: null,
+      lastRecoveredAt: null,
+    });
+  });
+
+  it("does NOT expose any paymentGateway* entry when no real gateway is configured (dev-mock fallback)", async () => {
+    // A deploy without PAYSTACK_SECRET_KEY / FLUTTERWAVE_SECRET_KEY
+    // routes to DevMockGateway whose "success" is fake. Publishing a
+    // permanently-healthy `paymentGatewayDevmock` entry would mask
+    // the matching `payment_provider_missing_for_production` boot
+    // warning during triage, so the registry stays empty and only
+    // the canonical non-payment subsystem entries (rateLimitStore,
+    // db, auditChain) are exposed.
+    const res = await request(buildApp()).get("/healthz");
+    expect(res.status).toBe(200);
+    expect(Object.keys(res.body.subsystems).sort()).toEqual([
+      "auditChain",
+      "db",
+      "rateLimitStore",
+    ]);
+    for (const k of Object.keys(res.body.subsystems)) {
+      expect(k.startsWith("paymentGateway")).toBe(false);
+    }
+  });
+
+  it("flips a payment gateway entry to degraded with a sticky firstFailureAt across the failure streak", async () => {
+    // Mirror the rate-limit-store + db tests: a stuck-degraded
+    // gateway must surface as `state=degraded` with a stable
+    // `firstFailureAt` even as `failureCount` climbs across
+    // successive failed charges. This is the timestamp the duration
+    // alert subtracts from `Date.now()` to decide whether to page.
+    const watcher = registerPaymentGatewayWatcher("paystack");
+    watcher.record(1_700_000_000_000);
+    watcher.record(1_700_000_001_000);
+    watcher.record(1_700_000_002_000);
+
+    let res = await request(buildApp()).get("/healthz");
+    expect(res.body.subsystems.paymentGatewayPaystack).toEqual({
+      state: "degraded",
+      failureCount: 3,
+      firstFailureAt: 1_700_000_000_000,
+      lastRecoveredAt: null,
+    });
+
+    // Streak deepens — failureCount climbs but firstFailureAt is
+    // sticky so the duration alert keeps measuring against the
+    // original start of the incident, not the most recent failure.
+    watcher.record(1_700_000_003_000);
+    res = await request(buildApp()).get("/healthz");
+    expect(res.body.subsystems.paymentGatewayPaystack.failureCount).toBe(4);
+    expect(res.body.subsystems.paymentGatewayPaystack.firstFailureAt).toBe(
+      1_700_000_000_000,
+    );
+  });
+
+  it("clears the payment gateway streak and stamps lastRecoveredAt on the next successful charge", async () => {
+    // Recovery semantics must match the other watchers: a single
+    // success closes the streak, resets the counters, and stamps
+    // `lastRecoveredAt` so dashboards can timeline the incident
+    // without grepping logs.
+    const watcher = registerPaymentGatewayWatcher("paystack");
+    watcher.record(1_700_000_000_000);
+    watcher.record(1_700_000_001_000);
+    watcher.recordSuccess(1_700_000_005_000);
+
+    const res = await request(buildApp()).get("/healthz");
+    expect(res.body.subsystems.paymentGatewayPaystack).toEqual({
+      state: "healthy",
+      failureCount: 0,
+      firstFailureAt: null,
+      lastRecoveredAt: 1_700_000_005_000,
+    });
+  });
+
+  it("flags ONE gateway as degraded while a co-registered gateway stays healthy (independent failure modes)", async () => {
+    // The whole reason for per-gateway watchers (vs. one combined
+    // `paymentGateway` entry): Paystack stuck while Flutterwave
+    // absorbs failover traffic must page on Paystack alone. A
+    // shared watcher would reset the moment Flutterwave succeeded.
+    const paystack = registerPaymentGatewayWatcher("paystack");
+    registerPaymentGatewayWatcher("flutterwave");
+    paystack.record(1_700_000_000_000);
+    paystack.record(1_700_000_001_000);
+
+    const res = await request(buildApp()).get("/healthz");
+    expect(res.body.subsystems.paymentGatewayPaystack.state).toBe(
+      "degraded",
+    );
+    expect(res.body.subsystems.paymentGatewayPaystack.firstFailureAt).toBe(
+      1_700_000_000_000,
+    );
+    expect(res.body.subsystems.paymentGatewayFlutterwave.state).toBe(
+      "healthy",
+    );
+    expect(
+      res.body.subsystems.paymentGatewayFlutterwave.firstFailureAt,
+    ).toBeNull();
   });
 
   it("clears the DB streak on /healthz once /readyz observes a successful DB ping", async () => {

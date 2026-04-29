@@ -139,3 +139,100 @@ export const dbHealthWatcher = new SubsystemFailureWatcher();
  * successful write without ever paging.
  */
 export const auditHealthWatcher = new SubsystemFailureWatcher();
+
+/**
+ * Per-payment-gateway watchers, keyed by the gateway's canonical name
+ * (`"paystack"`, `"flutterwave"`, ...). Driven by every gateway
+ * success/failure observation made via `lib/payments.ts` — the same
+ * stream of events that already feeds the in-DB circuit-breaker
+ * counters in `gateway_health`.
+ *
+ * Why a separate watcher per gateway rather than a single combined
+ * `paymentGateway` entry: Paystack and Flutterwave are independent
+ * upstreams with independent failure modes, and the existing
+ * `GatewayRouter` opens their circuit breakers independently. A single
+ * combined watcher would reset the moment EITHER gateway saw a
+ * success, which would mask the case where Paystack has been stuck
+ * for an hour while Flutterwave (the silent failover) keeps
+ * succeeding — exactly the "checkout silently routes to fallbacks
+ * but on-call has no /healthz-driven page until charges visibly
+ * stall" failure mode this watcher is meant to surface.
+ *
+ * Watchers are registered lazily by `lib/payments.ts` at module init
+ * for every gateway whose secret is configured (so a deploy without
+ * Flutterwave creds does not advertise a permanently-healthy
+ * `paymentGatewayFlutterwave` entry). The dev-mock gateway is never
+ * registered: it is only selected when no real gateway is configured,
+ * its "success" is fake, and the matching
+ * `payment_provider_missing_for_production` boot warning is what
+ * surfaces that misconfiguration.
+ */
+const paymentGatewayWatchers = new Map<string, SubsystemFailureWatcher>();
+
+/**
+ * Register (or look up) the watcher for a given gateway. Idempotent
+ * so a hot-reload that re-runs `lib/payments.ts` does not lose the
+ * existing streak state.
+ */
+export function registerPaymentGatewayWatcher(
+  gateway: string,
+): SubsystemFailureWatcher {
+  let w = paymentGatewayWatchers.get(gateway);
+  if (!w) {
+    w = new SubsystemFailureWatcher();
+    paymentGatewayWatchers.set(gateway, w);
+  }
+  return w;
+}
+
+/**
+ * Look up the watcher for a gateway without registering one. Returns
+ * `undefined` for unregistered gateways (e.g. dev-mock) so callers can
+ * skip the no-op record path cheaply.
+ */
+export function getPaymentGatewayWatcher(
+  gateway: string,
+): SubsystemFailureWatcher | undefined {
+  return paymentGatewayWatchers.get(gateway);
+}
+
+/**
+ * Snapshot every registered payment-gateway watcher in one pass for
+ * /healthz. Returns `{ subsystemKey -> snapshot }` keyed by the
+ * `paymentGateway<Capitalised>` convention used in the /healthz
+ * `subsystems` map (e.g. `paymentGatewayPaystack`). Stable iteration
+ * order means the JSON output is deterministic across requests.
+ */
+export function getPaymentGatewaySubsystemSnapshots(): Record<
+  string,
+  SubsystemSnapshot
+> {
+  const out: Record<string, SubsystemSnapshot> = {};
+  for (const [name, watcher] of paymentGatewayWatchers) {
+    out[paymentGatewaySubsystemKey(name)] = watcher.getSnapshot();
+  }
+  return out;
+}
+
+/**
+ * Build the /healthz `subsystems` map key for a given gateway name.
+ * Centralised so the test suite, the route handler, and any future
+ * dashboard generator stay in lockstep on the `paymentGateway<Name>`
+ * convention. Capitalising the first character keeps the key
+ * camelCase-friendly for downstream typed clients.
+ */
+export function paymentGatewaySubsystemKey(gateway: string): string {
+  if (gateway.length === 0) return "paymentGateway";
+  return (
+    "paymentGateway" + gateway.charAt(0).toUpperCase() + gateway.slice(1)
+  );
+}
+
+/**
+ * Test-only: clear the registry between cases so a previously-
+ * registered watcher from another test file does not leak into a
+ * fresh test's /healthz assertions. Mirrors `SubsystemFailureWatcher.__reset`.
+ */
+export function __resetPaymentGatewayWatchersForTests(): void {
+  paymentGatewayWatchers.clear();
+}

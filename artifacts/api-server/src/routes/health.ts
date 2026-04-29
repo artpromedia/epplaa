@@ -15,6 +15,7 @@ import {
 import {
   auditHealthWatcher,
   dbHealthWatcher,
+  getPaymentGatewaySubsystemSnapshots,
   type SubsystemSnapshot,
 } from "../lib/subsystemHealth";
 import {
@@ -81,6 +82,18 @@ router.get("/healthz", (_req, res) => {
     },
     db: dbStatus,
     auditChain: auditStatus,
+    // One entry per real, configured payment gateway (e.g.
+    // `paymentGatewayPaystack`, `paymentGatewayFlutterwave`). Driven
+    // by the same gateway success/failure stream that powers the
+    // in-DB circuit-breaker counters in `gateway_health`. Per-gateway
+    // (rather than a single combined `paymentGateway` entry) so the
+    // duration alert pages on a stuck Paystack even while Flutterwave
+    // continues to absorb failover traffic — see the comment block on
+    // `paymentGatewayWatchers` in lib/subsystemHealth.ts. When no
+    // real gateway is configured (dev-mock fallback), no entries are
+    // exposed; the matching `payment_provider_missing_for_production`
+    // boot warning is what surfaces that misconfiguration.
+    ...getPaymentGatewaySubsystemSnapshots(),
   };
   res.json({
     status: "ok",
