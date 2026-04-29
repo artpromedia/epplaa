@@ -815,3 +815,267 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
           exit $failed
+
+  rehearse-chat-firing:
+    name: "Rehearse production probe's chat-firing block (FIRING + RESOLVED) on staging"
+    # Run AFTER the per-subsystem matrix above so the two don't
+    # contend for the same in-process watchers on staging. The
+    # workflow-level `concurrency: rehearse-healthz-degraded` already
+    # guarantees only one workflow run at a time; `needs: rehearse`
+    # serialises this job behind the matrix WITHIN the run.
+    needs: rehearse
+    # `always()` so a matrix entry failure (e.g. the db pager
+    # regression) doesn't suppress this entirely separate signal —
+    # the chat-firing path is its own pager wiring and we want to
+    # know if it broke even when something else is also broken. Same
+    # kill switch as the matrix (HEALTHZ_REHEARSAL_ENABLED) so flipping
+    # the rehearsal off silences this job too. The chat-firing
+    # rehearsal also requires the production probe's NOTIFY_WEBHOOK
+    # to be configured (or its dedicated rehearsal variant); the
+    # `Verify required config` step below catches the missing-secret
+    # case explicitly so the failure mode is obvious in the run log.
+    if: ${{ always() && vars.HEALTHZ_REHEARSAL_ENABLED == '1' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+
+    env:
+      STAGING_BASE_URL: ${{ vars.HEALTHZ_REHEARSAL_STAGING_BASE_URL }}
+      HEALTHZ_REHEARSAL_TOKEN: ${{ secrets.HEALTHZ_REHEARSAL_TOKEN }}
+      # One subsystem is enough — the production probe's chat-firing
+      # block branches on exit code (0 vs 2), not on subsystem name,
+      # so rehearsing rateLimitStore exercises the same code path
+      # that would fire for db. Keeping it at one subsystem avoids
+      # double-posting to the rehearsal channel every Sunday.
+      SUBSYSTEM: rateLimitStore
+      INJECT_DURATION_MS: ${{ vars.HEALTHZ_REHEARSAL_INJECT_DURATION_MS || '600000' }}
+      # Threshold low enough that the 10-min synthetic streak
+      # comfortably trips a page on iteration 1.
+      HEALTHZ_DEGRADED_ALERT_THRESHOLD_MS: ${{ vars.HEALTHZ_REHEARSAL_THRESHOLD_MS || '60000' }}
+      HEALTHZ_PROBE_TIMEOUT_MS: '5000'
+      HEALTHZ_URL: ${{ vars.HEALTHZ_REHEARSAL_STAGING_BASE_URL }}/api/healthz
+      # Prefer the dedicated rehearsal webhook (routes to
+      # `#alerts-rehearsal` so #ops doesn't see weekly synthetic
+      # FIRING/RESOLVED posts). Falls back to the production
+      # NOTIFY_WEBHOOK so a repo that hasn't configured a separate
+      # webhook still rehearses the chat path — operators who don't
+      # want #ops noise should configure the dedicated secret.
+      NOTIFY_WEBHOOK: ${{ secrets.HEALTHZ_PROBE_REHEARSAL_NOTIFY_WEBHOOK || secrets.HEALTHZ_PROBE_NOTIFY_WEBHOOK }}
+      NOTIFY_CHANNEL: ${{ vars.HEALTHZ_PROBE_REHEARSAL_NOTIFY_CHANNEL || '#alerts-rehearsal' }}
+      # Rehearsal-only overrides for the shared probe loop script.
+      # Defaults are 5 × 60s in production; here we want fast
+      # iteration so the rehearsal completes in ~15s instead of 5m.
+      PROBE_LOOP_ITERATIONS: '3'
+      PROBE_LOOP_SLEEP_SECONDS: '5'
+      # Mid-loop clear hook: after iteration 1 (which paged), POST
+      # clear-stuck-degraded so iteration 2 sees a recovered
+      # subsystem and the probe's chat-resolved branch fires too.
+      # This is what lets a single rehearsal run exercise BOTH the
+      # FIRING and the RESOLVED chat posts.
+      REHEARSAL_CLEAR_AFTER_ITERATION: '1'
+      REHEARSAL_CLEAR_URL: ${{ vars.HEALTHZ_REHEARSAL_STAGING_BASE_URL }}/api/_rehearsal/clear-stuck-degraded
+      REHEARSAL_CLEAR_TOKEN: ${{ secrets.HEALTHZ_REHEARSAL_TOKEN }}
+      REHEARSAL_CLEAR_SUBSYSTEM: rateLimitStore
+      # File the shared script appends `<kind> <http_code>` lines to
+      # for every notify_chat call. The verification step below greps
+      # this for `firing 200|204` and `resolved 200|204` so we assert
+      # both posts landed instead of just trusting a "no errors"
+      # signal — a silently rotated webhook would still produce no
+      # errors visible to the loop's exit code.
+      NOTIFY_LOG_FILE: /tmp/rehearsal-notify-log.txt
+      # Sentry forwarding deliberately disabled in this job. The
+      # matrix above already exercises the Sentry pager path; here
+      # we are exclusively rehearsing the *chat* path. Forwarding to
+      # Sentry would either pollute the production project (if we
+      # reused the production DSN) or require a separate DSN that's
+      # already covered by the matrix's existing rehearsal Sentry
+      # configuration.
+      SENTRY_DSN: ''
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Verify required config is present
+        id: verify_config
+        run: |
+          set -e
+          missing=()
+          [ -n "$STAGING_BASE_URL" ] || missing+=("vars.HEALTHZ_REHEARSAL_STAGING_BASE_URL")
+          [ -n "$HEALTHZ_REHEARSAL_TOKEN" ] || missing+=("secrets.HEALTHZ_REHEARSAL_TOKEN")
+          # Either the dedicated rehearsal webhook OR the production
+          # webhook must be configured — otherwise there's nothing
+          # for this job to rehearse and we'd produce a permanently
+          # red signal that doesn't map to a real regression.
+          if [ -z "$NOTIFY_WEBHOOK" ]; then
+            missing+=("secrets.HEALTHZ_PROBE_REHEARSAL_NOTIFY_WEBHOOK or secrets.HEALTHZ_PROBE_NOTIFY_WEBHOOK")
+          fi
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::error::missing required config for chat-firing rehearsal: ${missing[*]}"
+            exit 1
+          fi
+          echo "ok — chat-firing rehearsal will post to ${NOTIFY_CHANNEL}"
+
+      - name: Inject synthetic stuck-degraded streak into staging
+        id: inject
+        run: |
+          set -e
+          now_ms=$(($(date +%s%N) / 1000000))
+          first_failure_at=$((now_ms - INJECT_DURATION_MS))
+          resp=$(curl -sS -w '\n%{http_code}' \
+            -X POST "$STAGING_BASE_URL/api/_rehearsal/inject-stuck-degraded" \
+            -H "Content-Type: application/json" \
+            -H "X-Rehearsal-Token: $HEALTHZ_REHEARSAL_TOKEN" \
+            --data "{\"subsystem\":\"$SUBSYSTEM\",\"firstFailureAt\":$first_failure_at,\"failureCount\":3}")
+          body=$(printf '%s' "$resp" | head -n -1)
+          code=$(printf '%s' "$resp" | tail -n 1)
+          echo "inject response (HTTP $code): $body"
+          if [ "$code" != "200" ]; then
+            echo "::error::inject endpoint returned HTTP $code — chat-firing rehearsal can't proceed without a synthetic streak"
+            exit 1
+          fi
+          # Sanity: assert the server confirms a durationMs >
+          # threshold so the probe's first iteration is guaranteed
+          # to page (otherwise the FIRING chat post would never be
+          # exercised and the rehearsal would silently no-op).
+          duration_ms=$(printf '%s' "$body" | jq -r '.durationMs // 0')
+          if [ "$duration_ms" -le "$HEALTHZ_DEGRADED_ALERT_THRESHOLD_MS" ]; then
+            echo "::error::injected durationMs=$duration_ms is not > threshold $HEALTHZ_DEGRADED_ALERT_THRESHOLD_MS — clock skew?"
+            exit 1
+          fi
+
+      - name: Run production probe loop against staging (assert FIRING + RESOLVED chat posts)
+        id: rehearse_chat
+        run: |
+          # Invoke the SAME script the production per-minute probe
+          # uses. The PROBE_LOOP_* and REHEARSAL_* env vars set on
+          # the job tell it to:
+          #   - run 3 iterations with a 5s sleep
+          #   - mid-loop POST clear-stuck-degraded after iteration 1
+          #     so iteration 2 observes recovery
+          #   - log every notify_chat outcome to NOTIFY_LOG_FILE so
+          #     we can assert both FIRING and RESOLVED were posted
+          : > "$NOTIFY_LOG_FILE"
+          set +e
+          bash "$GITHUB_WORKSPACE/.github/scripts/healthz-probe-loop.sh"
+          # Iteration 1 exits 2 (page) which makes the script exit 1
+          # — that's expected in a rehearsal. The real assertion is
+          # on the notify log below, NOT on the loop's exit code.
+          set -e
+          echo "--- notify log ---"
+          cat "$NOTIFY_LOG_FILE"
+          echo "------------------"
+
+          # Assert the production probe's chat-firing block produced
+          # AT LEAST ONE successful (HTTP 200 or 204) entry of each
+          # kind. The current shared script's dedup guards mean only
+          # one of each lands per run today, but this assertion is
+          # written to be robust to future retry/backoff additions:
+          # a future change that adds a retry on a transient 429
+          # would produce e.g. `firing 429` then `firing 200` — that
+          # MUST count as a passing rehearsal, not a failing one,
+          # because the eventual delivery is what matters to on-call.
+          #
+          # We deliberately do NOT fail just because a non-2xx line
+          # exists alongside a 2xx — the latter wins. We DO fail
+          # when:
+          #   - no line of that kind exists (chat branch never ran)
+          #   - all lines of that kind are non-2xx (every attempt
+          #     failed; on-call would not have been reached in a
+          #     real outage)
+          for kind in firing resolved; do
+            lines=$(grep "^$kind " "$NOTIFY_LOG_FILE" || true)
+            if [ -z "$lines" ]; then
+              if [ "$kind" = "firing" ]; then
+                echo "::error::no FIRING chat post observed — the production probe's chat-firing branch did not run, or the dedup guard regressed. Walk healthz-probe-loop.sh's exit==2 / notified_firing==0 block."
+              else
+                echo "::error::no RESOLVED chat post observed — either the mid-loop clear didn't take (check rehearsal clear endpoint) or the production probe's chat-resolved branch regressed. Walk the notified_firing==1 / notified_resolved==0 block."
+              fi
+              exit 1
+            fi
+
+            # Pull every code for this kind, then search for any
+            # success. printf is used (not echo -e) so the codes
+            # land on separate lines for grep -E -x exact matching.
+            codes=$(printf '%s\n' "$lines" | awk '{print $2}')
+            if printf '%s\n' "$codes" | grep -E -x '200|204' > /dev/null; then
+              success_code=$(printf '%s\n' "$codes" | grep -E -x '200|204' | head -n1)
+              attempt_count=$(printf '%s\n' "$codes" | wc -l | awk '{print $1}')
+              echo "$kind chat post landed at $NOTIFY_CHANNEL (HTTP $success_code, $attempt_count attempt(s) total)"
+              continue
+            fi
+
+            # No 2xx found — diagnose using the WORST code seen
+            # (skipped > 000 > non-2xx HTTP) so the error message
+            # points at the most actionable failure mode. Today the
+            # script only emits one line per kind so this picks the
+            # only line; if a retry layer is added later, this picks
+            # the most diagnostic of the failed attempts.
+            if printf '%s\n' "$codes" | grep -F -x 'skipped' > /dev/null; then
+              echo "::error::$kind chat post was skipped — NOTIFY_WEBHOOK was empty inside the loop. This shouldn't happen if Verify config passed; file a bug against the rehearsal job."
+              exit 1
+            fi
+            if printf '%s\n' "$codes" | grep -F -x '000' > /dev/null; then
+              echo "::error::$kind chat post failed at the curl level (no HTTP response from $NOTIFY_CHANNEL) on every attempt. DNS/TLS/network from the runner, OR the webhook URL was rotated and now resolves nowhere. Codes seen: $(printf '%s' "$codes" | tr '\n' ' ')"
+              exit 1
+            fi
+            echo "::error::$kind chat post returned non-2xx on every attempt (codes seen: $(printf '%s' "$codes" | tr '\n' ' '); expected at least one 200 or 204). The webhook URL is reachable but Slack/Teams rejected every request — typical causes: rotated/revoked webhook, archived destination channel, request body shape regression, sustained rate-limit. The next real outage's $kind heads-up would also fail to reach $NOTIFY_CHANNEL until this is fixed."
+            exit 1
+          done
+          echo "OK — both FIRING and RESOLVED chat posts landed at $NOTIFY_CHANNEL; the production probe's chat-firing block is healthy."
+
+      - name: Clear synthetic streak (always run as backstop)
+        if: ${{ always() }}
+        run: |
+          # Belt-and-braces. The probe loop's mid-loop hook already
+          # POSTed clear-stuck-degraded after iteration 1, but if
+          # the loop crashed before the hook fired (e.g. pnpm install
+          # failed mid-iteration) staging could still be in a
+          # synthetic streak. Leaving it would cause the per-minute
+          # probe workflow to start paging on-call for real until
+          # someone notices and resets manually.
+          set +e
+          resp=$(curl -sS -w '\n%{http_code}' \
+            -X POST "$STAGING_BASE_URL/api/_rehearsal/clear-stuck-degraded" \
+            -H "Content-Type: application/json" \
+            -H "X-Rehearsal-Token: $HEALTHZ_REHEARSAL_TOKEN" \
+            --data "{\"subsystem\":\"$SUBSYSTEM\"}")
+          body=$(printf '%s' "$resp" | head -n -1)
+          code=$(printf '%s' "$resp" | tail -n 1)
+          echo "backstop clear response (HTTP $code): $body"
+          # Don't fail the job here — if rehearse_chat already
+          # cleared, this is a no-op and a non-200 just means staging
+          # was already healthy. If staging is unreachable, the
+          # matrix above's clear step would already have failed and
+          # surfaced the same signal.
+
+      - name: Summarise chat-firing rehearsal in run summary
+        if: ${{ always() }}
+        run: |
+          {
+            echo "## Healthz chat-firing rehearsal — production probe path"
+            echo ""
+            echo "- Subsystem: \`$SUBSYSTEM\`"
+            echo "- Channel: \`$NOTIFY_CHANNEL\`"
+            echo "- Verify config status: ${{ steps.verify_config.outcome }}"
+            echo "- Inject status: ${{ steps.inject.outcome }}"
+            echo "- Rehearse chat status: ${{ steps.rehearse_chat.outcome }}"
+            echo ""
+            if [ -f "$NOTIFY_LOG_FILE" ]; then
+              echo "Notify log (\`<kind> <http_code>\`):"
+              echo '```'
+              cat "$NOTIFY_LOG_FILE"
+              echo '```'
+            fi
+            echo ""
+            echo "If this job is RED but the per-subsystem matrix above is GREEN, the production probe's chat-firing block has regressed independently of its Sentry pager path. See the runbook's _Interpreting a failed rehearsal run_ table for the chat-firing row."
+          } >> "$GITHUB_STEP_SUMMARY"
