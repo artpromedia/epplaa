@@ -72,6 +72,38 @@ jobs:
       - name: Sentry Cron monitors in sync with workflow cron
         run: pnpm --filter @workspace/scripts run check-sentry-monitors
 
+      # Sentry monitor sync credentials present (task #109).
+      #
+      # Companion to the drift check above. Fails the build when this
+      # repo declares Sentry Cron monitors in code (non-empty
+      # SENTRY_MONITORS in scripts/src/sentryMonitors.config.ts) but
+      # the GitHub vars/secrets the release-time `sentry-monitors-sync`
+      # job needs to push them are missing.
+      #
+      # Without this guard, the release workflow's
+      # `if: vars.SENTRY_ORG != ''` gate silently *skips* (rather than
+      # fails) the sync job when SENTRY_ORG is missing, so a typo /
+      # rotated secret / fresh fork results in monitor schedules
+      # silently never propagating to Sentry. On-call only finds out
+      # the next time a missed-check-in alert *should* have fired —
+      # and didn't. Same opt-in-by-presence pattern as the healthz
+      # probe workflow's HEALTHZ_PROBE_ENABLED gate: an empty
+      # SENTRY_MONITORS array is the documented way to opt out, in
+      # which case this step no-ops cleanly.
+      #
+      # `secrets.SENTRY_AUTH_TOKEN` is not available on PRs from
+      # external forks, which is intentional: a fork that wants to
+      # carry the monitor config must either add its own secrets or
+      # delete the entries from sentryMonitors.config.ts. Failing the
+      # CI build is the desired signal in that case — it is the same
+      # failure mode the task description calls out ("repo forked
+      # without copying secrets" -> "the sync silently never runs").
+      - name: Sentry monitor sync credentials present
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          SENTRY_ORG: ${{ vars.SENTRY_ORG }}
+        run: pnpm --filter @workspace/scripts run check-sentry-sync-credentials
+
       - name: Vitest unit tests with coverage threshold
         run: pnpm run test:coverage
         env:

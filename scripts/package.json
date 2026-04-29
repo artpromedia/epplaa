@@ -7,6 +7,7 @@
     "hello": "tsx ./src/hello.ts",
     "check-rate-limit-opt-out-sunsets": "tsx ./src/checkRateLimitOptOutSunsets.ts",
     "check-sentry-monitors": "tsx ./src/checkSentryMonitorsInSync.ts",
+    "check-sentry-sync-credentials": "tsx ./src/checkSentrySyncCredentials.ts",
     "sync-sentry-monitors": "tsx ./src/syncSentryMonitors.ts",
     "test": "vitest run --passWithNoTests",
     "typecheck": "tsc -p tsconfig.json --noEmit"
