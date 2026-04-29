@@ -3,7 +3,7 @@ import { timingSafeEqual } from "node:crypto";
 import { logger } from "../lib/logger";
 import {
   detectNonHostnameProductionSignals,
-  type ProductionSignal,
+  detectProductionSignals,
 } from "../lib/productionSignals";
 import { dbHealthWatcher } from "../lib/subsystemHealth";
 import { __getRedisFailureWatcherForRehearsal } from "../middlewares/apiRateLimit";
@@ -119,60 +119,6 @@ export type RehearsalBootGuardOutcome =
   | { ok: true }
   | { ok: false; reason: string };
 
-/**
- * Compile the production-hostname regex from `PRODUCTION_HOSTNAME_PATTERN`.
- * An invalid pattern is treated as if no pattern were configured, but
- * we surface a structured warning so the operator notices that the
- * hostname check is silently disabled. We deliberately do NOT throw
- * here — a typo in the pattern shouldn't crash an otherwise-correct
- * production boot (NODE_ENV / REPLIT_DEPLOYMENT etc. would still trip
- * the guard if the kill switch were on).
- */
-function compileHostnamePattern(
-  raw: string | undefined,
-  log: { error: (obj: unknown, msg: string) => void },
-): RegExp | null {
-  if (!raw || raw.trim() === "") return null;
-  try {
-    return new RegExp(raw);
-  } catch (err) {
-    log.error(
-      {
-        production_hostname_pattern: raw,
-        err: err instanceof Error ? err.message : String(err),
-      },
-      "healthz_rehearsal_invalid_hostname_pattern: PRODUCTION_HOSTNAME_PATTERN is not a valid regex; hostname check is disabled",
-    );
-    return null;
-  }
-}
-
-function detectProductionSignals(
-  env: NodeJS.ProcessEnv,
-  log: { error: (obj: unknown, msg: string) => void },
-): ProductionSignal[] {
-  const signals = detectNonHostnameProductionSignals(env);
-
-  const hostnamePattern = compileHostnamePattern(
-    env.PRODUCTION_HOSTNAME_PATTERN,
-    log,
-  );
-  const hostname = env.HOSTNAME;
-  if (
-    hostnamePattern &&
-    typeof hostname === "string" &&
-    hostname !== "" &&
-    hostnamePattern.test(hostname)
-  ) {
-    signals.push({
-      signal: "hostname",
-      detail: `HOSTNAME=${hostname} matches PRODUCTION_HOSTNAME_PATTERN=${env.PRODUCTION_HOSTNAME_PATTERN}`,
-    });
-  }
-
-  return signals;
-}
-
 export function assertRehearsalKillSwitchSafe(
   env: NodeJS.ProcessEnv,
   log: { error: (obj: unknown, msg: string) => void },
@@ -273,11 +219,12 @@ export function assertProductionHostnamePatternConfigured(
   const raw = env.PRODUCTION_HOSTNAME_PATTERN;
   if (raw && raw.trim() !== "") {
     // Configured. We deliberately do NOT re-validate the regex here —
-    // `compileHostnamePattern` already logs `healthz_rehearsal_invalid_hostname_pattern`
-    // when the pattern is malformed, and surfacing a second error from
-    // this check would be noisy duplication. A typo'd pattern still
-    // counts as "the operator configured it" for the purposes of this
-    // sanity check; the malformed-regex log is the actionable signal.
+    // `compileHostnamePattern` (in `lib/productionSignals.ts`) already
+    // logs `production_hostname_pattern_invalid` when the pattern is
+    // malformed, and surfacing a second error from this check would
+    // be noisy duplication. A typo'd pattern still counts as "the
+    // operator configured it" for the purposes of this sanity check;
+    // the malformed-regex log is the actionable signal.
     return { ok: true };
   }
 

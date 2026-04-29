@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { logger } from "../logger";
+import { isProductionEnvironment } from "../productionSignals";
 
 /**
  * OkHi address verification. Real integration uses the OkHi REST API to
@@ -43,9 +44,19 @@ function isConfigured(): boolean {
  * escape hatch is set. In production with credentials configured we
  * never silently substitute fake data on real-call failure: we throw and
  * let the caller surface a clear error to the buyer.
+ *
+ * Defense-in-depth (Task #83): even with `STUB_FULFILLMENT=1`, refuse
+ * to fall back if any production signal (NODE_ENV / REPLIT_DEPLOYMENT /
+ * DEPLOYMENT_ENVIRONMENT / hostname-pattern match) is detected. This
+ * prevents a copy-paste of staging env vars (which include the stub
+ * escape hatch) into a production deploy from silently substituting
+ * synthetic verified addresses on real-call failure — a stub place id
+ * with high confidence would let an unverified address pass the
+ * home-delivery gate.
  */
 function allowStubFallback(): boolean {
   if (!isConfigured()) return true;
+  if (isProductionEnvironment(process.env, logger)) return false;
   if (process.env.STUB_FULFILLMENT === "1") return true;
   return process.env.NODE_ENV !== "production";
 }

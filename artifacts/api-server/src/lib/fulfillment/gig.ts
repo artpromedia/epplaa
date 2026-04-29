@@ -1,4 +1,5 @@
 import { logger } from "../logger";
+import { isProductionEnvironment } from "../productionSignals";
 import type {
   Carrier,
   DispatchRequest,
@@ -30,9 +31,18 @@ export class GigCarrier implements Carrier {
    * OR when an explicit `STUB_FULFILLMENT=1` escape hatch is set.
    * Production calls with credentials configured fail closed: we throw
    * instead of silently returning a synthetic GIG quote/label.
+   *
+   * Defense-in-depth (Task #83): even with `STUB_FULFILLMENT=1`, refuse
+   * to fall back if any production signal (NODE_ENV / REPLIT_DEPLOYMENT /
+   * DEPLOYMENT_ENVIRONMENT / hostname-pattern match) is detected. This
+   * prevents a copy-paste of staging env vars (which include the stub
+   * escape hatch) into a production deploy from silently substituting
+   * synthetic carrier data on real-call failure — the same threat model
+   * `assertRehearsalKillSwitchSafe` addresses for the rehearsal injector.
    */
   private allowStubFallback(): boolean {
     if (!this.isConfigured()) return true;
+    if (isProductionEnvironment(process.env, logger)) return false;
     if (process.env.STUB_FULFILLMENT === "1") return true;
     return process.env.NODE_ENV !== "production";
   }

@@ -623,7 +623,7 @@ describe("assertRehearsalKillSwitchSafe — boot-time guard", () => {
     // One error-level log surfaces the bad pattern; nothing else.
     expect(log.calls).toHaveLength(1);
     const [, msg] = log.calls[0]!;
-    expect(msg).toMatch(/healthz_rehearsal_invalid_hostname_pattern/);
+    expect(msg).toMatch(/production_hostname_pattern_invalid/);
   });
 
   it("REJECTS boot when REPLIT_DEPLOYMENT=1 (Replit production deployment signal)", () => {
