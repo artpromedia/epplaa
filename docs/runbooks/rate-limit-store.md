@@ -578,7 +578,11 @@ SENTRY_ORG=<org> DRY_RUN=1 \
 ```
 
 This logs the exact JSON payloads the release job would send, without
-hitting Sentry.
+hitting Sentry. For the deeper drill that actually round-trips the
+PUT against the Sentry Monitors API on a sandbox org (recommended
+before shipping any change to the sync script's request shape), see
+[`docs/runbooks/backup-verify.md`](backup-verify.md), section
+"End-to-end integration test against a real Sentry org".
 
 **Verifying the heartbeat.** Two checks, in increasing cost:
 

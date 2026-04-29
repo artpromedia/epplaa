@@ -1,0 +1,100 @@
+name: Sentry monitor sync — integration
+
+# Manual end-to-end check for `scripts/src/syncSentryMonitors.ts`
+# (task #111). The 25 unit tests in `syncSentryMonitors.test.ts` cover
+# the request shape and retry / dry-run behaviour by stubbing fetch;
+# they cannot detect a Sentry-side schema change (renamed field,
+# stricter validation, auth scope tightening) — that would only show
+# up as a 4xx during the next release sync.
+#
+# This workflow runs the opt-in integration test in
+# `scripts/src/syncSentryMonitors.integration.test.ts` against a
+# **sandbox / staging** Sentry org. The test creates a throwaway
+# monitor with a unique slug, asserts the round-tripped values match,
+# proves the upsert is idempotent against the real API, and deletes
+# the monitor in `finally`.
+#
+# Intentionally `workflow_dispatch:` only — never on every PR. Run it:
+#
+#   - Before merging a PR that changes the request shape in
+#     syncSentryMonitors.ts (payload fields, endpoint path, headers).
+#   - Before cutting a release that's expected to depend on the sync
+#     (e.g. after rotating the production SENTRY_AUTH_TOKEN, or after
+#     a Sentry-side announcement of API changes).
+#   - When the runbook step under
+#     `docs/runbooks/backup-verify.md` ("End-to-end integration test
+#     against a real Sentry org") tells you to.
+#
+# Required configuration (set under Settings → Secrets and variables →
+# Actions; secrets unless otherwise noted):
+#
+#   secrets.SENTRY_INTEGRATION_AUTH_TOKEN  Internal-integration token
+#                                          on the **sandbox** org with
+#                                          `project:write` (PUT) and
+#                                          `project:read` (GET) scope.
+#                                          Never reuse the production
+#                                          sync token — keep blast
+#                                          radius limited to the
+#                                          sandbox.
+#   vars.SENTRY_INTEGRATION_ORG            Sandbox/staging org slug.
+#   vars.SENTRY_INTEGRATION_PROJECT        Optional. Sandbox project
+#                                          slug; when set the test
+#                                          monitor is bound to that
+#                                          project, mirroring the
+#                                          production behaviour when
+#                                          SENTRY_PROJECT is set.
+#   vars.SENTRY_INTEGRATION_BASE_URL       Optional. Defaults to
+#                                          https://sentry.io. Set for
+#                                          self-hosted sandboxes.
+#
+# When the secret OR the org var are missing the workflow fails
+# explicitly so an operator who tried to run the drill without wiring
+# the credentials gets a loud error rather than a silently-skipped
+# "green" run that gives false confidence in the sync.
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  integration:
+    name: Round-trip a throwaway monitor against sandbox Sentry
+    runs-on: ubuntu-latest
+    # Comfortable upper bound: the test itself caps at 60s, plus
+    # install + boot. If a healthy run starts hitting this, Sentry's
+    # API is degraded — investigate before raising.
+    timeout-minutes: 10
+    steps:
+      - name: Verify integration credentials are wired
+        env:
+          SENTRY_INTEGRATION_AUTH_TOKEN: ${{ secrets.SENTRY_INTEGRATION_AUTH_TOKEN }}
+          SENTRY_INTEGRATION_ORG: ${{ vars.SENTRY_INTEGRATION_ORG }}
+        run: |
+          if [ -z "${SENTRY_INTEGRATION_AUTH_TOKEN:-}" ]; then
+            echo "::error::SENTRY_INTEGRATION_AUTH_TOKEN secret missing — wire a sandbox token before running this drill."
+            exit 1
+          fi
+          if [ -z "${SENTRY_INTEGRATION_ORG:-}" ]; then
+            echo "::error::SENTRY_INTEGRATION_ORG var missing — set the sandbox org slug before running this drill."
+            exit 1
+          fi
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Round-trip throwaway monitor through real Sentry API
+        env:
+          # The integration test gate. Setting this to "1" un-skips
+          # the describe block; without it the test file is a no-op.
+          SENTRY_INTEGRATION: "1"
+          SENTRY_INTEGRATION_AUTH_TOKEN: ${{ secrets.SENTRY_INTEGRATION_AUTH_TOKEN }}
+          SENTRY_INTEGRATION_ORG: ${{ vars.SENTRY_INTEGRATION_ORG }}
+          SENTRY_INTEGRATION_PROJECT: ${{ vars.SENTRY_INTEGRATION_PROJECT }}
+          SENTRY_INTEGRATION_BASE_URL: ${{ vars.SENTRY_INTEGRATION_BASE_URL }}
+        run: pnpm --filter @workspace/scripts run test:sentry-integration

@@ -165,7 +165,11 @@ SENTRY_ORG=<org> DRY_RUN=1 \
 ```
 
 This logs the exact JSON payloads the release job would send, without
-hitting Sentry.
+hitting Sentry. See ["End-to-end integration test against a real Sentry
+org"](#end-to-end-integration-test-against-a-real-sentry-org) below for
+the deeper drill that actually round-trips the request against the
+Sentry Monitors API — run that one before shipping any change to the
+sync script's request shape.
 
 ### Monitor: `backup-verify`
 
@@ -199,6 +203,97 @@ for a real tick:
    Sentry should fire a `backup-verify-nightly` (or `backup-verify`)
    cron `Missed check-in` issue. Re-enable the workflow once the page
    is confirmed.
+
+### End-to-end integration test against a real Sentry org
+
+The 25 vitest tests in
+[`scripts/src/syncSentryMonitors.test.ts`](../../scripts/src/syncSentryMonitors.test.ts)
+cover the request shape, retry behaviour, dry-run output, and env-var
+validation by stubbing `global.fetch`. They **do not exercise the real
+Sentry Monitors API contract** — so a Sentry-side schema change
+(renamed field, stricter validation, auth scope tightening) would slip
+past CI and only surface as a 4xx during the next release sync, when
+the on-call engineer is least equipped to debug it.
+
+The opt-in integration test in
+[`scripts/src/syncSentryMonitors.integration.test.ts`](../../scripts/src/syncSentryMonitors.integration.test.ts)
+closes that gap. It runs `main()` against a real (sandbox / staging)
+Sentry org with a unique throwaway slug, then GETs the monitor back
+and asserts the round-tripped values match every field we sent (slug,
+name, type, schedule, schedule_type, timezone, checkin_margin,
+max_runtime, failure_issue_threshold, recovery_threshold). It re-runs
+the upsert a second time to prove idempotency against the real API,
+then DELETEs the monitor in `finally` so cleanup is robust even when
+the assertions fail.
+
+It does **not** run on every PR — Sentry doesn't appreciate the API
+churn, and we don't want to spend a sandbox token rate budget on
+PR noise. Run it manually:
+
+- Before merging a PR that changes the request shape in
+  `syncSentryMonitors.ts` (payload fields, endpoint path, headers).
+- Before cutting a release that's expected to depend on the sync (for
+  example, after rotating the production `SENTRY_AUTH_TOKEN`, or after
+  Sentry announces a Monitors API change).
+
+There are two equivalent invocations:
+
+1. **GitHub Actions (preferred for CI provenance):** open
+   **Actions → Sentry monitor sync — integration → Run workflow**
+   ([`.github/workflows/sentry-monitors-integration.yml`](../../.github/workflows/sentry-monitors-integration.yml)).
+   The workflow is `workflow_dispatch:` only and will fail loudly if
+   the sandbox secret / org var aren't wired, so a "green" run is
+   real evidence that the PUT contract still matches Sentry.
+2. **Local shell (for ad-hoc API debugging):**
+
+   ```sh
+   SENTRY_INTEGRATION=1 \
+   SENTRY_INTEGRATION_AUTH_TOKEN=<sandbox-internal-integration-token> \
+   SENTRY_INTEGRATION_ORG=<sandbox-org-slug> \
+   SENTRY_INTEGRATION_PROJECT=<sandbox-project-slug>   # optional
+     pnpm --filter @workspace/scripts run test:sentry-integration
+   ```
+
+   When `SENTRY_INTEGRATION=1` is not set the test file is a complete
+   no-op (vitest skips the entire `describe` block), so this same
+   command on a developer laptop without the env vars cannot
+   accidentally hit Sentry.
+
+**Required configuration** (set under **Settings → Secrets and
+variables → Actions** on the repo, used only by the integration
+workflow above):
+
+| Name | Kind | Purpose |
+| --- | --- | --- |
+| `SENTRY_INTEGRATION_AUTH_TOKEN` | secret | Internal-integration token on the **sandbox** Sentry org with `project:write` (PUT) and `project:read` (GET) scope. **Never reuse the production sync token** — keep blast radius limited to the sandbox so a buggy test run can't disturb the real monitors. |
+| `SENTRY_INTEGRATION_ORG` | var | Sandbox / staging org slug. |
+| `SENTRY_INTEGRATION_PROJECT` | var | Optional. Sandbox project slug; when set the test monitor is bound to that project (mirrors the production behaviour when `SENTRY_PROJECT` is set). |
+| `SENTRY_INTEGRATION_BASE_URL` | var | Optional. Defaults to `https://sentry.io`. Set for self-hosted sandboxes. |
+
+**On failure:** the test names every assertion that didn't round-trip,
+so the GH Actions log line tells you exactly which field Sentry
+mangled. Common shapes:
+
+- *HTTP 400 with a `config.<field>` error string* — Sentry tightened
+  validation on a field we send (e.g. it now rejects values outside a
+  range we previously got away with). Adjust `SentryMonitorConfig` /
+  `buildPayload` and re-run the integration test until it stays green
+  before merging the change.
+- *HTTP 401/403* — the sandbox token lost a scope (or expired). Mint a
+  fresh internal-integration token on the sandbox org with
+  `project:write` + `project:read` and rotate the secret.
+- *Round-trip mismatch on a field we sent* — Sentry silently
+  normalised the value (clamped a margin, renamed an enum, dropped
+  the timezone). The unit tests cannot see this. Update
+  `buildPayload` / `SentryMonitorConfig` to the new shape and re-run.
+- *Cleanup `DELETE` failure logged after a passing test* — the test
+  succeeded but the throwaway monitor leaked. Open the sandbox org's
+  monitor list, search for the `epplaa-sync-itest-` prefix, and
+  delete any leftovers manually.
+
+If the workflow run is healthy, you have positive evidence the next
+release-time sync will succeed against the production org (assuming
+the prod token has the same scopes as the sandbox token used here).
 
 ## Required GitHub repo configuration
 
