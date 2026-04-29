@@ -12,7 +12,7 @@ restorable live in this repo on two cadences:
 | Workflow | [`.github/workflows/backup-verify-nightly.yml`](../../.github/workflows/backup-verify-nightly.yml) | [`.github/workflows/backup-verify.yml`](../../.github/workflows/backup-verify.yml) |
 | Verifier script | [`scripts/src/verifyBackup.ts`](../../scripts/src/verifyBackup.ts) `--mode=smoke` | same script `--mode=full` |
 | Schedule | `0 3 * * 1-6` (Mon-Sat 03:00 UTC) — six per week | `0 3 * * 0` (Sunday 03:00 UTC) — once per week |
-| Probe surface | `pg_restore` of the latest `*.dump` into a throwaway sandbox DB, followed by freshness check, row-count smoke against `audit_events` / `payment_intents` / `orders`, and required-extension presence check | smoke + anti-join FK integrity across `orders ↔ payment_intents ↔ users` + `VACUUM (ANALYZE)` (full heap scan, catches block-level corruption) + per-table inventory + best-effort `amcheck` btree validation + end-to-end audit-chain replay against `audit_events` |
+| Probe surface | `pg_restore` of the latest `*.dump` into a throwaway sandbox DB, followed by freshness check, row-count smoke against `audit_events` / `payment_intents` / `orders`, optional live-vs-restored row-count comparison (when `LIVE_COUNTS_URL` or `LIVE_COUNTS_MANIFEST` is set), and required-extension presence check | smoke + anti-join FK integrity across `orders ↔ payment_intents ↔ users` + `VACUUM (ANALYZE)` (full heap scan, catches block-level corruption) + per-table inventory + best-effort `amcheck` btree validation + end-to-end audit-chain replay against `audit_events` |
 | Sentry Cron slug | `backup-verify-nightly` | `backup-verify` |
 | Pager channel | Sentry Cron monitor (heartbeat) + GitHub "Failed workflow run" mail (backstop) | same |
 
@@ -40,16 +40,17 @@ The verify pass exits non-zero and pages on:
 | 11   | Per-table inventory psql exited non-zero (catalog query against `pg_stat_user_tables` failed). Rare; usually a wedged sandbox rather than a backup-quality issue. | full only | Platform team |
 | 12   | `amcheck` `bt_index_check()` reported a corrupt btree index. **Note**: `amcheck` extension *missing* in the sandbox is downgraded to a `::warning::` and exit 0 — this code only fires when the extension is present and an index is actually broken. | full only | Platform team + DB owner |
 | 13   | Unknown `--mode` value (operator typo / workflow misconfig). | both | Repo owner (workflow YAML) |
+| 14   | Restored row counts are stale or incomplete vs the live source / manifest — the dump is restorable but its data lags production. **Distinct from exit 6** (which is "the dump *file* is older than `MAX_DUMP_AGE_HOURS`"): this code fires when the file mtime is fresh but its contents lag, which the file-mtime check cannot see. Names every offending table and the absolute / percentage delta in the failure line so on-call doesn't have to dig through logs. Skipped (with a `[verifyBackup]` notice and exit 0) when neither `LIVE_COUNTS_URL` nor `LIVE_COUNTS_MANIFEST` is set. | both | Platform team + DB owner |
 
 > **On-call routing tip:** the grouping above is the page-routing contract.
 > Codes 2/3/6/9/13 are about the transport / freshness / sandbox config /
 > workflow misconfig and belong to the platform team (or the repo owner
-> for code 13). Codes 4/5/7/10/11/12 are about the dump's internal
-> consistency and need both platform + the DB owner. Code 8 is the
-> audit-integrity invariant and is the only one that should land in the
-> audit/compliance owners' on-call queue. If you change the grouping
-> here, also update the routing rules in your alert manager so pages
-> don't drop on the floor.
+> for code 13). Codes 4/5/7/10/11/12/14 are about the dump's internal
+> consistency / completeness and need both platform + the DB owner. Code
+> 8 is the audit-integrity invariant and is the only one that should
+> land in the audit/compliance owners' on-call queue. If you change the
+> grouping here, also update the routing rules in your alert manager so
+> pages don't drop on the floor.
 
 ## Heartbeat — paging when the scheduler itself stops running
 
@@ -219,6 +220,8 @@ Secrets (`secrets.*`):
 | `RESTORE_DATABASE_URL` | Sandbox DB URL the dump is restored into. **Must never** point at the live DB — `verifyBackup.ts` pg_restore's with `--clean --if-exists`, which would wipe whatever it points at. |
 | `BACKUP_FETCH_CMD` | Shell snippet that downloads the latest dump into `./backups/<date>.dump`. Owned by the platform team because it embeds the backup-share credentials. |
 | `BACKUP_VERIFY_SENTRY_DSN` | DSN that `sentry-cli monitors run` uses to post the cron-monitor check-ins **for both workflows** (the nightly `backup-verify-nightly` slug and the weekly `backup-verify` slug). Usually the same DSN as the api-server's `SENTRY_DSN` so check-ins land in the same project; kept as a separate repo secret so it can be rotated independently of the runtime DSN. **Without this secret the heartbeat is silently disabled** — each workflow logs a `::warning::` and runs the verifier directly. Configure it to get coverage for "the job stopped running at all." |
+| `LIVE_COUNTS_URL` | *(optional)* Read-only Postgres connection string the verifier `psql`-queries to fetch expected row counts for the live-vs-restored comparison (exit 14). Use the cheapest read-only role you have on production. **Mutually exclusive** with `LIVE_COUNTS_MANIFEST_URL` (the verifier rejects the run if both are set). When neither is configured the comparison is skipped with a `[verifyBackup]` notice and a stale-but-restorable dump can pass undetected. **Same secret on both workflows** — keep them in lockstep so both cadences agree on what "fresh" means. |
+| `LIVE_COUNTS_MANIFEST_URL` | *(optional)* HTTP(S) URL to a small JSON snapshot the platform's `pg_dump` cron writes alongside the dump, mapping table name → live row count. Use this when the GH Actions runner cannot reach the production DB directly. The workflow `curl -fsSL`s it into `./backups/live-counts.json` *before* invoking the verifier and exports `LIVE_COUNTS_MANIFEST=$BACKUP_DIR/live-counts.json` for the verifier to read. **Mutually exclusive** with `LIVE_COUNTS_URL`. Manifest format: `{"audit_events": 1234567, "payment_intents": 89012, "orders": 4567}`. **Operational note:** if the `curl` itself fails (manifest URL 404, DNS broken, etc.) the workflow step exits non-zero *before* `verifyBackup.ts` even runs, so the GH Actions failure surfaces with the curl exit status — not exit code 14. Triage that as a manifest-transport problem (check the URL + the producer cron) rather than a stale-dump problem. |
 
 Optional tuning env vars (set on the workflow step `env:`, not as repo
 secrets — they're not sensitive):
@@ -227,6 +230,8 @@ secrets — they're not sensitive):
 | --- | --- | --- |
 | `MAX_DUMP_AGE_HOURS` | `36` | Newest `*.dump` in `BACKUP_DIR` must be at most this many hours old, otherwise exit 6. 36h gives one full nightly cycle of slack so a single missed nightly does not page, but two missed nightlies do. Lower it if you tighten the nightly cadence. |
 | `REQUIRED_EXTENSIONS` | *(unset → check skipped)* | Comma-separated list of Postgres extensions that must be installed on the restored sandbox (e.g. `pgcrypto,pg_trgm`). When unset the extension check logs a notice and skips — set it once you know which extensions the production schema actually depends on. Mismatch → exit 9. |
+| `LIVE_COUNTS_TABLES` | `audit_events,payment_intents,orders` | Comma-separated list of tables the verifier queries via `LIVE_COUNTS_URL` for the live-vs-restored comparison. Only consulted in the `LIVE_COUNTS_URL` branch — the `LIVE_COUNTS_MANIFEST` branch trusts whatever tables the manifest lists, on the assumption that the platform's `pg_dump` cron is the source-of-truth for which tables matter. Keep the list small (count(*) on production tables is not free); the default covers the money-flow + audit chain. Each entry must be a plain table name or `schema.table` — alphanumerics + underscore only. |
+| `LIVE_COUNTS_MIN_RATIO` | `0.99` | Minimum fraction of the live count we tolerate seeing in the restored sandbox. `0.99` (the default) absorbs the small write-traffic gap between when `pg_dump` snapshotted and when the verifier reads the live count, without silently accepting a dump that's missing a meaningful chunk of rows. Lower it (e.g. `0.95`) if your write traffic is bursty enough that 1% drift produces false positives; **do not** lower it past `0.9` without the DB owner's sign-off — at that point a real partial-table-skip hides inside the threshold. Must be in `(0, 1]`. |
 
 ## Backup verification failed
 
@@ -313,6 +318,43 @@ itself is the problem — the scheduler is fine.
 13. **Exit 13 (unknown `--mode` value)** — operator typo in the workflow
     YAML. Check the `--mode=…` arg passed to `verifyBackup.ts` and fix
     the workflow file.
+14. **Exit 14 (live-counts comparison failed, both modes)** — the dump
+    is restorable, but the restored row counts for one or more tables
+    are below `LIVE_COUNTS_MIN_RATIO` (default 99%) of the live
+    source / manifest counts. The verifier names every offending
+    table and the absolute / percentage delta in the `fail()` line at
+    the bottom of the step log — read that first; it tells you which
+    write path is at risk and by how much. Important: this is **not**
+    the same as exit 6 (which is "the dump *file* mtime is older than
+    `MAX_DUMP_AGE_HOURS`"). Exit 14 fires when the file is fresh but
+    its *contents* lag — the producer wrote a new dump file, but
+    `pg_dump` silently skipped a critical table, or the file is a
+    symlink/copy of an older dump that just had its mtime touched. To
+    triage:
+    - **Tables with restored=0 against a non-zero live count** — the
+      dump is missing a whole table. Almost certainly a `pg_dump`
+      argument regression (e.g. `--exclude-table` accidentally
+      matched it, or a `--schema-only` slipped in). Page the platform
+      team and pull the producer logs for the most recent run.
+    - **Tables with restored < live but > 0, ratio close to threshold
+      (e.g. 98%)** — could be legitimate write-traffic drift between
+      the `pg_dump` snapshot and the verifier's live read, especially
+      on append-heavy tables (`audit_events`). Re-run once: if the
+      next nightly clears, log it and move on; if it persists or
+      grows, the producer is silently behind. Do **not** lower
+      `LIVE_COUNTS_MIN_RATIO` past `0.9` to silence — at that point a
+      real partial-table-skip hides inside the threshold (page the DB
+      owner first; tune the threshold only with their sign-off).
+    - **Tables with restored >> live** — investigate
+      `LIVE_COUNTS_URL` is actually pointing at production (not at a
+      stale read replica that lags writes). Often this means the
+      "live" source itself is the stale one and the restored data is
+      newer.
+    - **psql connection failure to `LIVE_COUNTS_URL`** — also exits 14
+      (with a `psql exited N querying count(*) FROM …` line). Check
+      production network reachability + the read-only role's
+      grants; the `LIVE_COUNTS_MANIFEST_URL` path exists for exactly
+      this case (runners that can't reach prod).
 
 In all cases, **do not silence the workflow** as the recovery path —
 the page is telling you the dump is bad, and silencing it will mask the
@@ -379,6 +421,7 @@ BACKUP_DIR=/tmp/backups \
 RESTORE_DATABASE_URL='postgres://verify:verify@localhost:5432/sandbox' \
 MAX_DUMP_AGE_HOURS=36 \
 REQUIRED_EXTENSIONS=pgcrypto,pg_trgm \
+LIVE_COUNTS_MANIFEST=/tmp/backups/live-counts.json \
   pnpm --filter @workspace/scripts exec tsx src/verifyBackup.ts --mode=smoke
 
 # Full (matches the weekly workflow — adds FK integrity + VACUUM
@@ -387,8 +430,13 @@ BACKUP_DIR=/tmp/backups \
 RESTORE_DATABASE_URL='postgres://verify:verify@localhost:5432/sandbox' \
 MAX_DUMP_AGE_HOURS=36 \
 REQUIRED_EXTENSIONS=pgcrypto,pg_trgm \
+LIVE_COUNTS_MANIFEST=/tmp/backups/live-counts.json \
   pnpm --filter @workspace/scripts exec tsx src/verifyBackup.ts --mode=full
 ```
+
+Drop `LIVE_COUNTS_MANIFEST` (and don't set `LIVE_COUNTS_URL`) to skip
+the live-vs-restored comparison locally — the verifier prints a
+`[verifyBackup]` skip notice and still runs every other check.
 
 Same exit codes as the workflows. The script logs each check's verdict
 on its own `[verifyBackup]` line so you can see at a glance which step
@@ -416,3 +464,28 @@ To rehearse each new failure mode against a local sandbox:
   sandbox (`DROP EXTENSION pgcrypto`) before rerun.
 - **Exit 13 (unknown `--mode`):** pass `--mode=foo` to confirm the
   argument parser fails fast.
+- **Exit 14 (live counts stale/incomplete):** the cleanest local
+  rehearsal is via the manifest path, because it doesn't require a
+  second running Postgres. After a successful smoke run against a
+  freshly restored sandbox, write a manifest that overstates the live
+  count for one table by enough to breach the default 99% threshold,
+  then rerun:
+  ```sh
+  RESTORED_AUDIT=$(psql "$RESTORE_DATABASE_URL" -At -c \
+    'SELECT count(*) FROM audit_events')
+  # Claim live=2x restored — guaranteed to breach 0.99.
+  printf '{"audit_events": %d}\n' "$((RESTORED_AUDIT * 2))" \
+    > /tmp/backups/live-counts.json
+  LIVE_COUNTS_MANIFEST=/tmp/backups/live-counts.json \
+  BACKUP_DIR=/tmp/backups \
+  RESTORE_DATABASE_URL='postgres://verify:verify@localhost:5432/sandbox' \
+    pnpm --filter @workspace/scripts exec tsx src/verifyBackup.ts \
+      --mode=smoke
+  ```
+  The verifier should exit 14 with a `fail()` line that names
+  `audit_events` and the percentage / absolute delta. Replacing the
+  manifest content with the real `RESTORED_AUDIT` (or removing the
+  env var entirely) clears the rehearsal. To rehearse the
+  `LIVE_COUNTS_URL` branch, point it at any read-only Postgres with
+  the relevant tables and re-run; the comparison branch is the same
+  past the source-resolution step.

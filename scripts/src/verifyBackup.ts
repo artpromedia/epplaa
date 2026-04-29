@@ -22,32 +22,48 @@
  *        if the env var is unset; we never restore over the live DB.
  *     4. Smoke row-count check on `audit_events`, `payment_intents`,
  *        `orders` — a structurally-valid but empty dump still pages.
- *     5. Assert every name in $REQUIRED_EXTENSIONS (comma-separated) is
+ *     5. Live-vs-restored row-count comparison (opt-in). When
+ *        $LIVE_COUNTS_URL (read-only conn string) or $LIVE_COUNTS_MANIFEST
+ *        (path to a small JSON snapshot the platform's pg_dump cron
+ *        writes alongside the dump) is set, fetch expected row counts
+ *        for $LIVE_COUNTS_TABLES (default audit_events,payment_intents,
+ *        orders) and assert each restored count is within
+ *        $LIVE_COUNTS_MIN_RATIO of the expected count (default 0.99 ->
+ *        99%). Catches the specific failure modes that the smoke
+ *        row-count check above cannot see, because it only reads from
+ *        the restored sandbox: a dump that's 30 days old (restorable +
+ *        non-empty + would still pass smoke), or a dump where pg_dump
+ *        silently skipped a critical table (a restored audit_events
+ *        with 1% of live rows is "valid" to smoke, but is a
+ *        compliance-grade data-loss event waiting to happen). Skipped
+ *        with a notice when neither env var is set, so existing
+ *        operators that haven't wired a live source up don't break.
+ *     6. Assert every name in $REQUIRED_EXTENSIONS (comma-separated) is
  *        installed in the restored sandbox. pg_restore happily "succeeds"
  *        against a stripped-down sandbox, leaving the data unusable for
  *        the real app boot — this catches that gap.
  *
  *   full (weekly, several minutes — does everything smoke does, plus):
- *     6. Anti-join FK integrity across the core relational graph
+ *     7. Anti-join FK integrity across the core relational graph
  *        (orders → users, payment_intents → users, payment_intents →
  *        orders). Drizzle does not declare DB-level FKs on these columns,
  *        so a corrupt dump can pass `pg_restore` and still violate the
  *        invariants the app code assumes.
- *     7. VACUUM (ANALYZE) the restored DB. This forces a full heap scan
+ *     8. VACUUM (ANALYZE) the restored DB. This forces a full heap scan
  *        of every table, which is the cheapest way to detect block-level
  *        corruption that pg_restore itself didn't catch (pg_restore
  *        replays COPY, but a corrupt page won't surface until something
  *        actually reads it).
- *     8. Inventory every user table (schema + name + row count) so a
+ *     9. Inventory every user table (schema + name + row count) so a
  *        silent table drop or an unexpectedly empty table is visible in
  *        the run output, not just the three smoke tables.
- *     9. Best-effort `amcheck` btree index validation. Requires the
+ *    10. Best-effort `amcheck` btree index validation. Requires the
  *        `amcheck` contrib extension; if it isn't installable in the
  *        sandbox (e.g. managed Postgres without superuser) we log a
  *        warning and continue rather than fail — the smoke + vacuum +
  *        inventory layers above already cover the high-value failure
  *        modes for this script's purpose.
- *    10. Recompute the audit_events hash chain end-to-end — the very
+ *    11. Recompute the audit_events hash chain end-to-end — the very
  *        thing the audit log exists to prove. Mirrors the recompute
  *        logic in artifacts/api-server/src/lib/audit.ts
  *        (`verifyAuditChain` / `canonicalJson`); keep the two in
@@ -75,18 +91,24 @@
  *   12  amcheck btree validation reported a corrupt index (full mode
  *       only; extension-missing is downgraded to a warning, not exit 12)
  *   13  unknown --mode value
+ *   14  restored row counts are stale or incomplete vs the live source /
+ *       manifest (dump is restorable but its data is behind production —
+ *       distinct from exit 4-8 "dump corrupt" and from exit 6 "dump file
+ *       mtime stale": this catches the case where the file is fresh and
+ *       restorable but its *contents* lag the live DB, which the
+ *       file-mtime check cannot see).
  *
  * Ownership grouping (matches the runbook's page-routing contract):
  *   transport / freshness / sandbox config -> platform team (2, 3, 6, 9)
  *   dump-internal corruption                -> platform team + DB owner
- *                                              (4, 5, 7, 10, 11, 12)
+ *                                              (4, 5, 7, 10, 11, 12, 14)
  *   audit-chain integrity                   -> audit / compliance owner
  *                                              (8)
  *   operator / workflow misconfig           -> repo owner (13)
  */
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { readdirSync, statSync } from "node:fs";
+import { readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 
 type Mode = "smoke" | "full";
@@ -98,6 +120,41 @@ const REQUIRED_EXTENSIONS = (process.env.REQUIRED_EXTENSIONS ?? "")
   .split(",")
   .map((s) => s.trim())
   .filter(Boolean);
+
+/**
+ * Live-counts comparison knobs. The check itself is opt-in: when both
+ * LIVE_COUNTS_URL and LIVE_COUNTS_MANIFEST are unset the step is
+ * skipped with a notice (so existing operators that haven't wired a
+ * live source up don't suddenly start failing). When either is set:
+ *   - LIVE_COUNTS_URL: a *read-only* Postgres connection string the
+ *     verifier psql-queries directly. Use the cheapest read-only role
+ *     you have on production — three count(*) queries against the
+ *     smoke tables are not free at scale, but they are bounded.
+ *   - LIVE_COUNTS_MANIFEST: a path to a small JSON file mapping table
+ *     name -> live row count, e.g. `{"audit_events": 1234567, ...}`.
+ *     Useful when the GH Actions runner cannot reach the production DB
+ *     directly: the platform's pg_dump cron writes the manifest
+ *     alongside the dump, and the workflow downloads both.
+ * Setting both is rejected (ambiguous source-of-truth).
+ *
+ * LIVE_COUNTS_TABLES is only consulted in the LIVE_COUNTS_URL branch
+ * (the manifest branch trusts whatever tables the manifest lists).
+ * LIVE_COUNTS_MIN_RATIO is the minimum fraction of the live count we
+ * tolerate seeing in the restored sandbox; anything below pages on
+ * exit 14. 0.99 (the default) lets us absorb the small write-traffic
+ * gap between when pg_dump took its consistent snapshot and when the
+ * verifier reads the live count, without silently accepting a dump
+ * that's missing a meaningful chunk of rows.
+ */
+const LIVE_COUNTS_URL = process.env.LIVE_COUNTS_URL;
+const LIVE_COUNTS_MANIFEST = process.env.LIVE_COUNTS_MANIFEST;
+const LIVE_COUNTS_TABLES = (
+  process.env.LIVE_COUNTS_TABLES ?? "audit_events,payment_intents,orders"
+)
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
+const LIVE_COUNTS_MIN_RATIO = Number(process.env.LIVE_COUNTS_MIN_RATIO ?? 0.99);
 
 /**
  * Exit codes. Stable contract — the runbook (and any external monitor /
@@ -117,6 +174,7 @@ const EXIT = {
   INVENTORY_FAILED: 11,
   AMCHECK_FAILED: 12,
   UNKNOWN_MODE: 13,
+  STALE_DATA: 14,
 } as const;
 
 function fail(msg: string, code: number = EXIT.GENERIC): never {
@@ -415,6 +473,241 @@ function redactUrl(u: string): string {
   return u.replace(/:[^@/]+@/, ":***@");
 }
 
+/**
+ * Pure helper: compare expected (live) row counts against restored row
+ * counts and return the tables where the restored count is below
+ * `minRatio` of the expected count. Exported for unit testing — the
+ * I/O wrapper `checkLiveCounts` below handles env wiring + psql.
+ *
+ * Special cases worth being explicit about:
+ *  - A live count of 0 is never a violation (anything-over-zero is
+ *    >= the threshold by convention; zero/zero we treat as 100%).
+ *    A genuinely-empty live table is a config decision the operator
+ *    makes by listing it in the manifest, not a backup-quality issue.
+ *  - A table that's in `expected` but missing from `restored` is
+ *    treated as restored=0 — i.e. a violation if the live count is
+ *    non-zero. That's the dominant failure mode this check exists to
+ *    catch (pg_dump silently dropped a critical table).
+ *  - A table in `restored` but not in `expected` is ignored. The
+ *    operator's choice of expected tables defines the comparison set.
+ */
+export interface LiveCountsViolation {
+  table: string;
+  expected: number;
+  restored: number;
+  ratio: number;
+}
+export function evaluateLiveCounts(
+  expected: ReadonlyMap<string, number>,
+  restored: ReadonlyMap<string, number>,
+  minRatio: number,
+): LiveCountsViolation[] {
+  const violations: LiveCountsViolation[] = [];
+  for (const [table, expectedCount] of expected) {
+    const restoredCount = restored.get(table) ?? 0;
+    const ratio = expectedCount === 0 ? 1 : restoredCount / expectedCount;
+    if (ratio < minRatio) {
+      violations.push({ table, expected: expectedCount, restored: restoredCount, ratio });
+    }
+  }
+  return violations;
+}
+
+/**
+ * Pure helper: parse + validate a live-counts manifest. The manifest
+ * is intentionally a flat object (table name -> non-negative integer
+ * row count). Anything else is a hard error rather than a "best
+ * effort" parse, because a malformed manifest should page the
+ * operator rather than silently degrade to an empty comparison set
+ * (which would let stale dumps through). Exported for tests.
+ */
+export function parseLiveCountsManifest(json: string): Map<string, number> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(json);
+  } catch (err) {
+    throw new Error(`live-counts manifest is not valid JSON: ${(err as Error).message}`);
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error(
+      `live-counts manifest must be a JSON object mapping table name -> row count`,
+    );
+  }
+  const out = new Map<string, number>();
+  for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
+    if (typeof v !== "number" || !Number.isFinite(v) || !Number.isInteger(v) || v < 0) {
+      throw new Error(
+        `live-counts manifest entry '${k}' is not a non-negative integer (got ${JSON.stringify(v)})`,
+      );
+    }
+    out.set(k, v);
+  }
+  return out;
+}
+
+/**
+ * Run a single `count(*)` query against an arbitrary connection
+ * string. Used for both the live source (LIVE_COUNTS_URL) and the
+ * restored sandbox (RESTORE_DATABASE_URL) — the comparison check
+ * needs to read counts from both sides with the same semantics.
+ *
+ * The table identifier is validated against a strict regex before
+ * being interpolated into SQL. We have to interpolate (psql does not
+ * parameterize identifiers, only values), so the regex is the only
+ * thing standing between an env var and arbitrary SQL execution.
+ * Allow only `[A-Za-z_][A-Za-z0-9_]*` per identifier component, and
+ * at most one optional `schema.` qualifier.
+ */
+function queryCountsViaPsql(
+  connUrl: string,
+  tables: readonly string[],
+  exitCode: number,
+): Map<string, number> {
+  const out = new Map<string, number>();
+  for (const t of tables) {
+    if (!/^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)?$/.test(t)) {
+      fail(
+        `LIVE_COUNTS_TABLES / manifest entry '${t}' is not a valid table identifier ` +
+          `(expected schema.table or table, alphanumerics + underscore only)`,
+        EXIT.GENERIC,
+      );
+    }
+    const r = spawnSync(
+      "psql",
+      [connUrl, "-X", "-At", "-v", "ON_ERROR_STOP=1", "-c", `SELECT count(*) FROM ${t}`],
+      {
+        stdio: ["ignore", "pipe", "inherit"],
+        encoding: "utf8",
+        maxBuffer: 1024 * 1024,
+      },
+    );
+    if (r.status !== 0) {
+      fail(`psql exited ${r.status} querying count(*) FROM ${t}`, exitCode);
+    }
+    const n = Number(r.stdout.trim());
+    if (!Number.isFinite(n)) {
+      fail(`count(*) FROM ${t} returned non-numeric '${r.stdout.trim()}'`, exitCode);
+    }
+    out.set(t, n);
+  }
+  return out;
+}
+
+/**
+ * Live-vs-restored row-count comparison. The smoke check above only
+ * proves the restored tables are non-empty — it has no view of the
+ * live source, so a 30-day-old dump or a dump where pg_dump silently
+ * skipped a critical table will pass smoke happily. This step closes
+ * that gap by reading expected counts from either a read-only live
+ * Postgres conn (LIVE_COUNTS_URL) or a JSON manifest written by the
+ * platform's pg_dump cron alongside the dump (LIVE_COUNTS_MANIFEST),
+ * and asserting each restored count is within LIVE_COUNTS_MIN_RATIO
+ * of the expected count.
+ *
+ * Failures exit 14 (STALE_DATA) — a separate code from 4-8 ("dump
+ * corrupt") and from 6 ("dump file mtime stale") so on-call can
+ * route the page distinctly. The fail() body names every offending
+ * table and its absolute / percentage delta so on-call doesn't have
+ * to dig through workflow logs.
+ */
+function checkLiveCounts(): void {
+  const haveUrl = LIVE_COUNTS_URL !== undefined && LIVE_COUNTS_URL.length > 0;
+  const haveManifest = LIVE_COUNTS_MANIFEST !== undefined && LIVE_COUNTS_MANIFEST.length > 0;
+  if (!haveUrl && !haveManifest) {
+    console.log(
+      "[verifyBackup] LIVE_COUNTS_URL / LIVE_COUNTS_MANIFEST unset — skipping live-vs-restored " +
+        "count comparison (set one to opt in; without it a stale or partial dump that's still " +
+        "restorable will pass undetected)",
+    );
+    return;
+  }
+  if (haveUrl && haveManifest) {
+    fail(
+      "set only one of LIVE_COUNTS_URL or LIVE_COUNTS_MANIFEST (not both — the verifier " +
+        "needs an unambiguous source of expected row counts)",
+      EXIT.GENERIC,
+    );
+  }
+  if (
+    !Number.isFinite(LIVE_COUNTS_MIN_RATIO) ||
+    LIVE_COUNTS_MIN_RATIO <= 0 ||
+    LIVE_COUNTS_MIN_RATIO > 1
+  ) {
+    fail(
+      `LIVE_COUNTS_MIN_RATIO must be a number in (0, 1] (got ${process.env.LIVE_COUNTS_MIN_RATIO})`,
+      EXIT.GENERIC,
+    );
+  }
+
+  let expected: Map<string, number>;
+  let source: string;
+  if (haveManifest) {
+    let raw: string;
+    try {
+      raw = readFileSync(LIVE_COUNTS_MANIFEST!, "utf8");
+    } catch (err) {
+      fail(
+        `cannot read LIVE_COUNTS_MANIFEST at ${LIVE_COUNTS_MANIFEST}: ${(err as Error).message}`,
+        EXIT.STALE_DATA,
+      );
+    }
+    try {
+      expected = parseLiveCountsManifest(raw);
+    } catch (err) {
+      fail((err as Error).message, EXIT.STALE_DATA);
+    }
+    if (expected.size === 0) {
+      fail(
+        `live-counts manifest at ${LIVE_COUNTS_MANIFEST} is empty — refusing to "verify" zero ` +
+          `tables (the manifest must list at least one table or the comparison is meaningless)`,
+        EXIT.STALE_DATA,
+      );
+    }
+    source = `manifest ${LIVE_COUNTS_MANIFEST}`;
+  } else {
+    if (LIVE_COUNTS_TABLES.length === 0) {
+      fail(`LIVE_COUNTS_TABLES must list at least one table`, EXIT.GENERIC);
+    }
+    expected = queryCountsViaPsql(LIVE_COUNTS_URL!, LIVE_COUNTS_TABLES, EXIT.STALE_DATA);
+    source = `live ${redactUrl(LIVE_COUNTS_URL!)}`;
+  }
+
+  const restored = queryCountsViaPsql(
+    RESTORE_DATABASE_URL!,
+    [...expected.keys()],
+    EXIT.STALE_DATA,
+  );
+  const violations = evaluateLiveCounts(expected, restored, LIVE_COUNTS_MIN_RATIO);
+  if (violations.length > 0) {
+    const pct = (LIVE_COUNTS_MIN_RATIO * 100).toFixed(2);
+    const lines = violations
+      .map(
+        (v) =>
+          `${v.table}: restored=${v.restored} expected>=${Math.ceil(
+            v.expected * LIVE_COUNTS_MIN_RATIO,
+          )} (live=${v.expected}, ratio=${(v.ratio * 100).toFixed(2)}%, ` +
+          `delta=${v.expected - v.restored})`,
+      )
+      .join("; ");
+    fail(
+      `restored row counts are stale or incomplete vs ${source} (threshold ${pct}%): ${lines}. ` +
+        `The dump is restorable but its data is behind the live source — either the producer's ` +
+        `pg_dump silently skipped these tables, or the dump itself was written days ago and ` +
+        `never refreshed. Distinct from exit 6 (dump file mtime stale) because the file mtime ` +
+        `can be fresh while the contents lag.`,
+      EXIT.STALE_DATA,
+    );
+  }
+  const summary = [...expected.entries()]
+    .map(([t, n]) => `${t}=${restored.get(t) ?? 0}/${n}`)
+    .join(", ");
+  console.log(
+    `[verifyBackup] live-counts OK vs ${source} (threshold ${(LIVE_COUNTS_MIN_RATIO * 100).toFixed(
+      2,
+    )}%): ${summary}`,
+  );
+}
+
 function runVacuumAnalyze(): void {
   // VACUUM (ANALYZE) reads every heap page of every table, which is the
   // cheapest way to surface block-level corruption that pg_restore's
@@ -565,6 +858,16 @@ function main(): void {
   );
   if (smoke.status !== 0) fail(`smoke psql exited ${smoke.status}`, EXIT.SMOKE_FAILED);
 
+  // Live-vs-restored row-count comparison. Runs in both modes (a stale
+  // dump must page within ~24h, not wait for the weekly fuller pass)
+  // and is opt-in — see the LIVE_COUNTS_URL / LIVE_COUNTS_MANIFEST
+  // comment block at the top of this file. Sequenced after smoke so
+  // the cheap "is the table even there / non-empty" failure mode trips
+  // first; before extensions / FK / vacuum because if the *contents*
+  // are stale, the deeper integrity checks would mis-attribute "last
+  // month's data" as "this week's healthy state".
+  checkLiveCounts();
+
   // Extensions check runs in both modes — the "production app boots
   // against this sandbox" property is a smoke-grade invariant, and the
   // check itself is one fast catalog query.
@@ -588,4 +891,16 @@ function main(): void {
   console.log(`[verifyBackup] OK (mode=${mode})`);
 }
 
-main();
+// Gate the entry point so importing this module from a test (or any
+// other consumer) doesn't blow up by trying to read RESTORE_DATABASE_URL
+// and shell out to psql. Mirrors the pattern used by the other scripts
+// in this directory (e.g. checkRateLimitOptOutSunsets).
+const isDirectInvocation =
+  typeof process !== "undefined" &&
+  Array.isArray(process.argv) &&
+  process.argv[1] !== undefined &&
+  /verifyBackup(\.[mc]?[jt]s)?$/.test(process.argv[1]);
+
+if (isDirectInvocation) {
+  main();
+}

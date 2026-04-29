@@ -47,6 +47,29 @@ name: Backup verify (nightly smoke)
 #                                        check-ins for this nightly job.
 #                                        Same DSN secret as the weekly
 #                                        job; the slug differs.
+#   secrets.LIVE_COUNTS_URL           — optional. Read-only Postgres
+#                                        connection string the verifier
+#                                        psql-queries to fetch expected
+#                                        live row counts for the
+#                                        live-vs-restored comparison
+#                                        (exit 14). Mutually exclusive
+#                                        with LIVE_COUNTS_MANIFEST_URL.
+#                                        When unset, the live-counts
+#                                        comparison is skipped with a
+#                                        notice and a stale/partial-but-
+#                                        restorable dump can pass
+#                                        undetected.
+#   secrets.LIVE_COUNTS_MANIFEST_URL  — optional. Alternative to
+#                                        LIVE_COUNTS_URL when the runner
+#                                        cannot reach production: an
+#                                        HTTP(S) URL to a small JSON
+#                                        snapshot the platform's pg_dump
+#                                        cron writes alongside the dump,
+#                                        mapping table name -> live row
+#                                        count. The workflow curls it
+#                                        into ./backups/live-counts.json
+#                                        and passes the path through as
+#                                        LIVE_COUNTS_MANIFEST.
 #
 # Schedule: Mon-Sat 03:00 UTC (`0 3 * * 1-6`). Tweak `cron` if your
 # backup window shifts — remember to update the Sentry Cron monitor
@@ -164,6 +187,16 @@ jobs:
           SENTRY_DSN: ${{ secrets.BACKUP_VERIFY_SENTRY_DSN }}
           SENTRY_ORG: ${{ vars.SENTRY_ORG }}
           SENTRY_PROJECT: ${{ vars.SENTRY_PROJECT }}
+          # Live-vs-restored row-count comparison (verifyBackup.ts step
+          # 5, exit 14). Both are optional; the verifier skips the
+          # comparison with a notice when neither is set, and rejects
+          # the run when both are set (ambiguous source-of-truth). The
+          # MANIFEST_URL secret is downloaded inline below into
+          # ./backups/live-counts.json — only the resolved local path
+          # is exported to LIVE_COUNTS_MANIFEST so the verifier doesn't
+          # have to know about HTTP fetches.
+          LIVE_COUNTS_URL: ${{ secrets.LIVE_COUNTS_URL }}
+          LIVE_COUNTS_MANIFEST_URL: ${{ secrets.LIVE_COUNTS_MANIFEST_URL }}
         run: |
           # Materialise the fetch + verify body as a temp script so it
           # can be invoked either directly (no Sentry DSN -> no
@@ -187,12 +220,25 @@ jobs:
             exit 2
           fi
           eval "$BACKUP_FETCH_CMD"
+          # Pre-fetch the optional live-counts manifest if a URL was
+          # configured. Done here (not inside verifyBackup.ts) so the
+          # verifier doesn't have to grow an HTTP fetcher just for this
+          # one file, and so the same auth scheme used for the dump
+          # share (typically a pre-signed URL) can be reused. Keep in
+          # lockstep with the weekly workflow's equivalent block.
+          if [ -n "${LIVE_COUNTS_MANIFEST_URL:-}" ]; then
+            curl -fsSL "$LIVE_COUNTS_MANIFEST_URL" -o ./backups/live-counts.json
+            export LIVE_COUNTS_MANIFEST="${BACKUP_DIR}/live-counts.json"
+          fi
           ls -la ./backups
           # --mode=smoke (default — passed explicitly for clarity vs
           # backup-verify.yml's --mode=full). Smoke runs pg_restore +
-          # row-count smoke queries on (audit_log, payment_intents,
-          # orders). Keep this flag in lockstep with the weekly
-          # workflow when adding new verify steps.
+          # row-count smoke queries on (audit_events, payment_intents,
+          # orders), the optional live-vs-restored count comparison
+          # (when LIVE_COUNTS_URL or LIVE_COUNTS_MANIFEST is set), and
+          # the required-extension presence check. Keep this flag in
+          # lockstep with the weekly workflow when adding new verify
+          # steps.
           pnpm --filter @workspace/scripts exec tsx src/verifyBackup.ts --mode=smoke
           VERIFY
           chmod +x "$RUNNER_TEMP/verify.sh"
