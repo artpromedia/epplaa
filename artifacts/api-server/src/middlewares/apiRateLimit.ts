@@ -54,9 +54,12 @@ import { captureException, captureMessage } from "../lib/sentry";
  *   - AND `RATE_LIMIT_STORE` does not normalise to "redis" (i.e. it's
  *     unset / empty / "memory" / any other value that falls back to
  *     the in-process memory bucket),
- *   - THEN emit a loud structured warning naming the missing config,
- *     the production signals that triggered the check, and the
- *     runbook section to read.
+ *   - AND the explicit escape hatch
+ *     `RATE_LIMIT_STORE_ALLOW_MEMORY_IN_PRODUCTION=1` is NOT set,
+ *   - THEN emit a loud structured error naming the missing config and
+ *     return `{ ok: false }` so the boot caller can `process.exit(1)`
+ *     and refuse to start serving traffic. This mirrors how
+ *     `assertRehearsalKillSwitchSafe` is already a hard failure.
  *
  * The check determines production-ness via the operator-set env vars
  * only (the same `detectNonHostnameProductionSignals` helper used by
@@ -65,23 +68,33 @@ import { captureException, captureMessage } from "../lib/sentry";
  * regex parsing into the rate-limit module, and the signals chosen
  * are sufficient to catch the production deploys we actually ship.
  *
- * This is a warning, not a hard failure. Some legitimate single-replica
- * production deploys (e.g. canary, internal-only tools) intentionally
- * run on the in-process bucket because they can't justify a managed
- * Redis. Crash-looping every existing production deploy that hasn't
- * yet wired Redis would be more disruptive than the marginal security
- * gain — instead we rely on a Sentry / log-aggregator alert keyed off
- * the dedicated `rate_limit_store_misconfigured_for_production`
- * message tag so on-call sees the misconfiguration within minutes of
- * the next deploy. Tightening to a hard failure can come later once
- * every shipping deploy is known to be Redis-backed.
+ * Escape hatch (`RATE_LIMIT_STORE_ALLOW_MEMORY_IN_PRODUCTION=1`):
+ * legitimate single-replica production deploys (canary, internal-only
+ * tools) that intentionally run on the in-process bucket can opt out
+ * by setting this env var to the literal `"1"`. The check then
+ * downgrades from a fatal error to a loud `pino warn` keyed off
+ * `rate_limit_store_memory_in_production_via_opt_out` so on-call still
+ * sees that the bypassable per-process bucket is in use, but boot is
+ * allowed to proceed. A multi-replica production deploy that flips
+ * this flag to silence the failure has misused the escape hatch — the
+ * runbook documents the exact criteria for when it's safe.
+ *
+ * Pre-graduation history: this check used to emit a `warn` and let
+ * boot continue regardless. That was deliberately non-fatal so the
+ * change could ship without crash-looping existing production deploys
+ * that hadn't yet wired Redis. Now that managed Redis is provisioned
+ * for every shipping production deploy and the Sentry alert on the
+ * warning has been clean for the stabilisation window described in
+ * task #87, the check has been graduated to a hard failure so a
+ * future env-var rotation can't silently re-introduce the bypassable
+ * per-process bucket on a multi-replica deploy.
  *
  * Pure function — takes `env` and a `log` sink so the unit test can
- * exercise both the staging-skipped, production-warned, and
- * production-configured paths without poisoning `process.env` or
- * piping pino output. Returns the outcome instead of side-effects so
- * the caller can decide what to do (today: log + continue; in the
- * future a deploy gate could reject).
+ * exercise the staging-skipped, production-failed, opt-out-warned,
+ * and production-configured paths without poisoning `process.env` or
+ * piping pino output. Returns the outcome instead of calling
+ * `process.exit` directly so the caller composes the boot sequence
+ * (and tests can assert on the return value).
  */
 export type RateLimitStoreConfigOutcome =
   | { ok: true }
@@ -89,12 +102,15 @@ export type RateLimitStoreConfigOutcome =
 
 export function assertRateLimitStoreConfiguredForProduction(
   env: NodeJS.ProcessEnv,
-  log: { warn: (obj: unknown, msg: string) => void },
+  log: {
+    warn: (obj: unknown, msg: string) => void;
+    error: (obj: unknown, msg: string) => void;
+  },
 ): RateLimitStoreConfigOutcome {
   const productionSignals = detectNonHostnameProductionSignals(env);
   if (productionSignals.length === 0) {
     // Not a production deploy — the in-process bucket is fine on
-    // staging / dev / preview environments. Nothing to warn about.
+    // staging / dev / preview environments. Nothing to log about.
     return { ok: true };
   }
 
@@ -105,7 +121,7 @@ export function assertRateLimitStoreConfiguredForProduction(
   // `createBucketStore` would also reject and log
   // `rate_limit_store_unknown_kind_falling_back_to_memory` for —
   // falls back to the per-process memory bucket and is the
-  // misconfiguration we're warning about. The shared helper means a
+  // misconfiguration we're failing on. The shared helper means a
   // whitespace-padded `RATE_LIMIT_STORE=" redis "` is BOTH selected
   // as redis at runtime AND counted as configured here, instead of
   // the runtime silently falling back to memory while the guard
@@ -117,7 +133,7 @@ export function assertRateLimitStoreConfiguredForProduction(
     // Configured. We deliberately do NOT also assert REDIS_URL here —
     // `createBucketStore` already throws synchronously at boot when
     // `RATE_LIMIT_STORE=redis` is set without `REDIS_URL`, which
-    // crash-loops the deploy with a clear message. A second warning
+    // crash-loops the deploy with a clear message. A second log line
     // from this check would be duplicate noise on a path that already
     // fails loudly.
     return { ok: true };
@@ -137,7 +153,37 @@ export function assertRateLimitStoreConfiguredForProduction(
     "multiplied by the replica count and trivially bypassed by spreading " +
     "traffic across replicas. Set RATE_LIMIT_STORE=redis (and REDIS_URL) " +
     "— see docs/runbooks/rate-limit-store.md (boot-time presence check).";
-  log.warn(
+
+  // Explicit opt-out for legitimate single-replica production deploys
+  // (canary, internal-only tools). The escape hatch is gated on the
+  // literal "1" — same strictness as `REPLIT_DEPLOYMENT=1` in
+  // `detectNonHostnameProductionSignals` — so casing drift like
+  // "true" / "yes" can't accidentally bypass the boot failure. When
+  // set, the check downgrades from a hard error to a loud warn so
+  // operators can still see in Sentry / log aggregators that the
+  // bypassable per-process bucket is in use; boot is allowed to
+  // proceed.
+  if (env.RATE_LIMIT_STORE_ALLOW_MEMORY_IN_PRODUCTION === "1") {
+    log.warn(
+      {
+        node_env: env.NODE_ENV,
+        replit_deployment: env.REPLIT_DEPLOYMENT,
+        deployment_environment: env.DEPLOYMENT_ENVIRONMENT,
+        rate_limit_store: raw ?? null,
+        rate_limit_store_allow_memory_in_production:
+          env.RATE_LIMIT_STORE_ALLOW_MEMORY_IN_PRODUCTION,
+        production_signals: productionSignals.map((s) => s.signal),
+      },
+      `rate_limit_store_memory_in_production_via_opt_out: ${reason} ` +
+        "Boot is proceeding because " +
+        "RATE_LIMIT_STORE_ALLOW_MEMORY_IN_PRODUCTION=1 explicitly opts out " +
+        "of the hard-fail check; this is only safe for single-replica " +
+        "deploys.",
+    );
+    return { ok: true };
+  }
+
+  log.error(
     {
       node_env: env.NODE_ENV,
       replit_deployment: env.REPLIT_DEPLOYMENT,
@@ -145,7 +191,10 @@ export function assertRateLimitStoreConfiguredForProduction(
       rate_limit_store: raw ?? null,
       production_signals: productionSignals.map((s) => s.signal),
     },
-    `rate_limit_store_misconfigured_for_production: ${reason}`,
+    `rate_limit_store_misconfigured_for_production: ${reason} ` +
+      "Refusing to start. Set RATE_LIMIT_STORE=redis (and REDIS_URL) on " +
+      "this deploy, or set RATE_LIMIT_STORE_ALLOW_MEMORY_IN_PRODUCTION=1 " +
+      "to opt out (single-replica deploys only — see runbook).",
   );
   return { ok: false, reason };
 }

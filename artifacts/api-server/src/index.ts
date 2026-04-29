@@ -41,22 +41,37 @@ if (!rehearsalGuard.ok) {
 // var would be more disruptive than the marginal security gain.
 assertProductionHostnamePatternConfigured(process.env, logger);
 
-// Boot-time sanity check (task #87): on production-shaped deploys
-// (NODE_ENV=production / REPLIT_DEPLOYMENT=1 / DEPLOYMENT_ENVIRONMENT=production),
-// warn loudly if RATE_LIMIT_STORE is unset / "memory". The runbook
+// Boot-time hard failure (task #90, graduated from the task #87 warning):
+// on production-shaped deploys (NODE_ENV=production /
+// REPLIT_DEPLOYMENT=1 / DEPLOYMENT_ENVIRONMENT=production), refuse to
+// start if RATE_LIMIT_STORE is unset / "memory" / typo'd. The runbook
 // (`docs/runbooks/rate-limit-store.md`) explicitly says
 // `RATE_LIMIT_STORE=redis` is required for any deploy with more than
 // one api-server replica — the in-process bucket is replica-local, so
 // each replica owns its own counters and the per-tier rate limit is
-// trivially bypassed by spreading traffic across replicas. The check
-// turns the runbook recommendation into an automated boot-time signal
-// so the misconfiguration shows up in log aggregators / Sentry within
-// minutes of the next deploy. Like the hostname-pattern check above,
-// the outcome is intentionally NOT used to abort boot — single-replica
-// production deploys legitimately run on the in-process bucket and
-// crash-looping every existing deploy that hasn't wired Redis would
-// be more disruptive than the marginal security gain.
-assertRateLimitStoreConfiguredForProduction(process.env, logger);
+// trivially bypassed by spreading traffic across replicas. Now that
+// managed Redis is provisioned for every shipping production deploy
+// and the Sentry alert on the original warning has been clean for the
+// stabilisation window, the check has been graduated to a hard boot
+// failure so a future env-var rotation can't silently re-introduce
+// the bypassable per-process bucket. Mirrors how
+// `assertRehearsalKillSwitchSafe` is already a hard failure above.
+//
+// Legitimate single-replica production deploys (canary, internal-only
+// tools) that intentionally run on the in-process bucket can opt out
+// by setting `RATE_LIMIT_STORE_ALLOW_MEMORY_IN_PRODUCTION=1` —
+// `assertRateLimitStoreConfiguredForProduction` then downgrades to a
+// loud warn keyed off `rate_limit_store_memory_in_production_via_opt_out`
+// so on-call still sees the bypassable bucket but boot proceeds. See
+// `docs/runbooks/rate-limit-store.md` (boot-time presence check) for
+// when the escape hatch is appropriate.
+const rateLimitStoreGuard = assertRateLimitStoreConfiguredForProduction(
+  process.env,
+  logger,
+);
+if (!rateLimitStoreGuard.ok) {
+  process.exit(1);
+}
 
 const rawPort = process.env["PORT"];
 

@@ -19,12 +19,13 @@ The api-server entrypoint (`artifacts/api-server/src/index.ts`) runs
 `artifacts/api-server/src/middlewares/apiRateLimit.ts`) on every boot.
 On a production-shaped deploy (any of `NODE_ENV=production`,
 `REPLIT_DEPLOYMENT=1`, `DEPLOYMENT_ENVIRONMENT=production`) it emits a
-loud structured warning identified by the message tag
-`rate_limit_store_misconfigured_for_production` when `RATE_LIMIT_STORE`
-does not normalise to `"redis"` (i.e. it's unset, empty, `"memory"`, or
-any typo'd value that `createBucketStore` would also fall back to the
-in-process bucket for). The check uses the same
-`detectNonHostnameProductionSignals` helper as the
+loud structured **error** identified by the message tag
+`rate_limit_store_misconfigured_for_production` and the boot caller in
+`index.ts` then `process.exit(1)`s — the deploy refuses to start —
+when `RATE_LIMIT_STORE` does not normalise to `"redis"` (i.e. it's
+unset, empty, `"memory"`, or any typo'd value that `createBucketStore`
+would also fall back to the in-process bucket for). The check uses the
+same `detectNonHostnameProductionSignals` helper as the
 `production_hostname_pattern_missing` check above (see also
 `artifacts/api-server/src/lib/productionSignals.ts`).
 
@@ -39,12 +40,16 @@ api-server replica, but until this check shipped the only feedback an
 operator got was a runbook prose sentence, easy to miss across env-var
 rotations and platform migrations.
 
-The check is intentionally a warning, not a hard failure, so:
-
-- Single-replica production deploys (canary, internal-only tools)
-  that legitimately run on the in-process bucket are not crash-looped.
-- Existing production deploys that haven't yet been rotated to wire
-  Redis don't refuse to start the first time the change ships.
+This check originally shipped (task #87) as a non-fatal `pino warn`
+so existing production deploys that hadn't yet wired Redis weren't
+crash-looped on the first restart after the change shipped. Now that
+managed Redis is provisioned for every shipping production deploy and
+the Sentry alert on the warning has been clean for the stabilisation
+window, the check has been **graduated to a hard boot failure** (task
+#90) so a future env-var rotation can't silently re-introduce the
+bypassable per-process bucket on a multi-replica deploy. This mirrors
+how `assertRehearsalKillSwitchSafe` (further up this runbook) is
+already a hard failure.
 
 The structured log payload includes `production_signals` (which
 signals tripped the production-shape detection), `node_env`,
@@ -52,37 +57,115 @@ signals tripped the production-shape detection), `node_env`,
 `rate_limit_store` value (`null` when unset) so triage can confirm
 the misconfiguration without shelling onto the box. A healthy boot —
 production deploy with `RATE_LIMIT_STORE=redis` — produces zero output
-from this check, so the alert below can fire on first occurrence
-without tuning.
+from this check.
+
+### Escape hatch for legitimate single-replica production deploys
+
+A small number of production deploys legitimately run on the
+in-process bucket because they can't justify a managed Redis and only
+ever run as a single replica:
+
+- **Canary deploys** that route a tiny slice of real traffic to a
+  separate single-replica process for risk-bounded rollouts.
+- **Internal-only tools** (e.g. an internal admin-only api-server
+  variant) that are not exposed to the public internet and never
+  scale beyond one replica.
+
+These deploys can opt out of the hard boot failure by setting:
+
+```sh
+RATE_LIMIT_STORE_ALLOW_MEMORY_IN_PRODUCTION=1
+```
+
+When this env var is set to the literal `"1"` on a production-shaped
+deploy that is otherwise missing Redis, the check **downgrades** from
+a fatal error to a loud `pino warn` keyed off the message tag
+`rate_limit_store_memory_in_production_via_opt_out` and returns
+`{ ok: true }` so boot proceeds. The structured log payload still
+includes the same diagnostic fields plus
+`rate_limit_store_allow_memory_in_production` so an operator triaging
+a misuse case can prove the flag is what permitted the deploy (not a
+code change).
+
+Strict matching: only the literal `"1"` opts out — values like
+`"true"`, `"yes"`, `"01"`, or `" 1 "` are ignored and the boot
+failure stands. This matches the strictness of `REPLIT_DEPLOYMENT=1`
+and `DEPLOYMENT_ENVIRONMENT=production` elsewhere in the boot
+sequence so casing drift can't accidentally bypass the failure.
+
+**When NOT to set this flag:**
+
+- Multi-replica production deploys. The whole point of the hard
+  failure is to stop these deploys from silently shipping bypassable
+  per-process buckets. Setting the opt-out on a multi-replica deploy
+  is a misuse and the abuse-prevention layer is effectively disabled.
+- "I don't want to think about Redis right now" deploys. The opt-out
+  is for deploys that have made an informed trade-off — wire Redis
+  instead.
+- Any deploy that handles authenticated buyer/seller traffic at
+  meaningful volume. Even a single-replica deploy benefits from a
+  shared Redis bucket the moment it crosses one replica, and the
+  opt-out is sticky enough that it's easy to forget when scaling up.
+
+Wire a separate alert on the
+`rate_limit_store_memory_in_production_via_opt_out` warn so the
+opt-out path is auditable — it should be a known list of named deploys,
+not a quiet steady stream of warns from random api-server hosts.
+
+### Wire alerts
 
 **Wire a Sentry / log-aggregator alert on the
-`rate_limit_store_misconfigured_for_production` message tag**, route
-it to the rate-limit owners, and treat it as a misconfigured-deploy
-remediation:
+`rate_limit_store_misconfigured_for_production` error tag** as well
+as the `rate_limit_store_memory_in_production_via_opt_out` warn tag,
+route both to the rate-limit owners, and treat them differently:
 
-- Sentry: in **Alerts → Create Alert → Issue Alert**, filter to
+- `rate_limit_store_misconfigured_for_production` (error level,
+  emitted just before the boot caller exits 1) — the deploy is
+  crash-looping. Page on-call. Either wire Redis or set the opt-out
+  env var if (and only if) the deploy fits the single-replica
+  criteria above.
+- `rate_limit_store_memory_in_production_via_opt_out` (warn level,
+  emitted on every boot of an opted-out deploy) — the deploy is
+  knowingly running on the bypassable bucket. Should be a known list
+  of named deploys; an unrecognised host on this alert means somebody
+  set the opt-out where they shouldn't have.
+
+Sentry wiring:
+
+- In **Alerts → Create Alert → Issue Alert**, filter to
   `message:"*rate_limit_store_misconfigured_for_production*"` (the
-  tag is embedded in the warning text emitted by `pino`) on the
-  api-server project. Set the action to page the on-call rotation
+  tag is embedded in the error text emitted by `pino`) on the
+  api-server project and set the action to page the on-call rotation
   that owns rate limiting. Severity should match the
   `production_hostname_pattern_missing` alert above so both
   production-config drifts are routed the same way.
-- Datadog / log aggregator: a saved query of
-  `message:"rate_limit_store_misconfigured_for_production"` against
-  the api-server log source, with a monitor that triggers on
-  `count > 0 last 5 minutes`. Forward to the same on-call channel.
+- A second issue alert on
+  `message:"*rate_limit_store_memory_in_production_via_opt_out*"`
+  routed to the same channel as a notification (not a page) so the
+  team can audit which deploys are opted out.
 
-When the alert fires, fix the deploy:
+Datadog / log aggregator: equivalent saved queries on the same two
+message tags, monitored at `count > 0 last 5 minutes`.
+
+When the production-shape boot failure fires, fix the deploy:
 
 ```sh
-# On the production api-server deploy:
+# Multi-replica production deploy: wire Redis.
 RATE_LIMIT_STORE=redis
 REDIS_URL=<connection string for the managed Redis instance>
 ```
 
+OR, if and only if the deploy fits the single-replica criteria above
+(canary / internal-only tool):
+
+```sh
+# Single-replica production deploy that has made an informed trade-off:
+RATE_LIMIT_STORE_ALLOW_MEMORY_IN_PRODUCTION=1
+```
+
 Then restart the api-server. Confirm the fix landed by hitting
 `/healthz` and looking for `rateLimitStore: "redis"` in the body
-(see Step 1 below). Do **not** work around the warning by unsetting
+(see Step 1 below). Do **not** work around the failure by unsetting
 `NODE_ENV` / `REPLIT_DEPLOYMENT` / `DEPLOYMENT_ENVIRONMENT` — those
 signals exist precisely to catch the case where the rate-limit store
 is misconfigured on a production deploy; weakening them defeats the
@@ -90,10 +173,10 @@ check.
 
 The check is unit-covered in
 `artifacts/api-server/src/middlewares/apiRateLimit.test.ts`
-(`assertRateLimitStoreConfiguredForProduction —` describe block) and
-the production-shape signal detection it shares with the hostname
-check is covered in
-`artifacts/api-server/src/routes/healthzRehearsal.test.ts`.
+(`assertRateLimitStoreConfiguredForProduction —` describe block,
+including the fail-fast path AND the explicit opt-out path) and the
+production-shape signal detection it shares with the hostname check
+is covered in `artifacts/api-server/src/routes/healthzRehearsal.test.ts`.
 
 ## Symptom: alert from Sentry
 

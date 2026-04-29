@@ -546,78 +546,95 @@ describe("assertRateLimitStoreConfiguredForProduction — production rate-limit 
   // (`createBucketStore` above). Multi-replica production deploys with
   // the in-memory bucket give each replica its own counters, so the
   // per-tier rate limit is effectively multiplied by the replica count
-  // and trivially bypassed. Until this check shipped, the only feedback
-  // an operator got was a runbook prose sentence — easy to miss across
-  // env-var rotations and platform migrations. The check turns the
-  // runbook recommendation into an automated boot-time signal so the
-  // misconfiguration shows up in log aggregators / Sentry within
-  // minutes instead of waiting for the next abuse incident to expose
-  // the bypassable buckets.
+  // and trivially bypassed. Task #87 first shipped this check as a
+  // structured warning so the misconfiguration would show up in log
+  // aggregators / Sentry without crash-looping existing production
+  // deploys that hadn't yet wired Redis. Task #90 then graduated the
+  // check to a hard boot failure (the boot caller in `index.ts`
+  // calls `process.exit(1)` on `{ ok: false }`) so a future env-var
+  // rotation can't silently re-introduce the bypassable per-process
+  // bucket on a multi-replica deploy. An explicit escape hatch
+  // (`RATE_LIMIT_STORE_ALLOW_MEMORY_IN_PRODUCTION=1`) downgrades the
+  // failure to a loud `pino warn` for legitimate single-replica
+  // deploys (canary, internal-only tools).
   //
   // The check intentionally determines production-ness via
   // `detectNonHostnameProductionSignals` only (the same shared helper
   // used by `assertProductionHostnamePatternConfigured`) — the
   // hostname pattern is out of scope here.
 
-  type WarnCall = [obj: unknown, msg: string];
-  function buildWarnSink(): {
+  type LogCall = [obj: unknown, msg: string];
+  function buildLogSink(): {
     warn: (obj: unknown, msg: string) => void;
-    calls: WarnCall[];
+    error: (obj: unknown, msg: string) => void;
+    warnCalls: LogCall[];
+    errorCalls: LogCall[];
   } {
-    const calls: WarnCall[] = [];
+    const warnCalls: LogCall[] = [];
+    const errorCalls: LogCall[] = [];
     return {
       warn: (obj, msg) => {
-        calls.push([obj, msg]);
+        warnCalls.push([obj, msg]);
       },
-      calls,
+      error: (obj, msg) => {
+        errorCalls.push([obj, msg]);
+      },
+      warnCalls,
+      errorCalls,
     };
   }
 
   it("does nothing on a non-production deploy (staging) with RATE_LIMIT_STORE unset", () => {
     // The pattern is optional outside production — the check must not
-    // warn, otherwise every staging boot would emit noise about a
+    // log, otherwise every staging boot would emit noise about a
     // production-only configuration.
-    const log = buildWarnSink();
+    const log = buildLogSink();
     const result = assertRateLimitStoreConfiguredForProduction(
       { NODE_ENV: "staging" },
       log,
     );
     expect(result.ok).toBe(true);
-    expect(log.calls).toEqual([]);
+    expect(log.warnCalls).toEqual([]);
+    expect(log.errorCalls).toEqual([]);
   });
 
   it("does nothing on a development deploy", () => {
     // Local-dev parity — the in-process bucket is the right default
     // for a single-process dev workspace.
-    const log = buildWarnSink();
+    const log = buildLogSink();
     const result = assertRateLimitStoreConfiguredForProduction(
       { NODE_ENV: "development" },
       log,
     );
     expect(result.ok).toBe(true);
-    expect(log.calls).toEqual([]);
+    expect(log.warnCalls).toEqual([]);
+    expect(log.errorCalls).toEqual([]);
   });
 
   it("does nothing on a Replit dev workspace (REPLIT_DEPLOYMENT unset/0)", () => {
     // REPLIT_DEPLOYMENT=0 / unset means "Replit dev workspace, not a
     // production deployment" — Redis is not required.
-    const log = buildWarnSink();
+    const log = buildLogSink();
     for (const value of [undefined, "", "0", "true"]) {
       const env: NodeJS.ProcessEnv = { NODE_ENV: "development" };
       if (value !== undefined) env.REPLIT_DEPLOYMENT = value;
       const result = assertRateLimitStoreConfiguredForProduction(env, log);
       expect(result.ok, `value=${String(value)}`).toBe(true);
     }
-    expect(log.calls).toEqual([]);
+    expect(log.warnCalls).toEqual([]);
+    expect(log.errorCalls).toEqual([]);
   });
 
-  it("WARNS when NODE_ENV=production and RATE_LIMIT_STORE is unset", () => {
+  it("FAILS BOOT when NODE_ENV=production and RATE_LIMIT_STORE is unset", () => {
     // The original task case: a production-shaped deploy ships
     // without Redis-backed rate limiting and silently degrades to
-    // per-process buckets. The check must surface a loud structured
-    // warning so an operator notices before the next abuse incident
-    // proves the layer was missing.
-    const log = buildWarnSink();
+    // per-process buckets. Post-graduation (task #90) the check must
+    // return `{ ok: false }` so the boot caller in index.ts exits the
+    // process — letting the deploy serve traffic with bypassable
+    // per-process buckets is exactly the regression this guard exists
+    // to prevent. The structured log must be at `error` level (not
+    // `warn`) because this is now a fatal condition.
+    const log = buildLogSink();
     const result = assertRateLimitStoreConfiguredForProduction(
       { NODE_ENV: "production" },
       log,
@@ -628,10 +645,14 @@ describe("assertRateLimitStoreConfiguredForProduction — production rate-limit 
     expect(result.reason).toMatch(/NODE_ENV=production/);
     expect(result.reason).toMatch(/multi-replica/i);
     expect(result.reason).toMatch(/runbook|rate-limit-store/i);
-    expect(log.calls).toHaveLength(1);
-    const [obj, msg] = log.calls[0]!;
+    // Hard failure ⇒ error-level log, no warn output. This shape is
+    // load-bearing for the production Sentry alert keyed off
+    // level=error + the message tag below.
+    expect(log.warnCalls).toEqual([]);
+    expect(log.errorCalls).toHaveLength(1);
+    const [obj, msg] = log.errorCalls[0]!;
     // The structured log must surface the offending env vars so an
-    // operator reading a Sentry warning can confirm the
+    // operator reading a Sentry alert can confirm the
     // misconfiguration without shelling onto the box.
     expect(obj).toMatchObject({
       node_env: "production",
@@ -641,12 +662,19 @@ describe("assertRateLimitStoreConfiguredForProduction — production rate-limit 
     // Dedicated message identifier so log aggregators / Sentry
     // alerts can be wired up exactly to this event.
     expect(msg).toMatch(/rate_limit_store_misconfigured_for_production/);
+    // The error message must point operators at both fixes — wire
+    // Redis OR opt out via the documented escape hatch — so the
+    // crash-looping deploy is self-explanatory without grep'ing the
+    // runbook for what the new env var name is.
+    expect(msg).toMatch(/Refusing to start/);
+    expect(msg).toMatch(/RATE_LIMIT_STORE=redis/);
+    expect(msg).toMatch(/RATE_LIMIT_STORE_ALLOW_MEMORY_IN_PRODUCTION=1/);
   });
 
-  it("WARNS when REPLIT_DEPLOYMENT=1 alone triggers production-shape detection", () => {
+  it("FAILS BOOT when REPLIT_DEPLOYMENT=1 alone triggers production-shape detection", () => {
     // A deploy with NODE_ENV unset / staging but the Replit platform
     // marker set is still production-shaped. Redis is still required.
-    const log = buildWarnSink();
+    const log = buildLogSink();
     const result = assertRateLimitStoreConfiguredForProduction(
       { REPLIT_DEPLOYMENT: "1" },
       log,
@@ -654,16 +682,17 @@ describe("assertRateLimitStoreConfiguredForProduction — production rate-limit 
     expect(result.ok).toBe(false);
     if (result.ok) throw new Error("unreachable");
     expect(result.reason).toMatch(/REPLIT_DEPLOYMENT=1/);
-    expect(log.calls).toHaveLength(1);
-    const [obj] = log.calls[0]!;
+    expect(log.warnCalls).toEqual([]);
+    expect(log.errorCalls).toHaveLength(1);
+    const [obj] = log.errorCalls[0]!;
     expect(obj).toMatchObject({
       replit_deployment: "1",
       production_signals: ["replit_deployment"],
     });
   });
 
-  it("WARNS when DEPLOYMENT_ENVIRONMENT=production alone triggers production-shape detection", () => {
-    const log = buildWarnSink();
+  it("FAILS BOOT when DEPLOYMENT_ENVIRONMENT=production alone triggers production-shape detection", () => {
+    const log = buildLogSink();
     const result = assertRateLimitStoreConfiguredForProduction(
       { DEPLOYMENT_ENVIRONMENT: "production" },
       log,
@@ -671,21 +700,22 @@ describe("assertRateLimitStoreConfiguredForProduction — production rate-limit 
     expect(result.ok).toBe(false);
     if (result.ok) throw new Error("unreachable");
     expect(result.reason).toMatch(/DEPLOYMENT_ENVIRONMENT=production/);
-    expect(log.calls).toHaveLength(1);
-    const [obj] = log.calls[0]!;
+    expect(log.warnCalls).toEqual([]);
+    expect(log.errorCalls).toHaveLength(1);
+    const [obj] = log.errorCalls[0]!;
     expect(obj).toMatchObject({
       deployment_environment: "production",
       production_signals: ["deployment_environment"],
     });
   });
 
-  it("WARNS when RATE_LIMIT_STORE='memory' is explicitly set in production", () => {
+  it("FAILS BOOT when RATE_LIMIT_STORE='memory' is explicitly set in production", () => {
     // Belt-and-braces: an operator who explicitly set the value to
     // the in-memory bucket on a production deploy is in the same
     // bypassable state as one who left it unset. The check must
     // surface both, and the structured log must echo the observed
     // value so the operator can tell the two apart in triage.
-    const log = buildWarnSink();
+    const log = buildLogSink();
     const result = assertRateLimitStoreConfiguredForProduction(
       { NODE_ENV: "production", RATE_LIMIT_STORE: "memory" },
       log,
@@ -693,21 +723,22 @@ describe("assertRateLimitStoreConfiguredForProduction — production rate-limit 
     expect(result.ok).toBe(false);
     if (result.ok) throw new Error("unreachable");
     expect(result.reason).toMatch(/RATE_LIMIT_STORE="memory"/);
-    expect(log.calls).toHaveLength(1);
-    const [obj] = log.calls[0]!;
+    expect(log.warnCalls).toEqual([]);
+    expect(log.errorCalls).toHaveLength(1);
+    const [obj] = log.errorCalls[0]!;
     expect(obj).toMatchObject({
       rate_limit_store: "memory",
     });
   });
 
-  it("WARNS for any non-redis value (typos like 'redys' fall back to memory the same way)", () => {
+  it("FAILS BOOT for any non-redis value (typos like 'redys' fall back to memory the same way)", () => {
     // `createBucketStore` defaults to the in-memory bucket and emits
     // `rate_limit_store_unknown_kind_falling_back_to_memory` for any
     // unknown value. Those deploys are equally bypassable — the check
-    // must warn about them too so a typo'd env var doesn't silently
+    // must fail boot for them too so a typo'd env var doesn't silently
     // ship to production. Empty string and whitespace-only normalise
-    // the same way: not "redis" → fall back to memory → warn.
-    const log = buildWarnSink();
+    // the same way: not "redis" → fall back to memory → fail.
+    const log = buildLogSink();
     for (const value of ["redys", "REDIS_CLUSTER", "Memory", "", " ", "\t"]) {
       const result = assertRateLimitStoreConfiguredForProduction(
         { NODE_ENV: "production", RATE_LIMIT_STORE: value },
@@ -715,14 +746,15 @@ describe("assertRateLimitStoreConfiguredForProduction — production rate-limit 
       );
       expect(result.ok, `value=${JSON.stringify(value)}`).toBe(false);
     }
-    expect(log.calls.length).toBe(6);
+    expect(log.errorCalls.length).toBe(6);
+    expect(log.warnCalls).toEqual([]);
   });
 
-  it("does NOT warn when RATE_LIMIT_STORE=redis on a production deploy (the healthy path)", () => {
+  it("does NOT log when RATE_LIMIT_STORE=redis on a production deploy (the healthy path)", () => {
     // The common, correct case: a real production deploy with Redis
     // wired up. Must return ok with zero log output — the check is
     // meant to be silent on a healthy boot.
-    const log = buildWarnSink();
+    const log = buildLogSink();
     const result = assertRateLimitStoreConfiguredForProduction(
       {
         NODE_ENV: "production",
@@ -733,14 +765,15 @@ describe("assertRateLimitStoreConfiguredForProduction — production rate-limit 
       log,
     );
     expect(result.ok).toBe(true);
-    expect(log.calls).toEqual([]);
+    expect(log.warnCalls).toEqual([]);
+    expect(log.errorCalls).toEqual([]);
   });
 
   it("normalises RATE_LIMIT_STORE case-insensitively so 'REDIS' / ' redis ' count as configured", () => {
     // Mirrors `createBucketStore`'s `(env ?? "memory").toLowerCase()`
     // — a value of "REDIS" or " redis " selects the Redis backend at
-    // boot, so the check must agree and not warn.
-    const log = buildWarnSink();
+    // boot, so the check must agree and not fail boot.
+    const log = buildLogSink();
     for (const value of ["REDIS", "Redis", " redis", "redis ", "  redis  "]) {
       const result = assertRateLimitStoreConfiguredForProduction(
         { NODE_ENV: "production", RATE_LIMIT_STORE: value },
@@ -748,14 +781,15 @@ describe("assertRateLimitStoreConfiguredForProduction — production rate-limit 
       );
       expect(result.ok, `value=${JSON.stringify(value)}`).toBe(true);
     }
-    expect(log.calls).toEqual([]);
+    expect(log.warnCalls).toEqual([]);
+    expect(log.errorCalls).toEqual([]);
   });
 
-  it("aggregates every production signal into a single warning so on-call sees them all at once", () => {
-    // If multiple signals are lit, the warning must list every one
+  it("aggregates every production signal into a single error so on-call sees them all at once", () => {
+    // If multiple signals are lit, the failure must list every one
     // — otherwise an operator who fixes the first signal would have
     // to redeploy and re-read logs to discover the next.
-    const log = buildWarnSink();
+    const log = buildLogSink();
     const result = assertRateLimitStoreConfiguredForProduction(
       {
         NODE_ENV: "production",
@@ -769,8 +803,9 @@ describe("assertRateLimitStoreConfiguredForProduction — production rate-limit 
     expect(result.reason).toMatch(/NODE_ENV=production/);
     expect(result.reason).toMatch(/REPLIT_DEPLOYMENT=1/);
     expect(result.reason).toMatch(/DEPLOYMENT_ENVIRONMENT=production/);
-    expect(log.calls).toHaveLength(1);
-    const [obj] = log.calls[0]!;
+    expect(log.warnCalls).toEqual([]);
+    expect(log.errorCalls).toHaveLength(1);
+    const [obj] = log.errorCalls[0]!;
     expect(obj).toMatchObject({
       production_signals: [
         "node_env",
@@ -783,7 +818,7 @@ describe("assertRateLimitStoreConfiguredForProduction — production rate-limit 
   it("ignores REPLIT_DEPLOYMENT values other than the literal '1'", () => {
     // Mirrors the kill-switch and hostname-pattern guards' strictness
     // — only the literal "1" trips the production-deployment signal.
-    const log = buildWarnSink();
+    const log = buildLogSink();
     for (const bogus of ["0", "true", "false", "yes", " 1 "]) {
       const result = assertRateLimitStoreConfiguredForProduction(
         { REPLIT_DEPLOYMENT: bogus },
@@ -791,14 +826,15 @@ describe("assertRateLimitStoreConfiguredForProduction — production rate-limit 
       );
       expect(result.ok, `bogus=${bogus}`).toBe(true);
     }
-    expect(log.calls).toEqual([]);
+    expect(log.warnCalls).toEqual([]);
+    expect(log.errorCalls).toEqual([]);
   });
 
   it("ignores DEPLOYMENT_ENVIRONMENT values other than the literal 'production'", () => {
     // Mirrors the sibling guards: only the lowercase literal matches.
     // Casing drift (e.g. "Production", "PROD") is the operator's
     // responsibility to normalise upstream.
-    const log = buildWarnSink();
+    const log = buildLogSink();
     for (const value of ["staging", "preview", "Production", "PROD", "qa"]) {
       const result = assertRateLimitStoreConfiguredForProduction(
         { DEPLOYMENT_ENVIRONMENT: value },
@@ -806,7 +842,138 @@ describe("assertRateLimitStoreConfiguredForProduction — production rate-limit 
       );
       expect(result.ok, `value=${value}`).toBe(true);
     }
-    expect(log.calls).toEqual([]);
+    expect(log.warnCalls).toEqual([]);
+    expect(log.errorCalls).toEqual([]);
+  });
+
+  it("DOWNGRADES to a warn (and proceeds) when RATE_LIMIT_STORE_ALLOW_MEMORY_IN_PRODUCTION=1 opts out", () => {
+    // The escape hatch path (task #90): legitimate single-replica
+    // production deploys (canary, internal-only tools) intentionally
+    // run on the in-process bucket. Setting the literal "1" must:
+    //   - downgrade the log from `error` to `warn` so the deploy is
+    //     not crash-looped,
+    //   - return `{ ok: true }` so the boot caller proceeds,
+    //   - still emit a loud structured warning keyed off
+    //     `rate_limit_store_memory_in_production_via_opt_out` so
+    //     on-call sees that the bypassable per-process bucket is in
+    //     use even though boot was permitted,
+    //   - echo the opt-out env var in the structured payload so an
+    //     operator triaging a misuse case can prove the flag is what
+    //     downgraded the failure (not a code change).
+    const log = buildLogSink();
+    const result = assertRateLimitStoreConfiguredForProduction(
+      {
+        NODE_ENV: "production",
+        RATE_LIMIT_STORE_ALLOW_MEMORY_IN_PRODUCTION: "1",
+      },
+      log,
+    );
+    expect(result.ok).toBe(true);
+    expect(log.errorCalls).toEqual([]);
+    expect(log.warnCalls).toHaveLength(1);
+    const [obj, msg] = log.warnCalls[0]!;
+    expect(msg).toMatch(/rate_limit_store_memory_in_production_via_opt_out/);
+    // The reason wording from the failure path is preserved so triage
+    // can still see WHY the deploy is in the bypassable state — only
+    // the disposition (warn vs error, ok vs not-ok) changed.
+    expect(msg).toMatch(/RATE_LIMIT_STORE is unset/);
+    expect(msg).toMatch(/multi-replica/i);
+    expect(msg).toMatch(/single-replica/i);
+    expect(obj).toMatchObject({
+      node_env: "production",
+      rate_limit_store: null,
+      rate_limit_store_allow_memory_in_production: "1",
+      production_signals: ["node_env"],
+    });
+  });
+
+  it("opt-out path also covers the explicit RATE_LIMIT_STORE='memory' case", () => {
+    // A canary deploy that explicitly pinned the in-process bucket
+    // and acknowledged the trade-off via the escape hatch must boot
+    // cleanly — but on-call should still see the warn so the deploy
+    // doesn't quietly ship a memory bucket forever.
+    const log = buildLogSink();
+    const result = assertRateLimitStoreConfiguredForProduction(
+      {
+        DEPLOYMENT_ENVIRONMENT: "production",
+        RATE_LIMIT_STORE: "memory",
+        RATE_LIMIT_STORE_ALLOW_MEMORY_IN_PRODUCTION: "1",
+      },
+      log,
+    );
+    expect(result.ok).toBe(true);
+    expect(log.errorCalls).toEqual([]);
+    expect(log.warnCalls).toHaveLength(1);
+    const [obj, msg] = log.warnCalls[0]!;
+    expect(msg).toMatch(/rate_limit_store_memory_in_production_via_opt_out/);
+    expect(obj).toMatchObject({
+      rate_limit_store: "memory",
+      rate_limit_store_allow_memory_in_production: "1",
+    });
+  });
+
+  it("opt-out is silent and ok when RATE_LIMIT_STORE=redis is also set (no false 'memory' warning)", () => {
+    // Defensive: a deploy that flipped the escape hatch on but later
+    // wired up Redis must not emit a misleading "memory in production
+    // via opt out" warning — Redis is the actual selected store, so
+    // the healthy-path early-return must fire before the opt-out
+    // branch is even considered.
+    const log = buildLogSink();
+    const result = assertRateLimitStoreConfiguredForProduction(
+      {
+        NODE_ENV: "production",
+        RATE_LIMIT_STORE: "redis",
+        RATE_LIMIT_STORE_ALLOW_MEMORY_IN_PRODUCTION: "1",
+      },
+      log,
+    );
+    expect(result.ok).toBe(true);
+    expect(log.warnCalls).toEqual([]);
+    expect(log.errorCalls).toEqual([]);
+  });
+
+  it("opt-out only matches the literal '1' — casing drift still fails boot", () => {
+    // Mirrors the strictness of every other production-shape signal
+    // in this module (REPLIT_DEPLOYMENT='1', DEPLOYMENT_ENVIRONMENT=
+    // 'production'). Loose values like 'true' / 'yes' / ' 1 ' must
+    // NOT silence the failure — otherwise an operator who set the
+    // wrong value would believe they had opted out when they had
+    // actually left the production deploy crash-looping (or worse,
+    // believed they had a bypass when the literal check was added
+    // strictly later).
+    const log = buildLogSink();
+    for (const bogus of ["0", "true", "TRUE", "yes", " 1 ", "1\n", "01"]) {
+      const result = assertRateLimitStoreConfiguredForProduction(
+        {
+          NODE_ENV: "production",
+          RATE_LIMIT_STORE_ALLOW_MEMORY_IN_PRODUCTION: bogus,
+        },
+        log,
+      );
+      expect(result.ok, `bogus=${JSON.stringify(bogus)}`).toBe(false);
+    }
+    // Every bogus value should have produced an error log (not a warn).
+    expect(log.warnCalls).toEqual([]);
+    expect(log.errorCalls).toHaveLength(7);
+  });
+
+  it("opt-out env var is ignored entirely on non-production deploys", () => {
+    // A staging deploy that has the escape hatch set is a no-op —
+    // we don't want to emit the "memory in production via opt-out"
+    // warn on staging because that would be confusing noise (staging
+    // is not production, the per-process bucket is fine, the opt-out
+    // is irrelevant).
+    const log = buildLogSink();
+    const result = assertRateLimitStoreConfiguredForProduction(
+      {
+        NODE_ENV: "staging",
+        RATE_LIMIT_STORE_ALLOW_MEMORY_IN_PRODUCTION: "1",
+      },
+      log,
+    );
+    expect(result.ok).toBe(true);
+    expect(log.warnCalls).toEqual([]);
+    expect(log.errorCalls).toEqual([]);
   });
 
   it("agrees byte-for-byte with createBucketStore's normalisation for representative inputs", () => {
@@ -819,7 +986,9 @@ describe("assertRateLimitStoreConfiguredForProduction — production rate-limit 
     // back to the per-process bucket, leaving production bypassable
     // without alerting. This test pins the parity so any future drift
     // (e.g. someone adding `.replace(/\s+/g, "")` on one side only)
-    // is caught immediately.
+    // is caught immediately. We deliberately do NOT set the opt-out
+    // env var here — that path is tested above and would mask a
+    // normalisation drift bug by always returning `ok: true`.
     const { normaliseRateLimitStoreKind } = __test__;
     const cases = [
       undefined,
@@ -835,7 +1004,7 @@ describe("assertRateLimitStoreConfiguredForProduction — production rate-limit 
       "rediss",
       "redis-cluster",
     ];
-    const log = buildWarnSink();
+    const log = buildLogSink();
     for (const value of cases) {
       const env: Partial<NodeJS.ProcessEnv> = { NODE_ENV: "production" };
       if (value !== undefined) env.RATE_LIMIT_STORE = value;
