@@ -816,6 +816,304 @@ jobs:
 
           exit $failed
 
+  verify-alert-rules:
+    # Independent of the `rehearse` matrix and `verify-cron-monitors`
+    # job above. Asserts that the Sentry **issue alert rules** that
+    # actually route the production page events to PagerDuty/Opsgenie
+    # exist, are enabled, target the on-call routing destination
+    # (not just an email mailbox or a deleted Slack channel), and
+    # key off the expected fingerprint/tag query.
+    #
+    # Why this exists separately from `verify-cron-monitors`:
+    # `verify-cron-monitors` only proves the *cron-monitor heartbeat*
+    # is wired up — i.e. the workflows themselves still post check-ins
+    # and Sentry will fire a "missed check-in" issue if they stop.
+    # But the on-call page chain ALSO depends on issue alert rules
+    # that route those issues (and the `rate_limit_store_stuck_degraded`
+    # / `rehearsal_notify_webhook_dead` issues from the probes
+    # themselves) to PagerDuty/Opsgenie. If an operator disables a
+    # rule during a Sentry cleanup day, mistunes its filter so the
+    # production tag/fingerprint no longer matches, or removes the
+    # PagerDuty action and leaves only an email to a personal mailbox,
+    # then:
+    #   - the per-minute probe still fires fatal events into Sentry,
+    #   - the cron monitors still record check-ins,
+    #   - `verify-cron-monitors` above still passes,
+    #   - the daily `probe-rehearsal-notify-webhook` still posts,
+    #   - the weekly `rehearse` matrix above still passes (it only
+    #     asserts Sentry *ingested* the events with the expected tags,
+    #     not that the alert rules actually paged on them),
+    # but on-call NEVER GETS THE PAGE. The first signal of a real
+    # outage is the outage itself. This job closes that gap.
+    #
+    # Same kill switch (HEALTHZ_REHEARSAL_ENABLED) so toggling the
+    # rehearsal off silences this check too. Same Sentry auth token
+    # as `verify-cron-monitors`; the alert-rules endpoint additionally
+    # requires `project:read` and `alerts:read` scope (the cron
+    # monitors endpoint needs `org:read`). The token-scope step
+    # surfaces a 401/403 with a clear pointer at the missing scope.
+    #
+    # Runs in parallel with the rehearse matrix and `verify-cron-monitors`
+    # so a misconfigured alert rule doesn't block the inject -> probe ->
+    # verify -> clear cycle, and a flake in the rehearse matrix can't
+    # hide a silently-disabled alert rule.
+    #
+    # See docs/runbooks/rate-limit-store.md ("Verifying the heartbeat")
+    # — this job is the second of the two automated checks listed there.
+    name: "Verify Sentry on-call alert rules exist, are enabled, and route to PagerDuty/Opsgenie"
+    if: ${{ vars.HEALTHZ_REHEARSAL_ENABLED == '1' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    env:
+      # Production org+project — the alert rules being verified live
+      # in the production Sentry project (NOT the alerts-rehearsal
+      # project the matrix above forwards events into). Reuses the
+      # same vars the per-minute probe and daily probe use as their
+      # Sentry destination so a divergence here would silently
+      # validate the wrong project's rules.
+      SENTRY_ORG: ${{ vars.SENTRY_ORG }}
+      SENTRY_PROJECT: ${{ vars.SENTRY_PROJECT }}
+      SENTRY_AUTH_TOKEN: ${{ secrets.HEALTHZ_REHEARSAL_SENTRY_AUTH_TOKEN }}
+
+    steps:
+      - name: Verify required config is present
+        run: |
+          set -e
+          missing=()
+          [ -n "$SENTRY_ORG" ] || missing+=("vars.SENTRY_ORG")
+          [ -n "$SENTRY_PROJECT" ] || missing+=("vars.SENTRY_PROJECT")
+          [ -n "$SENTRY_AUTH_TOKEN" ] || missing+=("secrets.HEALTHZ_REHEARSAL_SENTRY_AUTH_TOKEN")
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::error::missing required config for alert rule verification: ${missing[*]}"
+            exit 1
+          fi
+          echo "ok"
+
+      - name: Fetch project alert rules and assert each on-call rule is wired up
+        id: verify_rules
+        run: |
+          # Same shape as `verify-cron-monitors` above: don't let
+          # `set -e` short-circuit the loop -- we want to surface
+          # ALL misconfigured rules in one workflow run, not chase
+          # them one at a time over multiple weekly ticks.
+          set +e
+
+          # Fetch all alert rules in the production project. Sentry
+          # paginates via the Link header; default per_page is 25
+          # which is too small for typical projects, so we ask for
+          # the max (100) and follow `rel="next"; results="true"`
+          # links until exhausted. Bounded at 20 pages (2000 rules)
+          # to prevent a runaway loop on a misconfigured response.
+          all_rules='[]'
+          next_url="https://sentry.io/api/0/projects/${SENTRY_ORG}/${SENTRY_PROJECT}/rules/?per_page=100"
+          page=0
+          while [ -n "$next_url" ]; do
+            page=$((page + 1))
+            if [ "$page" -gt 20 ]; then
+              echo "::error::Cancelled after 20 pages of alert rules from project '${SENTRY_PROJECT}' (>2000 rules). This script doesn't paginate further; either narrow the verification scope or add cursor-aware pagination."
+              exit 1
+            fi
+            resp=$(curl -sS -D /tmp/rules_headers -w '\n%{http_code}' \
+              -H "Authorization: Bearer $SENTRY_AUTH_TOKEN" \
+              -H "Accept: application/json" \
+              "$next_url")
+            curl_exit=$?
+            http_code=$(printf '%s' "$resp" | tail -n 1)
+            body=$(printf '%s' "$resp" | sed '$d')
+
+            if [ "$curl_exit" -ne 0 ]; then
+              echo "::error::curl exited ${curl_exit} reading Sentry alert rules (page ${page}) -- network/DNS/TLS failure from the runner; rerun the workflow"
+              exit 1
+            fi
+
+            case "$http_code" in
+              200)
+                :
+                ;;
+              401|403)
+                echo "::error::Sentry returned HTTP ${http_code} reading project alert rules. The HEALTHZ_REHEARSAL_SENTRY_AUTH_TOKEN secret needs 'project:read' and 'alerts:read' scope on '${SENTRY_PROJECT}' (in addition to the 'event:read' the rehearse-matrix uses and the 'org:read' the verify-cron-monitors job uses). Update the auth token in Sentry -> Settings -> Auth Tokens."
+                exit 1
+                ;;
+              404)
+                echo "::error::Sentry project '${SENTRY_ORG}/${SENTRY_PROJECT}' not found. Check vars.SENTRY_ORG / vars.SENTRY_PROJECT against the project's slug in Sentry UI -> Settings -> Projects -> ${SENTRY_PROJECT}."
+                exit 1
+                ;;
+              *)
+                echo "::error::Sentry returned HTTP ${http_code} reading project alert rules (page ${page}): $(printf '%s' "$body" | head -c 512)"
+                exit 1
+                ;;
+            esac
+
+            all_rules=$(printf '%s\n%s' "$all_rules" "$body" | jq -s 'add')
+
+            # Parse Link header for the next page. Sentry's pagination
+            # marks "more results available" with `rel="next"; results="true"`.
+            # Anything else (including `results="false"` or no rel="next")
+            # means we're done.
+            next_url=$(grep -i '^link:' /tmp/rules_headers \
+              | tr ',' '\n' \
+              | grep 'rel="next"' \
+              | grep 'results="true"' \
+              | sed -E 's/.*<([^>]+)>.*/\1/' \
+              | head -n1)
+          done
+
+          rule_count=$(printf '%s' "$all_rules" | jq -r 'length')
+          echo "fetched ${rule_count} alert rule(s) from project '${SENTRY_PROJECT}' across ${page} page(s)"
+
+          # The four production on-call alert rules. Each entry is
+          # `<rule_name>|<expected_tag_key>|<expected_tag_value>|<why>`.
+          #
+          # The rule NAME is the operator-visible label in Sentry UI
+          # -> Alerts; pick stable names that match the
+          # tag/fingerprint identifier so a rename here without a
+          # matching Sentry-side rename surfaces as the same
+          # missing-rule failure as a deletion. (See the "Verifying
+          # the heartbeat" section of docs/runbooks/rate-limit-store.md
+          # for the canonical naming convention this list expects.)
+          #
+          # The tag key/value is what each rule's filter MUST key off
+          # so the rule fires for the intended pager event and only
+          # that event. A rule that no longer mentions the expected
+          # tag is either firing on every issue in the project (noise
+          # storm -> on-call mutes the channel -> next real page is
+          # ignored) or firing on nothing (silent regression -> next
+          # real page never reaches on-call).
+          declare -a RULES=(
+            "rate_limit_store_stuck_degraded|alert|rate_limit_store_stuck_degraded|the per-minute /healthz probe pages on tags[alert]:rate_limit_store_stuck_degraded; this rule routes that fatal event to on-call"
+            "rehearsal_notify_webhook_dead|alert|rehearsal_notify_webhook_dead|the daily probe-rehearsal-notify-webhook workflow pages on tags[alert]:rehearsal_notify_webhook_dead; this rule routes that fatal event to on-call"
+            "check-healthz-degraded cron monitor failure|monitor.slug|check-healthz-degraded|when the per-minute probe stops running, the Sentry Cron monitor with slug 'check-healthz-degraded' fires a missed-check-in issue tagged monitor.slug:check-healthz-degraded; this rule routes that issue to on-call"
+            "probe-rehearsal-notify-webhook cron monitor failure|monitor.slug|probe-rehearsal-notify-webhook|when the daily probe stops running, the Sentry Cron monitor with slug 'probe-rehearsal-notify-webhook' fires a missed-check-in issue tagged monitor.slug:probe-rehearsal-notify-webhook; this rule routes that issue to on-call"
+          )
+
+          failed=0
+          results=()
+          for entry in "${RULES[@]}"; do
+            IFS='|' read -r name tag_key tag_value why <<< "$entry"
+            echo "::group::verify alert rule '${name}'"
+
+            # Find the rule by exact name. Sentry doesn't enforce
+            # name uniqueness, so if two rules share the name we
+            # validate the first one and warn — otherwise an
+            # operator could silently disable the *real* rule and
+            # leave a placeholder with the same name passing this
+            # check.
+            matches=$(printf '%s' "$all_rules" | jq --arg name "$name" '[.[] | select(.name == $name)]')
+            match_count=$(printf '%s' "$matches" | jq -r 'length')
+            if [ "$match_count" = "0" ]; then
+              echo "::error::Sentry issue alert rule '${name}' does NOT exist in project '${SENTRY_ORG}/${SENTRY_PROJECT}'. ${why}, but no rule by that name exists. Most common causes: (a) deleted during a Sentry cleanup day, (b) renamed away from the canonical name this drift check expects (see docs/runbooks/rate-limit-store.md, 'Verifying the heartbeat'), (c) created in the wrong project. Restore the rule with the production on-call action (PagerDuty/Opsgenie) and a filter on tags[${tag_key}]:${tag_value}. The next real outage will not page on-call until this is fixed."
+              results+=("- \`${name}\`: FAILED — missing")
+              failed=1
+              echo "::endgroup::"
+              continue
+            fi
+            if [ "$match_count" -gt 1 ]; then
+              echo "::warning::found ${match_count} alert rules named '${name}' in project '${SENTRY_PROJECT}'; validating only the first. Rename or delete the duplicates to avoid masking a silently-disabled rule."
+            fi
+            rule=$(printf '%s' "$matches" | jq -c '.[0]')
+
+            errors=()
+
+            # (a) Enabled. Sentry uses status='active' for enabled
+            # rules and status='disabled' for explicitly disabled
+            # rules. A disabled rule never fires regardless of how
+            # well its filters match.
+            status=$(printf '%s' "$rule" | jq -r '.status // empty')
+            if [ "$status" != "active" ]; then
+              errors+=("status='${status}' (expected 'active' — a disabled rule never fires, so on-call would not be paged even when the underlying issue arrives)")
+            fi
+
+            # (b) Environment scope. A rule scoped to staging
+            # silently skips production events. Null/empty means
+            # "all environments" which still routes production, so
+            # only flag when the scope is set AND not 'production'.
+            env_field=$(printf '%s' "$rule" | jq -r '.environment // empty')
+            if [ -n "$env_field" ] && [ "$env_field" != "production" ]; then
+              errors+=("environment='${env_field}' (expected 'production' or unset — a rule scoped to a non-production environment will silently skip the real production fatal event)")
+            fi
+
+            # (c) Routes to PagerDuty/Opsgenie. The task explicitly
+            # requires "the on-call routing destination, not just an
+            # email mailbox or a deleted Slack channel". Sentry
+            # action `id`s look like
+            # `sentry.integrations.pagerduty.notify_action.PagerDutyNotifyServiceAction`
+            # / `sentry.integrations.opsgenie.notify_action.OpsgenieNotifyTeamAction`.
+            # We require at least one of those — Slack and email
+            # alone do not page sleeping on-call.
+            actions_json=$(printf '%s' "$rule" | jq -c '.actions // []')
+            action_count=$(printf '%s' "$actions_json" | jq -r 'length')
+            if [ "$action_count" = "0" ]; then
+              errors+=("actions=[] (rule has no actions; matching events fire silently and never reach on-call)")
+            else
+              pager_action_count=$(printf '%s' "$actions_json" \
+                | jq -r '[.[].id // empty] | map(select(test("pagerduty|opsgenie"; "i"))) | length')
+              if [ "$pager_action_count" = "0" ]; then
+                action_ids=$(printf '%s' "$actions_json" | jq -r '[.[].id // empty] | join(", ")')
+                errors+=("actions do not include a PagerDuty or Opsgenie on-call action (got: ${action_ids}). Email-only or chat-only actions do not page sleeping on-call. Add the PagerDuty/Opsgenie integration action that the on-call rotation expects.")
+              fi
+            fi
+
+            # (d) Keys off the expected fingerprint/tag. Sentry
+            # filters/conditions for tag matching look like:
+            #   {"id": "sentry.rules.filters.tagged_event.TaggedEventFilter",
+            #    "key": "<tag_key>", "match": "eq", "value": "<tag_value>"}
+            # For event-attribute matches (used for fingerprint or
+            # nested tag attributes), the shape is:
+            #   {"id": "sentry.rules.filters.event_attribute.EventAttributeFilter",
+            #    "attribute": "<attr>", "match": "eq", "value": "<value>"}
+            # Either shape is accepted as long as the (key|attribute)
+            # is the expected one and the value matches. A rule that
+            # no longer mentions the expected tag is either over-broad
+            # (firing on every issue in the project -> noise storm) or
+            # over-narrow (firing on nothing -> silent regression). We
+            # check both `conditions` and `filters` because Sentry
+            # surfaces tag predicates in either bucket depending on
+            # the rule's filterMatch mode.
+            tag_match_count=$(printf '%s' "$rule" | jq --arg key "$tag_key" --arg val "$tag_value" -r '
+              ((.conditions // []) + (.filters // []))
+              | map(select(
+                  ((.key // "") == $key and (.value // "") == $val)
+                  or ((.attribute // "") == $key and (.value // "") == $val)
+                ))
+              | length
+            ')
+            if [ "${tag_match_count:-0}" = "0" ]; then
+              conditions_compact=$(printf '%s' "$rule" | jq -c '.conditions // []')
+              filters_compact=$(printf '%s' "$rule" | jq -c '.filters // []')
+              errors+=("rule does not key off the expected tag '${tag_key}:${tag_value}' (conditions=${conditions_compact} filters=${filters_compact}). ${why}. Without that filter the rule either pages on every issue in the project (noise storm -> on-call mutes the channel) or pages on nothing (silent regression -> next real outage never reaches on-call).")
+            fi
+
+            if [ ${#errors[@]} -gt 0 ]; then
+              joined=$(printf '%s; ' "${errors[@]}")
+              echo "::error::Sentry issue alert rule '${name}' is misconfigured: ${joined%; }. Update it in Sentry UI -> Alerts -> ${name} -> Edit. See docs/runbooks/rate-limit-store.md ('Verifying the heartbeat')."
+              results+=("- \`${name}\`: FAILED (see annotation above)")
+              failed=1
+            else
+              echo "rule '${name}' OK (status=${status}, environment=${env_field:-<all>}, actions=${action_count} including PagerDuty/Opsgenie, tag-filter=${tag_key}:${tag_value})"
+              results+=("- \`${name}\`: OK")
+            fi
+            echo "::endgroup::"
+          done
+
+          {
+            echo "## Sentry on-call alert rule verification"
+            echo ""
+            echo "Project: \`${SENTRY_ORG}/${SENTRY_PROJECT}\` — ${rule_count} rule(s) scanned."
+            echo ""
+            for line in "${results[@]}"; do
+              echo "$line"
+            done
+            echo ""
+            if [ "$failed" -ne 0 ]; then
+              echo "One or more on-call alert rules are missing, disabled, mistuned, or no longer routing to PagerDuty/Opsgenie. The probe events still ingest into Sentry cleanly, the cron-monitor heartbeats above still pass, and the rehearse matrix above still passes — but on-call will NOT be paged when the underlying outage actually happens. See docs/runbooks/rate-limit-store.md -- *Verifying the heartbeat* -- for the required alert rule configuration."
+            else
+              echo "All on-call alert rules present, enabled, and routing to PagerDuty/Opsgenie. The probe pager chain is intact."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          exit $failed
+
   rehearse-chat-firing:
     name: "Rehearse production probe's chat-firing block (FIRING + RESOLVED) on staging"
     # Run AFTER the per-subsystem matrix above so the two don't

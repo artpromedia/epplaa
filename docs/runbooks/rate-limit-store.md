@@ -584,7 +584,7 @@ before shipping any change to the sync script's request shape), see
 [`docs/runbooks/backup-verify.md`](backup-verify.md), section
 "End-to-end integration test against a real Sentry org".
 
-**Verifying the heartbeat.** Two checks, in increasing cost:
+**Verifying the heartbeat.** Three checks, in increasing cost:
 
 1. *Automated, runs weekly:* the `verify-cron-monitors` job in
    [`.github/workflows/rehearse-healthz-degraded.yml`](../../.github/workflows/rehearse-healthz-degraded.yml)
@@ -602,7 +602,43 @@ before shipping any change to the sync script's request shape), see
    `secrets.HEALTHZ_REHEARSAL_SENTRY_AUTH_TOKEN` and requires that
    token to also have `org:read` scope; if scope is missing the job
    surfaces an HTTP 401/403 error pointing at the fix.
-2. *Manual, end-to-end, one-time:* From the Sentry UI's monitor detail
+2. *Automated, runs weekly:* the `verify-alert-rules` job in the same
+   workflow queries the Sentry **issue alert rules** API
+   (`GET /api/0/projects/${SENTRY_ORG}/${SENTRY_PROJECT}/rules/`) and
+   asserts that each of the four production on-call alert rules is
+   present, enabled, scoped to `production` (or all-environments),
+   routes to a PagerDuty or Opsgenie action (NOT just an email
+   mailbox or a Slack channel), and keys off the expected
+   tag/fingerprint filter. The four rules and their expected
+   `tag:value` filters are:
+
+   | Rule name (Sentry UI -> Alerts) | Required filter | What it routes |
+   | --- | --- | --- |
+   | `rate_limit_store_stuck_degraded` | `tags[alert]:rate_limit_store_stuck_degraded` | The fatal-level events the per-minute `check-healthz-degraded` workflow ingests when a real outage trips the streak threshold. |
+   | `rehearsal_notify_webhook_dead` | `tags[alert]:rehearsal_notify_webhook_dead` | The fatal-level event the daily `probe-rehearsal-notify-webhook` workflow ingests when the chat heads-up webhook is dead. |
+   | `check-healthz-degraded cron monitor failure` | `tags[monitor.slug]:check-healthz-degraded` | The "missed check-in" issue Sentry auto-creates when the per-minute probe workflow itself stops running. |
+   | `probe-rehearsal-notify-webhook cron monitor failure` | `tags[monitor.slug]:probe-rehearsal-notify-webhook` | The "missed check-in" issue Sentry auto-creates when the daily probe workflow itself stops running. |
+
+   The rule **name** is what the verification job matches on, so if
+   you rename a rule in the Sentry UI you must rename it back to the
+   canonical name above (or update both the workflow's `RULES=()`
+   array AND this table in the same change). The job exists because
+   without it, an operator who disables one of these rules during a
+   Sentry cleanup day (or removes the PagerDuty action and leaves
+   only an email to a personal mailbox, or mistunes the filter so it
+   no longer matches the production tag) would not be detected by
+   any other signal: the probe events still ingest cleanly, the
+   cron-monitor heartbeats above still pass, and the `rehearse`
+   matrix still passes (it only asserts events landed with the
+   expected tags, not that the alert rules paged on them). The first
+   signal of the silent break would be the next real outage. The job
+   uses `secrets.HEALTHZ_REHEARSAL_SENTRY_AUTH_TOKEN`; the token
+   needs `project:read` and `alerts:read` scope on the production
+   project (in addition to the `event:read` and `org:read` scopes
+   the matrix verify and `verify-cron-monitors` jobs already use).
+   If the scope is missing, the job surfaces an HTTP 401/403 error
+   pointing at the fix.
+3. *Manual, end-to-end, one-time:* From the Sentry UI's monitor detail
    page, the timeline should show one green check-in per 5 minutes. To
    end-to-end verify the page path, briefly disable the workflow
    (**Actions → Healthz degraded probe → ⋯ → Disable workflow**) and
@@ -746,7 +782,7 @@ schedule.
 | `HEALTHZ_REHEARSAL_SENTRY_PROJECT` | var | Sentry project SLUG (not numeric ID) used by the verification API call. Should be a dedicated `alerts-rehearsal` project. |
 | `HEALTHZ_REHEARSAL_TOKEN` | secret | Bearer token forwarded as `X-Rehearsal-Token`. Must match staging api-server's `HEALTHZ_REHEARSAL_TOKEN` env var. |
 | `HEALTHZ_REHEARSAL_SENTRY_DSN` | secret | DSN sentry-cli posts the rehearsal event to. Point at the dedicated `alerts-rehearsal` project. |
-| `HEALTHZ_REHEARSAL_SENTRY_AUTH_TOKEN` | secret | Sentry auth token with `event:read` scope on the rehearsal project (used by the rehearse-matrix verification step to poll the events API) AND `org:read` scope on the org (used by the `verify-cron-monitors` job to read each Sentry Cron monitor's slug/schedule/env/check-in margin). If `org:read` is missing, the cron-monitor verification job surfaces an HTTP 401/403 error and fails the workflow. |
+| `HEALTHZ_REHEARSAL_SENTRY_AUTH_TOKEN` | secret | Sentry auth token with `event:read` scope on the rehearsal project (used by the rehearse-matrix verification step to poll the events API), `org:read` scope on the org (used by the `verify-cron-monitors` job to read each Sentry Cron monitor's slug/schedule/env/check-in margin), AND `project:read` + `alerts:read` scope on the production project (used by the `verify-alert-rules` job to read each on-call issue alert rule's enabled/actions/filter shape). If any scope is missing, the corresponding job surfaces an HTTP 401/403 error pointing at the missing scope and fails the workflow. |
 | `HEALTHZ_REHEARSAL_NOTIFY_WEBHOOK` | secret (optional) | Slack incoming webhook URL or Teams workflow webhook URL. The workflow POSTs a `{"text": ...}` payload (compatible with both) before injecting the synthetic streak ("rehearsal STARTING") and again after cleanup ("rehearsal PASSED/FAILED"). Leave unset to skip the chat heads-up entirely — same degrade-safe pattern as the Sentry config above. The URL is itself the credential, hence `secret` not `var`. |
 | `HEALTHZ_REHEARSAL_NOTIFY_CHANNEL` | var (optional) | Cosmetic channel label (e.g. `#ops`) included in the chat message and the workflow log so the destination is obvious without inspecting the webhook URL. Defaults to `#ops`. The actual routing is determined by the webhook URL, not by this value. |
 | `HEALTHZ_PROBE_REHEARSAL_NOTIFY_WEBHOOK` | secret (optional) | Slack/Teams webhook URL the **chat-firing rehearsal** job (`rehearse-chat-firing`) POSTs synthetic FIRING + RESOLVED messages to. Distinct from `HEALTHZ_REHEARSAL_NOTIFY_WEBHOOK` (which carries the rehearsal's own STARTING/RESULT chat heads-up) so the two can route to different channels — the rehearsal heads-up belongs in `#ops` alongside production heads-ups so on-call sees it, but the synthetic FIRING/RESOLVED noise belongs in `#alerts-rehearsal` so #ops isn't paged weekly. If unset, the rehearsal job falls back to `secrets.HEALTHZ_PROBE_NOTIFY_WEBHOOK` (the production webhook) so a repo that hasn't configured a separate rehearsal webhook still exercises the chat path — operators who don't want #ops to see the synthetic FIRING/RESOLVED messages should configure this dedicated secret. If neither is set, the `Verify required config` step fails the rehearsal job (there's nothing to rehearse). |
@@ -848,6 +884,7 @@ When the rehearsal workflow fails, walk the steps top-down:
 | `Verify Sentry ingested the rehearsal events` | (a) Sentry is dropping/scrubbing events - check the Sentry stats page for the rehearsal project. (b) The `event:read` scope is missing on the auth token. (c) **Fingerprint dedup broken**: if the failure message says "expected ... 1 issue, saw 5", the per-subsystem fingerprint stopped collapsing iterations - verify nothing renamed `rate_limit_store_stuck_degraded_rehearsal` (rateLimitStore matrix entry) or `stuck_degraded_rehearsal_db` (db matrix entry), and that no new Sentry inbound filter or processor is forcing per-event grouping. The failing matrix entry's job name names the subsystem so you know which fingerprint to check. (d) **Tag stripped**: if the failure says "ingested event tags mismatched", Sentry's PII scrubber or a new `Tag Filter` rule is dropping `alert` / `subsystem` / `rehearsal` — or the expected per-subsystem tag values for the failing matrix entry have drifted from the production pager rule. The on-call page body for production would also be missing those tags. (e) **probe_output stripped**: if the failure says "event ... has no probe_output extra", Sentry's PII scrubber or a project rule is stripping the `--extra probe_output` payload. The on-call page body is composed FROM that extra (the probe JSON line with subsystem / streak duration / threshold / firstFailureAt), so production pages would arrive with no actionable detail. | Sentry project settings -> Data Scrubbing AND Alerts -> Issue alerts in the rehearsal project. The matched event/issue ID is surfaced in the workflow run summary so you can open the offending event directly. |
 | `Clear synthetic streak` | Staging is unreachable. Manually POST `clear-stuck-degraded` with the subsystem named in the failing matrix entry's job (`rateLimitStore` or `db`) before leaving - otherwise the per-minute probe workflow against staging will start paging for real for that subsystem. The `if: always()` guard means this step runs even if everything before it failed; if **this** step is the failure, the synthetic streak for THIS matrix entry's subsystem is still live on staging. | Re-run with the same token from your shell, e.g. `curl -X POST .../clear-stuck-degraded -H "X-Rehearsal-Token: $TOKEN" --data '{"subsystem":"db"}'`. |
 | `verify-cron-monitors` job (`Assert each cron monitor exists ...`) | A Sentry Cron monitor that one of the probe workflows wraps itself with is missing or misconfigured. The annotation names which slug failed (`probe-rehearsal-notify-webhook` or `check-healthz-degraded`) and exactly which field drifted (missing entirely, disabled, muted, wrong schedule, wrong timezone, missing `production` env, zero/null check-in margin). If the failure is HTTP 401/403 instead, the `HEALTHZ_REHEARSAL_SENTRY_AUTH_TOKEN` is missing the `org:read` scope needed to read monitors. **This job runs in parallel with the rehearse matrix and never blocks it** — a bad monitor doesn't stop the inject -> probe -> verify -> clear cycle from happening, and a flaky rehearse matrix won't hide a missing monitor. | Sentry UI -> Crons -> the named slug. Required values are in the *Heartbeat* table for `check-healthz-degraded` and the *Daily rehearsal-notify-webhook liveness probe* table for `probe-rehearsal-notify-webhook`. Re-run via `workflow_dispatch:` after fixing to confirm green without waiting until next Sunday. |
+| `verify-alert-rules` job (`Fetch project alert rules and assert each on-call rule is wired up`) | A production on-call **issue alert rule** is missing, disabled, mistuned, or no longer routing to PagerDuty/Opsgenie. The annotation names which rule failed (`rate_limit_store_stuck_degraded`, `rehearsal_notify_webhook_dead`, `check-healthz-degraded cron monitor failure`, or `probe-rehearsal-notify-webhook cron monitor failure`) and exactly which property drifted: **missing** = the rule was deleted or renamed away from the canonical name; **status='disabled'** = someone toggled it off in Sentry UI -> Alerts; **environment='staging'** = the rule was scoped to a non-production env so production events skip it; **no PagerDuty/Opsgenie action** = on-call is no longer being paged (only chat or email is being sent); **rule does not key off the expected tag** = the rule's filter was edited away from the production tag/value, so it now either pages on every issue (noise storm -> on-call mutes) or pages on nothing (silent regression). If the failure is HTTP 401/403, the `HEALTHZ_REHEARSAL_SENTRY_AUTH_TOKEN` is missing `project:read` and/or `alerts:read` scope on the production project (in addition to the `event:read` and `org:read` it already needs for the matrix and `verify-cron-monitors` jobs). HTTP 404 means `vars.SENTRY_ORG`/`vars.SENTRY_PROJECT` point at a project that does not exist in the configured org. **This job runs in parallel with the rehearse matrix and `verify-cron-monitors` and never blocks them** — a silently-disabled alert rule doesn't stop ingestion or heartbeating, but it does silence the page when the underlying issue actually arrives. | Sentry UI -> Alerts -> the named rule -> Edit. The expected (rule name, required filter) pairs are in the *Verifying the heartbeat* section's table above. Restore the rule's PagerDuty/Opsgenie action and tag filter, re-enable it, then re-run via `workflow_dispatch:` to confirm green without waiting until next Sunday. |
 | `Run production probe loop against staging (assert FIRING + RESOLVED chat posts)` (in the `rehearse-chat-firing` job) | The production probe's chat-firing block is broken in a way the Sentry-pager matrix above can't see. The step's error message names the specific failure mode: (a) **"no FIRING chat post observed"** — the probe never reached its `notify_chat firing` branch for iteration 1's exit-2 result. Either the probe's exit code is no longer 2 on a paging iteration (would also break the Sentry-pager matrix above, so this is rarely the root cause when the matrix is green), the dedup `notified_firing` flag was inverted/initialised wrong, or the shared script's argv contract drifted from how the workflow invokes it. (b) **"no RESOLVED chat post observed"** — the mid-loop `clear-stuck-degraded` POST didn't take (rehearsal endpoint regressed or the staging api-server restarted between inject and clear and the in-process watcher reset itself), OR the `notify_chat resolved` branch's dedup guard regressed. (c) **"chat post failed at the curl level"** — the webhook URL points nowhere (DNS/TLS failure from the runner, or the URL was rotated). (d) **"chat post returned HTTP <non-2xx>"** — Slack/Teams reachable but rejecting the request: rotated/revoked webhook (Slack returns 404+`no_service`, Teams expires its workflow trigger URLs on a schedule), archived destination channel, malformed JSON payload (a regression in the production `notify_chat` jq invocation), or rate-limit. The next real outage's heads-up to `${HEALTHZ_PROBE_NOTIFY_CHANNEL}` would also fail to land until this is fixed. | (a)/(b): walk [`.github/scripts/healthz-probe-loop.sh`](../../.github/scripts/healthz-probe-loop.sh) — the shared script the production per-minute workflow and this rehearsal both invoke. The error message points at the exact `notified_firing` / `notified_resolved` block. (c)/(d): re-issue `secrets.HEALTHZ_PROBE_REHEARSAL_NOTIFY_WEBHOOK` (or the production fallback `secrets.HEALTHZ_PROBE_NOTIFY_WEBHOOK` if the dedicated secret isn't set) per the Slack/Teams steps in the production chat-heads-up failure row above. After fixing, re-trigger this workflow via `workflow_dispatch:` to confirm without waiting for next Sunday. The always-run backstop `Clear synthetic streak` step in this same job restores staging even when this assertion fails — but check the workflow log to confirm the backstop's HTTP status was 200 before walking away. |
 
 ### Daily rehearsal-notify-webhook liveness probe (`probe-rehearsal-notify-webhook.yml`)
@@ -904,7 +941,13 @@ configuration on every weekly rehearsal tick — so an operator who
 forgets to create it (or someone who deletes it during a Sentry
 cleanup) gets a loud workflow failure within ~7 days instead of the
 silent failure mode of "the daily probe stopped running and nothing
-paged."
+paged." The companion `verify-alert-rules` job (also described under
+*Verifying the heartbeat*) additionally asserts the
+`rehearsal_notify_webhook_dead` issue alert rule and the
+`probe-rehearsal-notify-webhook cron monitor failure` issue alert
+rule are present, enabled, and routing to PagerDuty/Opsgenie — so a
+silently-disabled or unrouted alert rule is also caught within ~7
+days instead of going unnoticed until the next real webhook outage.
 
 #### Interpreting a failed daily probe
 
