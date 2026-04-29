@@ -277,6 +277,213 @@ including the fail-fast path AND the explicit opt-out path) and the
 production-shape signal detection it shares with the hostname check
 is covered in `artifacts/api-server/src/routes/healthzRehearsal.test.ts`.
 
+## Wire Slack/PagerDuty paging
+
+The admin console already shows an in-app toast and sticky banner when
+`/healthz`'s `rateLimitStore.state` flips to `"degraded"`, and the
+`rate_limit_redis_failure_threshold_breached` Sentry issue (see
+*Symptom: alert from Sentry* below) covers the rate-based alerting
+channel. Neither of those is sufficient for after-hours / weekend
+incidents on its own — the in-app banner only reaches operators who
+happen to be signed into the admin console, and the Sentry rate alert
+fires on failure *rate* rather than the healthy↔degraded transition the
+operator actually cares about. To close that gap, the rate-limit
+watcher fans the same healthy↔degraded transitions out to a Slack
+incoming webhook and/or the PagerDuty Events API v2 via
+[`artifacts/api-server/src/lib/rate-limit/incidentNotifier.ts`](../../artifacts/api-server/src/lib/rate-limit/incidentNotifier.ts).
+
+### Required env vars
+
+All read at notify time (not at boot) so a hot env-var rotation is
+picked up by the next incident without restarting the api-server —
+matches the readyz-config pattern.
+
+| Env var | Required? | What it does |
+| --- | --- | --- |
+| `RATE_LIMIT_INCIDENT_SLACK_WEBHOOK_URL` | Optional (enables Slack) | Full Slack incoming webhook URL — the URL token is the secret, treat it like a password and rotate via Slack's *Incoming Webhooks* config when leaked. Unset or empty disables the Slack channel; the PagerDuty channel is unaffected. |
+| `RATE_LIMIT_INCIDENT_PAGERDUTY_ROUTING_KEY` | Optional (enables PagerDuty) | PagerDuty Events API v2 *integration / routing key* (NOT the API token). Unset or empty disables the PagerDuty channel; the Slack channel is unaffected. |
+| `RATE_LIMIT_INCIDENT_PAGERDUTY_URL` | Optional | Override for the PagerDuty Events API endpoint. Defaults to `https://events.pagerduty.com/v2/enqueue`. Useful when pointing at a regional endpoint or a local mock server during a drill — leave unset in production. |
+| `RATE_LIMIT_INCIDENT_SOURCE` | Optional | Human-readable source label attached to every Slack/PagerDuty payload (e.g. `epplaa-prod`, `epplaa-staging`) so the receiving channel/rotation can tell which environment paged. Falls back to `HOSTNAME` if unset, and finally `"api-server"` if `HOSTNAME` is also unset. Setting this explicitly is recommended in production so paging stays stable across container hostname rotations. |
+| `RATE_LIMIT_INCIDENT_WEBHOOK_TIMEOUT_MS` | Optional | Hard timeout per webhook POST in milliseconds. Defaults to `5000` (5s). Long enough to absorb the typical Slack/PagerDuty p99 (a few hundred ms) but short enough that a stuck transport doesn't pin the watcher's event loop. Tighten only if you've measured your egress p99 and have a reason. |
+
+When **neither** `RATE_LIMIT_INCIDENT_SLACK_WEBHOOK_URL` nor
+`RATE_LIMIT_INCIDENT_PAGERDUTY_ROUTING_KEY` is set, the notifier is a
+graceful **no-op** — zero `fetch` calls, zero log lines, no attempt to
+page anyone. This is the intended behaviour for dev / preview / CI
+deploys that don't ship Slack or PagerDuty credentials, and is
+verified by the unit tests in
+`artifacts/api-server/src/lib/rate-limit/incidentNotifier.test.ts`.
+There is no separate "enable" flag — *configure to enable, leave unset
+to disable*.
+
+### What lands in the channel/rotation
+
+#### Slack — degraded transition
+
+Posted to the configured webhook on the moment `firstFailureAt`
+flips from null to non-null on the watcher (i.e. the same edge the
+admin console's banner toasts on). Example payload (formatted for
+readability — the wire body is minified JSON):
+
+```json
+{
+  "text": ":rotating_light: Rate-limit store DEGRADED on epplaa-prod",
+  "attachments": [
+    {
+      "color": "danger",
+      "fields": [
+        { "title": "Source", "value": "epplaa-prod", "short": true },
+        { "title": "Failure count", "value": "7", "short": true },
+        { "title": "Threshold (per minute)", "value": "5", "short": true },
+        { "title": "Streak began", "value": "2026-04-29T14:32:11.000Z", "short": true }
+      ],
+      "footer": "Rate-limit store is degrading open. Investigate Redis/backing store before traffic spreads across replicas without a shared quota. See docs/runbooks/rate-limit-store.md."
+    }
+  ]
+}
+```
+
+The wording mirrors the admin-console toast on purpose so an operator
+who sees both signals isn't second-guessing whether they're the same
+incident.
+
+#### Slack — recovered transition
+
+Posted on the matching degraded→healthy edge (one per closing streak):
+
+```json
+{
+  "text": ":white_check_mark: Rate-limit store RECOVERED on epplaa-prod",
+  "attachments": [
+    {
+      "color": "good",
+      "fields": [
+        { "title": "Source", "value": "epplaa-prod", "short": true },
+        { "title": "Duration", "value": "92s", "short": true },
+        { "title": "Failures during streak", "value": "11", "short": true },
+        { "title": "Recovered at", "value": "2026-04-29T14:33:43.000Z", "short": true }
+      ]
+    }
+  ]
+}
+```
+
+#### PagerDuty — trigger event
+
+POSTed to `RATE_LIMIT_INCIDENT_PAGERDUTY_URL` (or the v2 default) on
+the same healthy→degraded edge as the Slack post. The `dedup_key` is
+deliberately stable per source so a flapping store inside the same
+logical incident groups under one PagerDuty incident instead of
+opening a new one per transition.
+
+```json
+{
+  "routing_key": "<RATE_LIMIT_INCIDENT_PAGERDUTY_ROUTING_KEY>",
+  "event_action": "trigger",
+  "dedup_key": "rate-limit-store-degraded:epplaa-prod",
+  "payload": {
+    "summary": "Rate-limit store degraded on epplaa-prod (7 failures, threshold 5/min)",
+    "source": "epplaa-prod",
+    "severity": "error",
+    "component": "rate_limit_store",
+    "group": "api-server",
+    "class": "subsystem-degraded",
+    "custom_details": {
+      "failureCount": 7,
+      "threshold": 5,
+      "firstFailureAt": 1745937131000,
+      "breachedAt": 1745937135000
+    }
+  }
+}
+```
+
+#### PagerDuty — resolve event
+
+POSTed on the matching degraded→healthy edge with the same
+`dedup_key`, which is what makes PagerDuty auto-close the incident on
+recovery rather than leaving it open until on-call clicks Resolve:
+
+```json
+{
+  "routing_key": "<RATE_LIMIT_INCIDENT_PAGERDUTY_ROUTING_KEY>",
+  "event_action": "resolve",
+  "dedup_key": "rate-limit-store-degraded:epplaa-prod"
+}
+```
+
+### Dedupe semantics
+
+The notifier and the admin-console banner are intentionally driven by
+the **same** `firstFailureAt` edge, so on-call and the operator see
+the same incident boundaries. Concretely:
+
+- **One page per incident.** `notifyDegraded` is invoked exactly once
+  per healthy→degraded transition — the moment `firstFailureAt` flips
+  null→non-null on the watcher. Additional failures inside the same
+  streak — *including* ones that cross the
+  `RATE_LIMIT_REDIS_FAILURE_ALERT_PER_MIN` Sentry breach threshold —
+  do **not** re-page. The Sentry rate-based alert is a deliberately
+  separate channel; this paging path follows the streak edge instead.
+- **Paired resolve.** `notifyRecovered` is invoked exactly once per
+  degraded→healthy transition — every closing streak. The Slack post
+  lands as a `:white_check_mark: ... RECOVERED` message; the
+  PagerDuty event reuses the same `dedup_key` as the trigger so
+  PagerDuty closes the incident automatically. A resolve emitted for
+  a transient blip the operator never saw is safe — PagerDuty
+  treats a resolve with no matching open incident as a no-op, so it
+  doesn't open a spurious incident just to immediately close it.
+- **Re-page after recovery.** Once a streak closes (resolve sent),
+  the next healthy→degraded edge is a *new* incident and pages
+  again. The PagerDuty `dedup_key` is stable per source, but
+  PagerDuty's own state machine treats a `trigger` after a `resolve`
+  as a fresh incident. So the lifecycle is:
+  `trigger → resolve → (later) trigger → resolve`, one page per
+  incident, never two pages for the same streak.
+- **Failures don't break the watcher.** Webhook failures (non-2xx,
+  network errors, the timeout above) are logged as
+  `rate_limit_incident_webhook_non_2xx` /
+  `rate_limit_incident_webhook_failed` warns and otherwise swallowed.
+  The watcher's job is to keep the rate-limit store decision path
+  moving even when the paging transport is itself broken; Sentry
+  already captures the underlying breach via
+  `rate_limit_redis_failure_threshold_breached`, so a paging-transport
+  outage doesn't lose the incident — it just means Slack/PagerDuty
+  didn't get the duplicate notification. Successful posts log
+  `rate_limit_incident_webhook_sent` at info level, so triage can
+  confirm the page actually went out by grepping logs for the `kind`
+  (`slack_degraded`, `slack_recovered`, `pagerduty_degraded`,
+  `pagerduty_recovered`).
+
+### Silent no-op on dev / preview / CI
+
+The notifier reads the env on every notify call and short-circuits
+each transport when its env var is empty. Dev / preview / CI deploys
+that ship without `RATE_LIMIT_INCIDENT_SLACK_WEBHOOK_URL` and
+`RATE_LIMIT_INCIDENT_PAGERDUTY_ROUTING_KEY` therefore make zero
+outbound webhook calls — verified by unit tests that assert no
+`fetch` calls happen when the env is empty. **There is no need to
+set these vars in dev**; leaving them unset is the documented and
+tested off state. Conversely, *partially* configuring (e.g. only the
+Slack URL) is supported — only the configured channel pages, and
+the other is silently disabled. This is useful when bringing a new
+environment online: wire Slack first to validate end-to-end on a
+low-stakes channel, then add the PagerDuty routing key once on-call
+is ready to take pages.
+
+### Verifying the wiring
+
+To confirm the wiring without waiting for Redis to actually go
+degraded, the cleanest end-to-end check is to point the api-server
+at a temporarily unreachable Redis (e.g. a deliberately wrong
+`REDIS_URL`) on a non-production replica and let the watcher trip
+through the healthy→degraded edge naturally. The matching Slack post
+and PagerDuty trigger should land within a few seconds; restoring
+`REDIS_URL` triggers the recovery edge. For a less invasive smoke
+test, search the api-server logs for
+`rate_limit_incident_webhook_sent` after any past degraded incident
+to confirm the post went out (`kind` will name the transport).
+
 ## Symptom: alert from Sentry
 
 You will see one of these:
