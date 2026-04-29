@@ -1,7 +1,16 @@
 import { Router, type IRouter, type Request, type Response, type RequestHandler } from "express";
+import {
+  ConsumeMfaBackupCodeResponse,
+  DisableMfaTotpResponse,
+  GetMfaStatusResponse,
+  RegenerateMfaBackupCodesResponse,
+  SetupMfaTotpResponse,
+  VerifyMfaTotpResponse,
+} from "@workspace/api-zod";
 import { requireUserId } from "../lib/auth";
 import { recordAudit } from "../lib/audit";
 import { logger } from "../lib/logger";
+import { sendValidated } from "../lib/responseSchema";
 import { userHasAnyRole } from "../lib/roles";
 import { apiRateLimit } from "../middlewares/apiRateLimit";
 import {
@@ -85,6 +94,12 @@ const verifyMfaRateLimit = apiRateLimit({
  * gate for admin requests checks `requireMfa()` which treats any role in
  * the back-office as "MFA always required". WebAuthn assertion happens at
  * the Clerk session level so we just trust the recently-asserted flag.
+ *
+ * Every successful response is validated against the OpenAPI-generated
+ * Zod schemas in `@workspace/api-zod` via `sendValidated`. That makes
+ * any drift between the route and the published contract a request-time
+ * failure instead of a silent break in the manufacturer/seller SPAs that
+ * read the payload through the generated types.
  */
 const router: IRouter = Router();
 
@@ -98,7 +113,7 @@ router.get("/mfa/status", async (req: Request, res: Response) => {
   const velocity = await thirtyDayVelocityNgnMinor(userId);
   const isAdmin = await userHasAnyRole(userId, ["admin", "moderator", "finance_ops", "support"]).catch(() => false);
   const required = isAdmin || velocity >= HIGH_VELOCITY_THRESHOLD_NGN_MINOR;
-  res.json({
+  sendValidated(res, GetMfaStatusResponse, {
     ...status,
     enrolledAt: status.enrolledAt?.toISOString() ?? null,
     lastUsedAt: status.lastUsedAt?.toISOString() ?? null,
@@ -120,7 +135,7 @@ router.post("/mfa/totp/setup", setupMfaRateLimit, async (req: Request, res: Resp
   const label = (body.accountLabel ?? userId).slice(0, 64);
   try {
     const result = await setupTotp(userId, label);
-    res.json({
+    sendValidated(res, SetupMfaTotpResponse, {
       enrollmentId: result.enrollmentId,
       otpauthUrl: result.otpauthUrl,
       qrCodeDataUrl: result.qrCodeDataUrl,
@@ -150,7 +165,7 @@ router.post("/mfa/totp/verify", verifyMfaRateLimit, async (req: Request, res: Re
     res.status(401).json({ error: "code_rejected", detail: "Code did not match. Try again." });
     return;
   }
-  res.json({ ok: true });
+  sendValidated(res, VerifyMfaTotpResponse, { ok: true });
 });
 
 router.post("/mfa/backup-code", verifyMfaRateLimit, async (req: Request, res: Response) => {
@@ -167,7 +182,7 @@ router.post("/mfa/backup-code", verifyMfaRateLimit, async (req: Request, res: Re
     res.status(401).json({ error: "code_rejected" });
     return;
   }
-  res.json({ ok: true });
+  sendValidated(res, ConsumeMfaBackupCodeResponse, { ok: true });
 });
 
 router.post("/mfa/totp/disable", sensitiveMfaRateLimit, async (req: Request, res: Response) => {
@@ -183,7 +198,7 @@ router.post("/mfa/totp/disable", sensitiveMfaRateLimit, async (req: Request, res
     return;
   }
   await disableMfa(userId);
-  res.json({ ok: true });
+  sendValidated(res, DisableMfaTotpResponse, { ok: true });
 });
 
 router.post(
@@ -237,7 +252,7 @@ router.post(
         userAgent,
         occurredAt,
       });
-      res.json({ backupCodes: codes });
+      sendValidated(res, RegenerateMfaBackupCodesResponse, { backupCodes: codes });
     } catch (err) {
       logger.error(
         { err: (err as Error).message, userId },
