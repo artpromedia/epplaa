@@ -32,6 +32,11 @@ const EVENT_CHANNEL_DEFAULTS: Record<EventType, ChannelKind[]> = {
   // April 3rd?"). Push/SMS would be intrusive for a routine confirm
   // and wouldn't survive a phone replacement.
   mfa_activated: ["email"],
+  // Security alert — fired when a fresh sheet of backup codes is
+  // minted. Email-only so it acts as an out-of-band tripwire that an
+  // attacker controlling the in-app session/push surface cannot
+  // suppress, and so the alert lands in the user's inbox where it can
+  // be reviewed weeks later if needed.
   mfa_backup_codes_regenerated: ["email"],
 };
 
@@ -62,6 +67,9 @@ const EVENT_CATEGORY: Record<EventType, "orderUpdates" | "liveDrops" | "promos" 
   // gains or rotates a second factor — that's the whole point of
   // sending the email.
   mfa_activated: null,
+  // Security: a backup-code regeneration is the user's tripwire for a
+  // silent takeover, so it must reach them regardless of which
+  // marketing categories they've muted.
   mfa_backup_codes_regenerated: null,
 };
 

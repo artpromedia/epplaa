@@ -372,8 +372,25 @@ export async function consumeBackupCode(
  * below the threshold. Without this reset, a seller who hit "empty",
  * regenerated, then drained back down would never see a second email.
  */
+/**
+ * Optional request-side context the route layer can pass through so the
+ * confirmation email carries forensic detail (IP, user-agent, exact
+ * timestamp). When omitted — e.g. internal callers, lib-level tests,
+ * background jobs — the lib falls back to the original generic
+ * "refreshed" message. When present, the email becomes a richer
+ * security tripwire and is force-routed through the email channel so a
+ * user who muted email cannot silence the very alert that warns of a
+ * silent takeover.
+ */
+export interface RegenerateBackupCodesContext {
+  ipAddress?: string;
+  userAgent?: string;
+  occurredAt?: Date;
+}
+
 export async function regenerateBackupCodes(
   userId: string,
+  context?: RegenerateBackupCodesContext,
 ): Promise<string[] | null> {
   const codes = generateBackupCodes();
   const hashed = codes.map(hashBackupCode);
@@ -395,20 +412,51 @@ export async function regenerateBackupCodes(
   // weaponise this into an email-bomb.
   try {
     const { enqueueNotification } = await import("./notifications");
-    await enqueueNotification({
-      userId,
-      eventType: "mfa_backup_codes_regenerated",
-      payload: {
-        title: "Your MFA backup codes were just refreshed",
-        body:
-          "A fresh set of backup codes was generated for your account. " +
-          "Your previous codes no longer work. Save the new sheet somewhere " +
-          "safe — you'll need it if you ever lose access to your " +
-          "authenticator. If this wasn't you, change your password and " +
-          "contact support right away.",
-        url: "/account/security",
-      },
-    });
+    if (context) {
+      const isoTimestamp = (context.occurredAt ?? new Date()).toISOString();
+      const ipAddress = context.ipAddress ?? "";
+      const userAgent = context.userAgent ?? "";
+      await enqueueNotification({
+        userId,
+        eventType: "mfa_backup_codes_regenerated",
+        payload: {
+          title: "Your MFA backup codes were regenerated",
+          body:
+            "A fresh set of two-factor backup codes was just generated for your account. " +
+            `When: ${isoTimestamp}. ` +
+            `IP: ${ipAddress || "unknown"}. ` +
+            `Device: ${userAgent || "unknown"}. ` +
+            "If this was you, no action is needed — keep the new codes somewhere safe. " +
+            "If it wasn't, sign in immediately, change your password, and review your sessions.",
+          url: "/account/security",
+          ipAddress,
+          userAgent,
+          occurredAt: isoTimestamp,
+        },
+        // Force the email channel: this is a security tripwire, not a
+        // marketing notification, and a user who muted email entirely
+        // would otherwise silence the very alert they need to spot a
+        // silent takeover. Same forced-channel pattern OTP delivery uses.
+        // The outbox resolves `to: "*"` to the user's email address at
+        // drain time so we don't need to look it up here.
+        forcedChannels: [{ channel: "email", to: "*" }],
+      });
+    } else {
+      await enqueueNotification({
+        userId,
+        eventType: "mfa_backup_codes_regenerated",
+        payload: {
+          title: "Your MFA backup codes were just refreshed",
+          body:
+            "A fresh set of backup codes was generated for your account. " +
+            "Your previous codes no longer work. Save the new sheet somewhere " +
+            "safe — you'll need it if you ever lose access to your " +
+            "authenticator. If this wasn't you, change your password and " +
+            "contact support right away.",
+          url: "/account/security",
+        },
+      });
+    }
   } catch (err) {
     // Best-effort: a notification failure must not fail the regenerate
     // itself — the user already saw the new codes. Logged so the

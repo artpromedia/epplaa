@@ -82,6 +82,99 @@ d("POST /api/mfa/totp/regenerate-backup-codes", () => {
     await db.execute(
       sql`DELETE FROM mfa_challenges WHERE user_id LIKE ${TEST_USER_PREFIX + "%"};`,
     );
+    // Notification outbox rows are scoped to the test user so we scrub
+    // them deterministically. We do NOT scrub `audit_events` — that
+    // table is enforced append-only at the trigger level, and leaving
+    // a handful of test rows behind is harmless because every assertion
+    // here is keyed on a per-test random user id.
+    await db.execute(
+      sql`DELETE FROM notifications_outbox WHERE user_id LIKE ${TEST_USER_PREFIX + "%"};`,
+    );
+  }
+
+  async function outboxRowsFor(userId: string): Promise<
+    { event_type: string; channel: string; payload: Record<string, unknown> }[]
+  > {
+    const r = await db.execute<{
+      event_type: string;
+      channel: string;
+      payload: Record<string, unknown>;
+    }>(sql`
+      SELECT event_type, channel, payload
+        FROM notifications_outbox
+       WHERE user_id = ${userId}
+         AND event_type = 'mfa_backup_codes_regenerated'
+       ORDER BY created_at ASC;
+    `);
+    return r.rows;
+  }
+
+  // Filter strictly to the regenerate event/action. The mfa setup helpers
+  // used by these tests (`verifyTotpAndActivate`) now also write an
+  // `mfa_activated` outbox row + audit row, so a userId-only filter would
+  // double-count and false-positive the negative-branch assertions.
+  async function auditRowsFor(userId: string): Promise<
+    { action: string; entity: string; entity_id: string; payload: Record<string, unknown> }[]
+  > {
+    const r = await db.execute<{
+      action: string;
+      entity: string;
+      entity_id: string;
+      payload: Record<string, unknown>;
+    }>(sql`
+      SELECT action, entity, entity_id, payload
+        FROM audit_events
+       WHERE actor_id = ${userId}
+         AND action = 'mfa.backup_codes.regenerated'
+       ORDER BY seq ASC;
+    `);
+    return r.rows;
+  }
+
+  /**
+   * The route enqueues the email + writes the audit row in a fire-and-
+   * forget `void` block after responding 200, so by the time supertest
+   * resolves the response promise the side effects may not have hit
+   * Postgres yet. Poll briefly so the assertions don't race the worker
+   * but a true regression still fails fast. Throws on timeout so a
+   * silent regression (no row ever appears) surfaces as a clear test
+   * failure instead of a downstream "0 rows" assertion further away
+   * from the actual root cause.
+   */
+  async function waitForCondition(
+    check: () => Promise<boolean>,
+    timeoutMs = 2_000,
+    description = "condition",
+  ): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      if (await check()) return;
+      await new Promise((r) => setTimeout(r, 25));
+    }
+    throw new Error(
+      `waitForCondition timed out after ${timeoutMs}ms waiting for ${description}`,
+    );
+  }
+
+  /**
+   * Negative-branch helper: poll the supplied check up to `windowMs`
+   * confirming it stays false the whole time. Used by the 403/404 tests
+   * to assert that a fire-and-forget side effect does NOT eventually
+   * fire, instead of a single fixed-sleep snapshot that could miss a
+   * late-arriving row in a slow CI run.
+   */
+  async function expectStaysFalse(
+    check: () => Promise<boolean>,
+    windowMs = 250,
+    description = "condition",
+  ): Promise<void> {
+    const deadline = Date.now() + windowMs;
+    while (Date.now() < deadline) {
+      if (await check()) {
+        throw new Error(`expectStaysFalse: ${description} became true within ${windowMs}ms`);
+      }
+      await new Promise((r) => setTimeout(r, 25));
+    }
   }
 
   beforeAll(async () => {
@@ -141,6 +234,17 @@ d("POST /api/mfa/totp/regenerate-backup-codes", () => {
       SELECT backup_codes_hashed FROM mfa_enrollments WHERE user_id = ${userId};
     `);
     expect(row.rows[0]!.backup_codes_hashed).toHaveLength(10);
+
+    // No side effects on the rejection branch: a security alert email
+    // sent for a request that *didn't* rotate codes would be
+    // confusing noise, and an audit row would falsely imply the
+    // operation happened. Poll for a short window so a late-arriving
+    // row from a future regression still trips the assertion.
+    await expectStaysFalse(
+      async () => (await outboxRowsFor(userId)).length > 0 || (await auditRowsFor(userId)).length > 0,
+      250,
+      "outbox/audit row on 403 challenge-required branch",
+    );
   });
 
   it("returns 404 mfa_not_enrolled when the user has no active TOTP factor", async () => {
@@ -157,6 +261,14 @@ d("POST /api/mfa/totp/regenerate-backup-codes", () => {
       .send({});
     expect(r.status).toBe(404);
     expect(r.body.error).toBe("mfa_not_enrolled");
+
+    // 404 means nothing rotated — neither the email tripwire nor the
+    // audit row should fire on this branch.
+    await expectStaysFalse(
+      async () => (await outboxRowsFor(userId)).length > 0 || (await auditRowsFor(userId)).length > 0,
+      250,
+      "outbox/audit row on 404 not-enrolled branch",
+    );
   });
 
   it("returns 404 mfa_not_enrolled when the user only has a pending (unverified) enrolment", async () => {
@@ -173,6 +285,12 @@ d("POST /api/mfa/totp/regenerate-backup-codes", () => {
       .send({});
     expect(r.status).toBe(404);
     expect(r.body.error).toBe("mfa_not_enrolled");
+
+    await expectStaysFalse(
+      async () => (await outboxRowsFor(userId)).length > 0 || (await auditRowsFor(userId)).length > 0,
+      250,
+      "outbox/audit row on 404 pending-only branch",
+    );
   });
 
   it("rate-limits to 5 calls per hour per user — the 6th call is rejected with 429", async () => {
@@ -249,6 +367,8 @@ d("POST /api/mfa/totp/regenerate-backup-codes", () => {
     const r = await request(buildApp())
       .post("/api/mfa/totp/regenerate-backup-codes")
       .set("x-test-user-id", userId)
+      .set("user-agent", "RegenerateTest/1.0 (vitest)")
+      .set("x-forwarded-for", "203.0.113.42, 10.0.0.1")
       .send({});
     expect(r.status).toBe(200);
 
@@ -303,5 +423,84 @@ d("POST /api/mfa/totp/regenerate-backup-codes", () => {
     // the route persisted exactly 10 active codes, no more, no fewer.
     const finalStatus = await mfa.getMfaStatus(userId);
     expect(finalStatus.backupCodesRemaining).toBe(0);
+
+    // Security tripwire: the success branch must enqueue an out-of-
+    // band email *and* write an audit row. Both are fired post-
+    // response in a `void` block, so wait briefly for the writes to
+    // land before asserting. The IP/user-agent we set on the request
+    // must round-trip into both surfaces so an alarmed user can spot a
+    // regen they didn't make, and so an investigating operator has
+    // enough context to triage.
+    await waitForCondition(async () => (await outboxRowsFor(userId)).length >= 1);
+    const outboxRows = await outboxRowsFor(userId);
+    expect(outboxRows).toHaveLength(1);
+    const alert = outboxRows[0]!;
+    expect(alert.event_type).toBe("mfa_backup_codes_regenerated");
+    expect(alert.channel).toBe("email");
+    const alertPayload = alert.payload as Record<string, unknown>;
+    expect(String(alertPayload.title)).toMatch(/regenerated/i);
+    expect(String(alertPayload.body)).toContain("203.0.113.42");
+    expect(String(alertPayload.body)).toContain("RegenerateTest/1.0");
+    expect(alertPayload.ipAddress).toBe("203.0.113.42");
+    expect(String(alertPayload.userAgent)).toContain("RegenerateTest/1.0");
+    expect(typeof alertPayload.occurredAt).toBe("string");
+    expect(String(alertPayload.url)).toBe("/account/security");
+
+    await waitForCondition(async () => (await auditRowsFor(userId)).length >= 1);
+    const auditRows = await auditRowsFor(userId);
+    expect(auditRows).toHaveLength(1);
+    const audit = auditRows[0]!;
+    expect(audit.action).toBe("mfa.backup_codes.regenerated");
+    expect(audit.entity).toBe("mfaEnrollment");
+    expect(audit.entity_id).toBe(userId);
+    const auditPayload = audit.payload as Record<string, unknown>;
+    expect(auditPayload.ipAddress).toBe("203.0.113.42");
+    expect(String(auditPayload.userAgent)).toContain("RegenerateTest/1.0");
+    expect(typeof auditPayload.occurredAt).toBe("string");
+  });
+
+  it("still emails the security alert even when the user has muted the email channel", async () => {
+    // A regen alert is a security tripwire, not a marketing email — a
+    // user who muted the email channel must not be able to silence
+    // the very signal they need to spot a silent takeover. The route
+    // forces the email channel via `forcedChannels`, bypassing pref
+    // resolution. This test would fail if the forced-channel override
+    // were ever removed (the outbox would honor `email = false` and
+    // skip enqueue entirely), so it locks the security policy in.
+    const userId = makeUserId();
+    const setup = await mfa.setupTotp(userId, `${userId}@example.com`);
+    authenticator.options = { window: 1, step: 30 };
+    await mfa.verifyTotpAndActivate(userId, authenticator.generate(setup.secret));
+    // Insert a notification_prefs row with email *and* every other
+    // channel disabled. Without a forced channel, every event type's
+    // pref resolution would return zero channels and the outbox would
+    // never see a row.
+    await db.execute(sql`
+      INSERT INTO notification_prefs (user_id, email, sms, whatsapp, push)
+      VALUES (${userId}, false, false, false, false)
+      ON CONFLICT (user_id) DO UPDATE
+        SET email = false, sms = false, whatsapp = false, push = false;
+    `);
+
+    const r = await request(buildApp())
+      .post("/api/mfa/totp/regenerate-backup-codes")
+      .set("x-test-user-id", userId)
+      .send({});
+    expect(r.status).toBe(200);
+
+    await waitForCondition(async () => (await outboxRowsFor(userId)).length >= 1);
+    const outboxRows = await outboxRowsFor(userId);
+    expect(outboxRows).toHaveLength(1);
+    expect(outboxRows[0]!.event_type).toBe("mfa_backup_codes_regenerated");
+    expect(outboxRows[0]!.channel).toBe("email");
+
+    // Audit row should also be written regardless of notification prefs.
+    await waitForCondition(async () => (await auditRowsFor(userId)).length >= 1);
+    expect((await auditRowsFor(userId))[0]!.action).toBe(
+      "mfa.backup_codes.regenerated",
+    );
+
+    // Tidy up the prefs row so cleanup doesn't leak into a shared dev DB.
+    await db.execute(sql`DELETE FROM notification_prefs WHERE user_id = ${userId};`);
   });
 });

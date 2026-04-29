@@ -1,5 +1,6 @@
 import { Router, type IRouter, type Request, type Response, type RequestHandler } from "express";
 import { requireUserId } from "../lib/auth";
+import { recordAudit } from "../lib/audit";
 import { logger } from "../lib/logger";
 import { userHasAnyRole } from "../lib/roles";
 import { apiRateLimit } from "../middlewares/apiRateLimit";
@@ -203,7 +204,20 @@ router.post(
       return;
     }
     try {
-      const codes = await regenerateBackupCodes(userId);
+      // Security tripwire: capture network context BEFORE rotating so
+      // the lib can inline IP/user-agent into the out-of-band email.
+      // If an attacker who phished the primary password and a single
+      // TOTP code mints new codes to lock the legitimate owner out,
+      // the owner sees the alert (with the regen's IP/device) in
+      // their inbox instead of finding their sheet silently swapped.
+      const ipAddress = clientIpFromRequest(req);
+      const userAgent = (req.get("user-agent") ?? "").slice(0, 256);
+      const occurredAt = new Date();
+      const codes = await regenerateBackupCodes(userId, {
+        ipAddress,
+        userAgent,
+        occurredAt,
+      });
       if (!codes) {
         res.status(404).json({
           error: "mfa_not_enrolled",
@@ -212,6 +226,17 @@ router.post(
         });
         return;
       }
+      // Append-only audit row alongside the email — gives trust &
+      // safety a queryable trail when investigating a complaint
+      // ("did this user really regenerate on April 3rd from this
+      // IP?"). Fire-and-forget so an audit-table hiccup never
+      // poisons the user-visible 200.
+      void emitBackupCodeRegenerationAuditRow({
+        userId,
+        ipAddress,
+        userAgent,
+        occurredAt,
+      });
       res.json({ backupCodes: codes });
     } catch (err) {
       logger.error(
@@ -270,6 +295,68 @@ export function requireMfa(): RequestHandler {
       res.status(500).json({ error: "internal" });
     });
   };
+}
+
+/**
+ * Best-effort client IP extraction. We honour `X-Forwarded-For` because
+ * the API runs behind the workspace proxy and Replit's deployment edge,
+ * so `req.socket.remoteAddress` would otherwise just be the proxy. The
+ * leftmost hop in `X-Forwarded-For` is the original client. We trim and
+ * cap the value so a hostile header can't bloat the audit row or the
+ * notification payload.
+ */
+function clientIpFromRequest(req: Request): string {
+  const xff = req.get("x-forwarded-for");
+  if (xff) {
+    const first = xff.split(",")[0]?.trim();
+    if (first) return first.slice(0, 64);
+  }
+  const direct = req.ip ?? req.socket.remoteAddress ?? "";
+  return direct.slice(0, 64);
+}
+
+interface BackupCodeRegenerationAuditInput {
+  userId: string;
+  ipAddress: string;
+  userAgent: string;
+  occurredAt: Date;
+}
+
+/**
+ * Fire-and-forget audit-row writer for a successful backup-code
+ * regeneration. The out-of-band confirmation email is emitted by the
+ * lib (`regenerateBackupCodes`) so it stays close to the actual state
+ * change and is shared with non-route callers. We keep the audit row
+ * here at the route layer so it lives alongside the request-side
+ * context (IP/user-agent) without leaking the audit dependency into
+ * the lib.
+ *
+ * Wrapped so a DB hiccup is logged but never bubbles into the caller's
+ * 200 response — the user already saw the new codes, and a missing
+ * audit row should not look to the SPA like the regenerate failed.
+ */
+async function emitBackupCodeRegenerationAuditRow(
+  input: BackupCodeRegenerationAuditInput,
+): Promise<void> {
+  const { userId, ipAddress, userAgent, occurredAt } = input;
+  try {
+    await recordAudit({
+      actorId: userId,
+      action: "mfa.backup_codes.regenerated",
+      entity: "mfaEnrollment",
+      entityId: userId,
+      payload: {
+        ipAddress,
+        userAgent,
+        occurredAt: occurredAt.toISOString(),
+      },
+    });
+  } catch (err) {
+    logger.warn(
+      { err: (err as Error).message, userId },
+      "mfa_backup_codes_regenerated_audit_failed",
+    );
+  }
 }
 
 export default router;
