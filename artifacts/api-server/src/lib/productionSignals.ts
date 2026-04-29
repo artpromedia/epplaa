@@ -195,3 +195,56 @@ export function isProductionEnvironment(
 ): boolean {
   return detectProductionSignals(env, log).length > 0;
 }
+
+/**
+ * Tri-state status of `PRODUCTION_HOSTNAME_PATTERN` configuration —
+ * mirrors the boot-time check `assertProductionHostnamePatternConfigured`
+ * but is pure (no logging) so it can be safely called from hot paths
+ * like the `/readyz` handler that the platform load balancer hits on
+ * a tight cadence.
+ *
+ * The value is intended to be surfaced over the network (e.g. on
+ * `/readyz`) so an external probe can verify the operator-configured
+ * hostname backstop is in place on a production deploy without
+ * shelling onto the box. See `scripts/checkProductionHostnamePattern.ts`
+ * for the post-deploy verifier that consumes this signal.
+ *
+ * Values:
+ *   - `"not_required"` — the deploy is not production-shaped (no
+ *     non-hostname production signal lit). Staging / dev / preview
+ *     environments don't need the backstop and the probe must treat
+ *     a missing pattern as fine here.
+ *   - `"configured"` — the deploy IS production-shaped AND
+ *     `PRODUCTION_HOSTNAME_PATTERN` resolves to a non-empty value.
+ *     Healthy state.
+ *   - `"missing"` — the deploy IS production-shaped AND the env var
+ *     is unset / empty / whitespace-only. The hostname backstop in
+ *     `assertRehearsalKillSwitchSafe` is silently disabled and an
+ *     external check should page on this so an operator notices
+ *     within minutes of the deploy rather than waiting for a real
+ *     outage.
+ *
+ * Note: a malformed regex (e.g. unbalanced bracket) still counts as
+ * `"configured"` here — `compileHostnamePattern` already logs
+ * `production_hostname_pattern_invalid` when the pattern fails to
+ * parse, and emitting a second "missing" signal here would be
+ * confusing (the operator DID set the env var, they just typo'd it).
+ * The malformed-regex log is the actionable signal for that case.
+ *
+ * Pure function — takes `env` so callers can unit-test their probe
+ * surface without poisoning `process.env`.
+ */
+export type ProductionHostnamePatternStatus =
+  | "not_required"
+  | "configured"
+  | "missing";
+
+export function getProductionHostnamePatternStatus(
+  env: NodeJS.ProcessEnv,
+): ProductionHostnamePatternStatus {
+  const productionSignals = detectNonHostnameProductionSignals(env);
+  if (productionSignals.length === 0) return "not_required";
+  const raw = env.PRODUCTION_HOSTNAME_PATTERN;
+  if (raw && raw.trim() !== "") return "configured";
+  return "missing";
+}

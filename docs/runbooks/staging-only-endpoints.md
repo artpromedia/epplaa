@@ -44,7 +44,51 @@ path log-throttling for the compiled hostname-pattern cache).
   synthetic stuck-degraded outage.
 - Disposition: **already hardened in Task #81.** Refactored in Task
   #83 to import `detectProductionSignals` from the shared helper
-  rather than its own private copy.
+  rather than its own private copy. Task #89 added a post-deploy
+  verifier (see "Post-deploy verifier" below) that pages on-call when
+  `PRODUCTION_HOSTNAME_PATTERN` — the strongest of the four signals
+  — is unset on a production deploy, removing the silent-failure mode
+  where the hostname backstop layer was absent without anyone
+  noticing.
+
+### Post-deploy verifier: `PRODUCTION_HOSTNAME_PATTERN` (Task #89)
+
+- Surface: `getReadyzConfigBlock()` in `artifacts/api-server/src/routes/health.ts`
+  surfaces the env-var status on `/readyz` as
+  `config.productionHostnamePattern` ∈ `"not_required" | "configured"
+  | "missing"`. The block is INFORMATIONAL — it does NOT change the
+  ready/not_ready decision (failing readiness for a config warning
+  would drain the replica out of rotation, more disruptive than the
+  marginal security gain).
+- Probe: `pnpm --filter @workspace/api-server run check-production-hostname-pattern`
+  (source: `src/scripts/checkProductionHostnamePattern.ts`).
+  Reads `READYZ_URL`, polls `/readyz`, and exits:
+  - `0` — `configured` OR `not_required` (silent on healthy prod and on
+    non-prod deploys, so the same workflow can fan out across envs
+    without flapping).
+  - `1` — probe error (network failure, non-2xx with no JSON body,
+    missing or unrecognised `config` block — escalate response-shape
+    regressions instead of silently passing).
+  - `2` — page on-call: production deploy reports the pattern is
+    missing.
+  Accepts BOTH `200 ready` AND `503 not_ready` as valid responses
+  (`/readyz` includes the `config` block on both paths) so a
+  downstream outage can never silently mask the misconfiguration.
+- Scheduling: `.github/workflows/check-production-hostname-pattern.yml`
+  runs on `schedule` (every 15 minutes), `workflow_dispatch` (manual
+  ad-hoc), and `workflow_call` (deploy workflows invoke this as the
+  final post-deploy gate; a non-zero exit fails the deploy). Uses the
+  same Sentry pager + cron-monitor heartbeat pattern as
+  `check-healthz-degraded.yml`. Required vars/secrets:
+  `vars.HOSTNAME_PATTERN_PROBE_ENABLED=1`, `vars.READYZ_URL`,
+  `secrets.HOSTNAME_PATTERN_SENTRY_DSN` (omit DSN to skip Sentry
+  forwarding + heartbeat; the workflow still fails on non-zero exit
+  so on-call sees it via GitHub's failed-workflow notification).
+- Tests: `routes/health.test.ts` (route shape across signals,
+  including the 503-not_ready + missing-pattern combination),
+  `lib/productionSignals.ts`'s helper unit tests, and
+  `scripts/checkProductionHostnamePattern.test.ts` (decision matrix +
+  CLI exit-code mapping + structured stdout/stderr lines).
 
 ### `lib/fulfillment/gig.ts` `allowStubFallback()`
 

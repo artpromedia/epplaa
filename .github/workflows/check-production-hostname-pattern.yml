@@ -1,0 +1,236 @@
+name: Production hostname pattern probe (post-deploy + cron)
+
+# Runs the `check-production-hostname-pattern` CLI probe against the
+# production /api/readyz URL on every deploy AND on a 15-minute cron,
+# and pages on-call (via Sentry, level=fatal) when the probe reports
+# `productionHostnamePattern === "missing"`.
+#
+# Why this workflow exists (task #89):
+# `PRODUCTION_HOSTNAME_PATTERN` is the strongest backstop in
+# `assertRehearsalKillSwitchSafe`: even if every other production
+# signal (`NODE_ENV` / `REPLIT_DEPLOYMENT` / `DEPLOYMENT_ENVIRONMENT`)
+# drifts, a deploy whose container `HOSTNAME` matches the operator-
+# configured production-hostname regex still refuses to boot with the
+# rehearsal injector enabled. That whole layer is silently absent if
+# no operator ever set the env var on a production deploy.
+#
+# The boot-time check `assertProductionHostnamePatternConfigured`
+# already emits a structured warn-log when the pattern is missing on
+# a production-shaped boot, but warning logs are easy to lose in a
+# noisy aggregator and don't page on-call. This workflow turns the
+# warn-log signal into an actionable external check by polling
+# /readyz's `config` block (see `getReadyzConfigBlock` in
+# `routes/health.ts`) and forwarding non-zero exits to Sentry.
+#
+# Cadence:
+#   * `workflow_call` from a deploy workflow — invoke as the final
+#     post-deploy step to verify the new image actually has the env
+#     var set BEFORE we leave the deploy unattended. A non-zero exit
+#     fails the deploy workflow.
+#   * `workflow_dispatch` — manual ad-hoc verification.
+#   * `schedule` — every 15 minutes as a safety net for the case where
+#     someone changes the production env var post-deploy without
+#     redeploying (the existing process accepts hot env-var changes
+#     because `getProductionHostnamePatternStatus` reads
+#     `process.env` per-request). Cron is also the heartbeat that
+#     catches misconfigurations introduced by a deploy that bypassed
+#     this workflow entirely (e.g. emergency rollback via the platform
+#     UI).
+#
+# Required repo variables / secrets (configured in the GitHub repo
+# Settings → Secrets and variables → Actions):
+#
+#   vars.HOSTNAME_PATTERN_PROBE_ENABLED       — must equal "1" to opt in.
+#                                               Acts as a kill switch — set
+#                                               to anything else to silence
+#                                               the workflow without
+#                                               removing the file. The
+#                                               Sentry Cron monitor will
+#                                               then page on missed
+#                                               check-ins, which is
+#                                               intentional: disabling the
+#                                               probe should be a
+#                                               deliberate decision.
+#   vars.READYZ_URL                           — full URL to /api/readyz on
+#                                               the production deployment
+#                                               (e.g. https://api.epplaa.com/api/readyz).
+#                                               REQUIRED — the workflow
+#                                               fails fast if missing.
+#   vars.READYZ_PROBE_TIMEOUT_MS              — per-request fetch timeout.
+#                                               Defaults to 5000.
+#   vars.SENTRY_ORG, vars.SENTRY_PROJECT      — Sentry destination. Reused
+#                                               from the release workflow
+#                                               so on-call sees these
+#                                               events in the same project.
+#   secrets.HOSTNAME_PATTERN_SENTRY_DSN       — DSN used by sentry-cli to
+#                                               post the page event AND to
+#                                               send Sentry Cron monitor
+#                                               check-ins. May be the same
+#                                               DSN as the api-server so
+#                                               the alert lands in the
+#                                               same project; kept as a
+#                                               separate secret so you can
+#                                               rotate it independently of
+#                                               the runtime DSN.
+#
+# When secrets/vars are missing the workflow degrades safely:
+#   - HOSTNAME_PATTERN_PROBE_ENABLED != "1"   -> job skipped entirely.
+#                                                The Sentry Cron monitor
+#                                                will then page on missed
+#                                                check-ins.
+#   - READYZ_URL missing                      -> probe exits 1 with a clear
+#                                                stderr line, workflow
+#                                                fails (which pages via
+#                                                the GitHub "Failed
+#                                                workflow run" notification
+#                                                AND fails the calling
+#                                                deploy workflow).
+#   - HOSTNAME_PATTERN_SENTRY_DSN missing     -> Sentry forwarding AND the
+#                                                cron-monitor heartbeat are
+#                                                skipped, but the workflow
+#                                                still fails on non-zero
+#                                                probe exit so on-call sees
+#                                                the failure in GitHub.
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch: {}
+  # Allow a deploy workflow to invoke this as a post-deploy gate.
+  # The deploy workflow's `jobs.<id>.uses:` reference will block on a
+  # non-zero probe exit, which fails the deploy and (depending on the
+  # platform) blocks promotion / rollout completion.
+  workflow_call: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  # Cap to one running + at most one pending: a slow run can't fan
+  # out into a backlog of overlapping invocations. The cron tick is
+  # 15 minutes so we don't expect overlap in practice; this is
+  # belt-and-braces for the workflow_call + cron + workflow_dispatch
+  # combination.
+  group: check-production-hostname-pattern
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    name: Run production-hostname-pattern probe
+    if: ${{ vars.HOSTNAME_PATTERN_PROBE_ENABLED == '1' }}
+    runs-on: ubuntu-latest
+    # A single probe + install/boot. Generous headroom for a slow
+    # runner so a transient network blip doesn't false-fail.
+    timeout-minutes: 5
+
+    env:
+      READYZ_URL: ${{ vars.READYZ_URL }}
+      READYZ_PROBE_TIMEOUT_MS: ${{ vars.READYZ_PROBE_TIMEOUT_MS || '5000' }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # sentry-cli is a single static binary; fetching it inline keeps
+      # the workflow self-contained without adding a workspace dep.
+      # If Sentry isn't configured we never invoke it.
+      - name: Install sentry-cli
+        run: curl -sL https://sentry.io/get-cli/ | INSTALL_DIR=/usr/local/bin sh
+
+      - name: Probe /readyz with cron-monitor heartbeat
+        env:
+          SENTRY_DSN: ${{ secrets.HOSTNAME_PATTERN_SENTRY_DSN }}
+          SENTRY_ORG: ${{ vars.SENTRY_ORG }}
+          SENTRY_PROJECT: ${{ vars.SENTRY_PROJECT }}
+        run: |
+          # Materialise the probe as a temp script so it can be invoked
+          # either directly (no Sentry DSN -> no heartbeat coverage) or
+          # wrapped by `sentry-cli monitors run` (DSN configured ->
+          # Sentry Cron monitor records `in_progress` at start +
+          # `ok`/`error` at finish, AND pages on missed check-ins
+          # independent of the in-loop send-event path or the GitHub
+          # workflow-failure notification).
+          #
+          # Quoted-terminator heredoc so nothing inside expands at
+          # heredoc time — env vars expand at runtime.
+          cat > "$RUNNER_TEMP/probe.sh" <<'PROBE'
+          #!/usr/bin/env bash
+          set +e
+          run_url="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          out=$(pnpm --silent --filter @workspace/api-server run check-production-hostname-pattern 2>&1)
+          code=$?
+          # Always echo the probe's structured line into the GH log
+          # so operators can see the full output even on success.
+          printf '%s\n' "$out"
+          if [ "$code" -eq 0 ]; then
+            exit 0
+          fi
+          echo "::error::probe exited $code"
+          if [ -n "$SENTRY_DSN" ]; then
+            # Forward to Sentry as a fatal-level message. The
+            # fingerprint groups all invocations of this alert into a
+            # single Sentry issue so on-call gets one page per
+            # outstanding incident, not one per cron tick.
+            #
+            # `set +e` above ensures a sentry-cli failure (DSN typo,
+            # network blip) doesn't change the workflow's exit code —
+            # we still want the GitHub failed-workflow notification
+            # to fire as a backstop.
+            sentry-cli send-event \
+              --message "production_hostname_pattern_misconfigured (probe exit $code)" \
+              --level fatal \
+              --tag "subsystem:rehearsal_kill_switch" \
+              --tag "alert:production_hostname_pattern_misconfigured" \
+              --tag "exit_code:$code" \
+              --tag "scheduler:github-actions" \
+              --tag "workflow:check-production-hostname-pattern" \
+              --fingerprint "production_hostname_pattern_misconfigured" \
+              --extra "probe_output=$out" \
+              --extra "exit_code=$code" \
+              --extra "workflow_run=$run_url" \
+              || echo "::warning::sentry-cli send-event failed (Sentry forwarder error, not the probe itself)"
+          else
+            echo "::warning::HOSTNAME_PATTERN_SENTRY_DSN not configured; relying on GitHub workflow-failure notification"
+          fi
+          # Failure summary so the GitHub failed-run notification body
+          # is useful even without clicking through to logs.
+          {
+            echo "## Production hostname pattern probe failed"
+            echo ""
+            echo "Probe exit code: $code"
+            echo ""
+            echo '```json'
+            printf '%s\n' "$out"
+            echo '```'
+            echo ""
+            echo "Runbook: docs/runbooks/staging-only-endpoints.md (post-deploy verifier)"
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$code"
+          PROBE
+          chmod +x "$RUNNER_TEMP/probe.sh"
+
+          if [ -n "$SENTRY_DSN" ]; then
+            # Cron-monitor heartbeat — see the matching block in
+            # check-healthz-degraded.yml for the rationale. The
+            # monitor with slug `check-production-hostname-pattern`
+            # is configured in the Sentry UI to expect `*/15 * * * *`
+            # check-ins and pages on-call when an expected check-in
+            # fails to arrive on time.
+            sentry-cli monitors run \
+              --environment production \
+              check-production-hostname-pattern \
+              -- "$RUNNER_TEMP/probe.sh"
+          else
+            echo "::warning::HOSTNAME_PATTERN_SENTRY_DSN not configured; cron-monitor heartbeat is disabled — a stopped/disabled workflow will go unnoticed until the next manual review"
+            "$RUNNER_TEMP/probe.sh"
+          fi

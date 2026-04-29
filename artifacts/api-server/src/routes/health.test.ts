@@ -39,12 +39,29 @@ vi.mock("../lib/logger", () => ({
 }));
 
 const { dbHealthWatcher } = await import("../lib/subsystemHealth");
-const { default: healthRouter } = await import("./health");
+const { default: healthRouter, getReadyzConfigBlock } = await import("./health");
+const { __resetProductionEnvCacheForTests } = await import(
+  "../lib/productionSignals"
+);
 
 function buildApp(): Express {
   const app = express();
   app.use(healthRouter);
   return app;
+}
+
+const PRODUCTION_CONFIG_ENV_KEYS = [
+  "NODE_ENV",
+  "REPLIT_DEPLOYMENT",
+  "DEPLOYMENT_ENVIRONMENT",
+  "PRODUCTION_HOSTNAME_PATTERN",
+  "HOSTNAME",
+] as const;
+
+function clearProductionConfigEnv(): void {
+  for (const k of PRODUCTION_CONFIG_ENV_KEYS) {
+    delete process.env[k];
+  }
 }
 
 beforeEach(() => {
@@ -58,6 +75,8 @@ beforeEach(() => {
     lastRecoveredAt: null,
   };
   dbHealthWatcher.__reset();
+  clearProductionConfigEnv();
+  __resetProductionEnvCacheForTests();
 });
 
 describe("GET /healthz (liveness)", () => {
@@ -192,6 +211,14 @@ describe("GET /readyz (readiness)", () => {
     expect(res.body.checks).toEqual({ db: "ok", redis: "ok" });
     expect(res.body.failures).toBeUndefined();
     expect(res.body.rateLimitStore).toBe("redis");
+    // The config block is always present (even on a non-production
+    // staging boot like the default test env) so external probes can
+    // assert its shape unconditionally — callers that only care about
+    // production deploys filter on the value, not the field's
+    // presence.
+    expect(res.body.config).toEqual({
+      productionHostnamePattern: "not_required",
+    });
   });
 
   it("returns 200 ready and skips Redis when memory store is configured", async () => {
@@ -273,5 +300,141 @@ describe("GET /readyz (readiness)", () => {
       expect(res.body.checks.db).toBe("ok");
     }
     delete process.env.READYZ_DB_TIMEOUT_MS;
+  });
+
+  // -------------------------------------------------------------------
+  // Production-config block (task #89): the response body must surface
+  // the operator-set `PRODUCTION_HOSTNAME_PATTERN` status so an
+  // external probe can page on-call when a production deploy ships
+  // without the hostname backstop. Crucially, the config status MUST
+  // NOT influence the ready/not_ready decision — failing readiness for
+  // a configuration warning would drain the replica out of rotation,
+  // which is more disruptive than the marginal security gain (the
+  // boot-time check `assertProductionHostnamePatternConfigured` made
+  // the same trade-off).
+  // -------------------------------------------------------------------
+
+  it("includes config.productionHostnamePattern='configured' on a production-shaped deploy with the env set", async () => {
+    process.env.NODE_ENV = "production";
+    process.env.PRODUCTION_HOSTNAME_PATTERN = "^api\\.epplaa\\.com$";
+    dbExecuteMock.mockResolvedValueOnce({ rows: [] });
+    pingRedisMock.mockResolvedValueOnce({ ok: true });
+    const res = await request(buildApp()).get("/readyz");
+    expect(res.status).toBe(200);
+    expect(res.body.config.productionHostnamePattern).toBe("configured");
+  });
+
+  it("includes config.productionHostnamePattern='missing' on a production-shaped deploy with the env unset — but stays ready (200) so the LB does not drain", async () => {
+    // The whole point of the new field: surface the misconfiguration
+    // without taking the replica out of rotation. An external probe
+    // pages on this without affecting user traffic.
+    process.env.NODE_ENV = "production";
+    dbExecuteMock.mockResolvedValueOnce({ rows: [] });
+    pingRedisMock.mockResolvedValueOnce({ ok: true });
+    const res = await request(buildApp()).get("/readyz");
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe("ready");
+    expect(res.body.config.productionHostnamePattern).toBe("missing");
+  });
+
+  it("reports config.productionHostnamePattern='missing' for every production signal (NODE_ENV / REPLIT_DEPLOYMENT / DEPLOYMENT_ENVIRONMENT)", async () => {
+    // Each non-hostname production signal is sufficient on its own to
+    // require the hostname backstop; the probe must page on any of
+    // them. A regression that only checked NODE_ENV would silently
+    // exempt a Replit-platform-marked production deploy that runs
+    // with NODE_ENV unset.
+    for (const env of [
+      { NODE_ENV: "production" },
+      { REPLIT_DEPLOYMENT: "1" },
+      { DEPLOYMENT_ENVIRONMENT: "production" },
+    ]) {
+      clearProductionConfigEnv();
+      __resetProductionEnvCacheForTests();
+      Object.assign(process.env, env);
+      dbExecuteMock.mockResolvedValueOnce({ rows: [] });
+      pingRedisMock.mockResolvedValueOnce({ ok: true });
+      const res = await request(buildApp()).get("/readyz");
+      expect(
+        res.body.config.productionHostnamePattern,
+        `env=${JSON.stringify(env)}`,
+      ).toBe("missing");
+    }
+  });
+
+  it("treats whitespace-only PRODUCTION_HOSTNAME_PATTERN as missing on a production deploy", async () => {
+    // `compileHostnamePattern` already trims and ignores whitespace-
+    // only values, so a pattern of "   " silently disables the
+    // hostname signal. The probe must surface that the same way as
+    // an unset env var.
+    process.env.NODE_ENV = "production";
+    process.env.PRODUCTION_HOSTNAME_PATTERN = "   ";
+    dbExecuteMock.mockResolvedValueOnce({ rows: [] });
+    pingRedisMock.mockResolvedValueOnce({ ok: true });
+    const res = await request(buildApp()).get("/readyz");
+    expect(res.body.config.productionHostnamePattern).toBe("missing");
+  });
+
+  it("includes the same config block on a 503 not_ready response (so probes can verify config even during a dependency outage)", async () => {
+    // A misconfigured pattern + a downstream outage is the worst-case
+    // combination — we still want the probe to page on the config
+    // miss even while the replica is draining. Asserting the field
+    // shape on the 503 path proves that.
+    process.env.NODE_ENV = "production";
+    dbExecuteMock.mockRejectedValueOnce(new Error("ECONNREFUSED"));
+    pingRedisMock.mockResolvedValueOnce({ ok: true });
+    const res = await request(buildApp()).get("/readyz");
+    expect(res.status).toBe(503);
+    expect(res.body.config.productionHostnamePattern).toBe("missing");
+  });
+});
+
+describe("getReadyzConfigBlock — pure helper", () => {
+  // The pure helper is the source of truth surfaced on /readyz. The
+  // route-level tests above exercise the wire shape; these tests pin
+  // down each branch of the helper so a future addition (e.g. a new
+  // boot-time-config check) doesn't accidentally regress an existing
+  // status mapping.
+
+  it("returns 'not_required' when no production signal is observed", () => {
+    expect(getReadyzConfigBlock({ NODE_ENV: "staging" })).toEqual({
+      productionHostnamePattern: "not_required",
+    });
+    expect(getReadyzConfigBlock({})).toEqual({
+      productionHostnamePattern: "not_required",
+    });
+  });
+
+  it("returns 'configured' when production-shaped AND env var set", () => {
+    expect(
+      getReadyzConfigBlock({
+        NODE_ENV: "production",
+        PRODUCTION_HOSTNAME_PATTERN: "^api\\.epplaa\\.com$",
+      }),
+    ).toEqual({ productionHostnamePattern: "configured" });
+  });
+
+  it("returns 'missing' when production-shaped AND env var unset/blank", () => {
+    expect(
+      getReadyzConfigBlock({ NODE_ENV: "production" }),
+    ).toEqual({ productionHostnamePattern: "missing" });
+    expect(
+      getReadyzConfigBlock({
+        REPLIT_DEPLOYMENT: "1",
+        PRODUCTION_HOSTNAME_PATTERN: "",
+      }),
+    ).toEqual({ productionHostnamePattern: "missing" });
+  });
+
+  it("treats a malformed-but-non-empty pattern as 'configured' (the malformed-regex error is logged elsewhere)", () => {
+    // Mirrors `assertProductionHostnamePatternConfigured`: a typo'd
+    // regex still counts as "operator set the env var" so the probe
+    // doesn't double-page on a misconfiguration the
+    // `production_hostname_pattern_invalid` log already surfaces.
+    expect(
+      getReadyzConfigBlock({
+        NODE_ENV: "production",
+        PRODUCTION_HOSTNAME_PATTERN: "[invalid(regex",
+      }),
+    ).toEqual({ productionHostnamePattern: "configured" });
   });
 });

@@ -2,6 +2,10 @@ import { Router, type IRouter } from "express";
 import { sql } from "drizzle-orm";
 import { db } from "../lib/db";
 import { logger } from "../lib/logger";
+import {
+  getProductionHostnamePatternStatus,
+  type ProductionHostnamePatternStatus,
+} from "../lib/productionSignals";
 import { dbHealthWatcher, type SubsystemSnapshot } from "../lib/subsystemHealth";
 import {
   getRateLimitStoreKind,
@@ -81,6 +85,47 @@ function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
 }
 
 /**
+ * Build the boot-time-config block surfaced on `/readyz`.
+ *
+ * This block is informational only — it does NOT contribute to the
+ * ready/not_ready decision. The motivating misconfiguration (task #89)
+ * is `PRODUCTION_HOSTNAME_PATTERN` being unset on a production-shaped
+ * deploy, which silently disables the hostname backstop in
+ * `assertRehearsalKillSwitchSafe` but does not break a single request:
+ * the existing layered defences (runtime 404 on the rehearsal route,
+ * rehearsal-token guard, kill-switch boot guard via the other
+ * production signals) still keep the injector inaccessible. Failing
+ * `/readyz` would drain the replica out of rotation for a
+ * configuration warning, which is more disruptive than the marginal
+ * security gain — exactly the trade-off the boot-time check
+ * `assertProductionHostnamePatternConfigured` already chose to log a
+ * warning rather than crash-loop.
+ *
+ * Instead, we surface the status here so an external probe (see
+ * `scripts/checkProductionHostnamePattern.ts`) can poll the deploy
+ * post-deploy / on a schedule and page on-call when the value is
+ * `"missing"`. The probe runs out-of-band of normal request handling
+ * so a paged warning never affects user traffic, while making the
+ * misconfiguration visible within minutes of the next deploy.
+ *
+ * Pure helper — reads `process.env` at call time (so a hot-reloaded
+ * env var is picked up by the next probe) and returns a structured
+ * shape rather than serialising directly so it can be unit-tested
+ * without spinning up an Express app.
+ */
+export interface ReadyzConfigBlock {
+  productionHostnamePattern: ProductionHostnamePatternStatus;
+}
+
+export function getReadyzConfigBlock(
+  env: NodeJS.ProcessEnv = process.env,
+): ReadyzConfigBlock {
+  return {
+    productionHostnamePattern: getProductionHostnamePatternStatus(env),
+  };
+}
+
+/**
  * Readiness probe — returns 200 only when every backing dependency a
  * replica needs to serve traffic is reachable. Returns 503 with a JSON
  * body listing which dependency failed so the platform load balancer
@@ -92,6 +137,13 @@ function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
  *   - Redis: `PING` against the rate-limit store, BUT only when the
  *     replica is actually configured for redis (`RATE_LIMIT_STORE=redis`).
  *     A memory-store replica reports `redis: "skipped"` and stays ready.
+ *
+ * The response body also carries a `config` block (see
+ * `getReadyzConfigBlock`) that surfaces operator-set boot-time
+ * configuration whose absence is dangerous on production but doesn't
+ * justify failing readyz — currently `productionHostnamePattern`
+ * (task #89). External probes consume this block to page on-call out
+ * of band; readiness itself is unaffected.
  *
  * The DB check also feeds `dbHealthWatcher`: every probe records either
  * success or failure, which is what gives /healthz the
@@ -132,6 +184,8 @@ router.get("/readyz", (_req, res) => {
       failures.redis = redisResult.error;
     }
 
+    const config = getReadyzConfigBlock();
+
     const ready = Object.keys(failures).length === 0;
     if (!ready) {
       logger.warn(
@@ -143,6 +197,7 @@ router.get("/readyz", (_req, res) => {
         checks,
         failures,
         rateLimitStore: getRateLimitStoreKind(),
+        config,
       });
       return;
     }
@@ -150,6 +205,7 @@ router.get("/readyz", (_req, res) => {
       status: "ready",
       checks,
       rateLimitStore: getRateLimitStoreKind(),
+      config,
     });
   })().catch((err) => {
     // Belt-and-braces: any unexpected throw still fails closed so the
