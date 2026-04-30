@@ -1,0 +1,39 @@
+# CODEOWNERS — Epplaa monorepo
+#
+# Ownership is documented at the directory level. As the strangler-fig
+# migration progresses (see docs/adr/0001-strangler-fig-migration.md and
+# docs/adr/0002-repository-layout.md) ownership lines will be added per
+# new `services/<name>/` and `apps/<name>/` directory.
+#
+# Default owner — falls through when no more specific rule matches.
+*                                       @artpromedia/epplaa-maintainers
+
+# Architecture, ADRs, and program-level docs.
+/docs/                                  @artpromedia/epplaa-architecture
+/attached_assets/                       @artpromedia/epplaa-architecture
+/SPRINTS.md                             @artpromedia/epplaa-architecture
+
+# CI, security, and ops.
+/.github/                               @artpromedia/epplaa-platform
+/.gitleaks.toml                         @artpromedia/epplaa-security
+/scripts/                               @artpromedia/epplaa-platform
+
+# Existing application surfaces. Will be re-rooted under apps/ and
+# services/ as Phase 1 of the v4.2 plan lands.
+/artifacts/api-server/                  @artpromedia/epplaa-backend
+/artifacts/admin-console/               @artpromedia/epplaa-frontend
+/artifacts/manufacturer-portal/         @artpromedia/epplaa-frontend
+/artifacts/epplaa-app/                  @artpromedia/epplaa-frontend
+/artifacts/epplaa-mobile/               @artpromedia/epplaa-mobile
+
+# Shared libraries — to become packages/* in Phase 1.
+/lib/                                   @artpromedia/epplaa-backend
+
+# New v4.2 layout target directories. Owners listed here so that when
+# code starts moving in, reviews are routed correctly from day one.
+/apps/                                  @artpromedia/epplaa-frontend
+/apps/mobile/                           @artpromedia/epplaa-mobile
+/services/                              @artpromedia/epplaa-backend
+/packages/                              @artpromedia/epplaa-backend
+/infra/                                 @artpromedia/epplaa-platform
+/apis/                                  @artpromedia/epplaa-architecture
