@@ -31,6 +31,12 @@ added; the original is preserved as historical record.
 | [0008](./0008-analytics-clickhouse-dbt.md) | Analytics — ClickHouse + dbt, gated on first analytics use case | Accepted |
 | [0009](./0009-service-mesh-linkerd.md) | Service mesh — Linkerd | Accepted |
 | [0010](./0010-secrets-vault.md) | Secrets — Vault replaces environment variables | Accepted |
+| [ADR-010](./ADR-010-agent-runtime-pydantic-ai.md) | Agent runtime — Pydantic AI TypeScript analogue + in-house orchestration | Accepted |
+| [ADR-011](./ADR-011-anthropic-primary-openai-secondary.md) | LLM providers — Anthropic primary, OpenAI secondary, multi-provider via LiteLLM | Accepted |
+| [ADR-012](./ADR-012-three-tier-language-stack.md) | Three-tier language stack with translation pivot for Tier B | Accepted |
+| [ADR-013](./ADR-013-voice-on-livekit-agents.md) | Voice interface — LiveKit Agents | Accepted |
+| [ADR-014](./ADR-014-single-human-approval-autonomy-ceiling.md) | Autonomy ceiling — single human approval for v1 | Accepted |
+| [ADR-015](./ADR-015-intron-lelapa-tier-1-vendors.md) | African-language vendors — Intron Sahara v2 + Lelapa Vulavula as Tier 1 | Accepted |
 
 ## Relationship to the v4.1 architecture spec
 
@@ -39,4 +45,6 @@ end-state. The ADRs in this directory record the *path* from the
 current code base to that end-state, and the deliberate deviations
 where the code is deemed correct and the spec is updated to follow.
 The composite v4.2 amendment lives at
-[`docs/architecture/v4.2-amendment.md`](../architecture/v4.2-amendment.md).
+[`docs/architecture/v4.2-amendment.md`](../architecture/v4.2-amendment.md)
+and the v4.2 Agentic AI Backbone spec (Part 14, ADRs 010–015) lives at
+[`docs/architecture/v4.2/`](../architecture/v4.2/).
