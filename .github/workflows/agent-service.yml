@@ -1,0 +1,55 @@
+name: Agent Service CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'services/agent-service/**'
+      - '.github/workflows/agent-service.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'services/agent-service/**'
+      - '.github/workflows/agent-service.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: agent-service-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  agent-service:
+    name: Lint • Typecheck • Test (agent-service)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: '.nvmrc'
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Lint (placeholder)
+        working-directory: services/agent-service
+        run: |
+          test -f eslint.config.mjs || { echo "eslint.config.mjs missing"; exit 1; }
+          echo "ESLint flat-config skeleton present."
+          echo "Full ESLint enforcement pending (see docs/architecture/v4.2-amendment.md §Phase 0)."
+
+      - name: Typecheck
+        working-directory: services/agent-service
+        run: pnpm run typecheck
+
+      - name: Unit tests
+        working-directory: services/agent-service
+        run: pnpm run test
