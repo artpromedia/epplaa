@@ -265,6 +265,8 @@ function stripBackticks(s: string): string {
  * are not inside a `[...]` character class or a `(...)` group, and
  * are not escaped with `\`. Hostname regexes in this inventory are
  * simple anchored patterns so this lightweight scanner is enough.
+ *
+ * Canonical version lives in scripts/src/checkRateLimitOptOutSunsets.ts (task #222). Any changes here must be mirrored there.
  */
 export function splitOnTopLevelPipe(regex: string): string[] {
   const out: string[] = [];

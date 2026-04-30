@@ -42,6 +42,7 @@ export interface SecurityEmailDecision {
 const SECURITY_EVENT_TYPES = new Set<EventType>([
   "mfa_activated",
   "mfa_backup_codes_regenerated",
+  "mfa_disabled",
 ]);
 
 /**
@@ -55,6 +56,7 @@ const SECURITY_EVENT_TYPES = new Set<EventType>([
 const SECURITY_CTA_LABELS: Partial<Record<EventType, string>> = {
   mfa_activated: "Review your security settings",
   mfa_backup_codes_regenerated: "Review your security settings",
+  mfa_disabled: "Re-enable two-factor authentication",
 };
 
 /**

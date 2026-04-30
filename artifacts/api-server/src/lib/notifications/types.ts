@@ -67,6 +67,10 @@ export type EventType =
   | "mfa_backup_codes_low"
   | "mfa_activated"
   | "mfa_backup_codes_regenerated"
+  // Security alert — fired when MFA is turned off (task #135). Email-only
+  // so the alert acts as an out-of-band tripwire even when the in-app
+  // session has been compromised.
+  | "mfa_disabled"
   // Trust & Safety due-process notifications. `content_takedown` is sent to
   // the seller whose stream/listing/post was removed; `safety_report_decided`
   // is sent to the original reporter when their case is closed. Both are

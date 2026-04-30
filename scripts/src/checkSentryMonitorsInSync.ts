@@ -36,6 +36,7 @@ import {
   SENTRY_MONITORS_KNOWN_UI_MANAGED,
   diffMonitorAgainstWorkflow,
   extractMonitorSlugsFromWorkflowYaml,
+  extractCronEntriesFromWorkflowYaml,
   type SentryMonitorConfig,
   type SentryMonitorUiManagedEntry,
 } from "./sentryMonitors.config.js";
@@ -144,6 +145,47 @@ export function runReverseScan(
   return findings;
 }
 
+/**
+ * Check 3 (task #225): For every workflow that invokes `sentry-cli monitors
+ * run <slug>` (whether the slug is in SENTRY_MONITORS or
+ * SENTRY_MONITORS_KNOWN_UI_MANAGED), assert the workflow has at least one
+ * `schedule:` cron block. A heartbeat workflow without a `schedule:` only
+ * runs on `workflow_dispatch` and will never send automatic check-ins to
+ * Sentry, making the cron monitor permanently miss-fire.
+ */
+export function runHeartbeatScheduleCheck(
+  workflowFiles: readonly string[],
+  knownSlugs: ReadonlySet<string>,
+  readWorkflow: (workflowFile: string) => { exists: boolean; source: string },
+): Array<{ workflowFile: string; slug: string; reason: string }> {
+  const findings: Array<{ workflowFile: string; slug: string; reason: string }> = [];
+  for (const wf of workflowFiles) {
+    const file = readWorkflow(wf);
+    if (!file.exists) continue;
+    const slugsInFile = extractMonitorSlugsFromWorkflowYaml(file.source);
+    if (slugsInFile.length === 0) continue;
+    // Only check workflows that have declared heartbeats
+    const knownSlugCount = slugsInFile.filter(s => knownSlugs.has(s)).length;
+    if (knownSlugCount === 0) continue; // handled by reverse scan (undeclared)
+    const crons = extractCronEntriesFromWorkflowYaml(file.source);
+    if (crons.length > 0) continue; // has a schedule block — OK
+    const uniqueSlugs = [...new Set(slugsInFile.filter(s => knownSlugs.has(s)))];
+    for (const slug of uniqueSlugs) {
+      findings.push({
+        workflowFile: wf,
+        slug,
+        reason:
+          `workflow ${wf} invokes \`sentry-cli monitors run ${slug}\` ` +
+          `but has no \`schedule:\` cron block. Without a schedule the ` +
+          `Sentry Cron monitor will never receive an automatic check-in and ` +
+          `will permanently fire "missed_check_in" pages. Either add a ` +
+          `\`schedule:\` block to the workflow or remove the heartbeat invocation.`,
+      });
+    }
+  }
+  return findings;
+}
+
 function readWorkflowFromDisk(
   workflowFile: string,
 ): { exists: boolean; source: string } {
@@ -203,8 +245,9 @@ export function main(
     knownSlugs,
     readWorkflow,
   );
+  const heartbeatFindings = runHeartbeatScheduleCheck(workflowFiles, knownSlugs, readWorkflow);
 
-  if (drifted.length === 0 && reverseFindings.length === 0) {
+  if (drifted.length === 0 && reverseFindings.length === 0 && heartbeatFindings.length === 0) {
     stdout(
       `[checkSentryMonitorsInSync] ${monitors.length} monitor(s) in sync with workflow YAML.`,
     );
@@ -249,6 +292,18 @@ export function main(
         "(SENTRY_MONITORS for full management, or SENTRY_MONITORS_KNOWN_UI_MANAGED if " +
         "the monitor is intentionally configured in the Sentry UI for now), then " +
         "re-run this check.",
+    );
+  }
+  if (heartbeatFindings.length > 0) {
+    stderr("[checkSentryMonitorsInSync] MISSING SCHEDULE BLOCKS DETECTED:");
+    for (const f of heartbeatFindings) {
+      stderr(`  - ${f.reason}`);
+    }
+    stderr(
+      "Fix: add a `schedule:` cron block to each workflow listed above so the " +
+        "Sentry Cron monitor receives automatic check-ins, or remove the " +
+        "`sentry-cli monitors run` invocation if the workflow is not meant to " +
+        "run on a schedule.",
     );
   }
   return 1;

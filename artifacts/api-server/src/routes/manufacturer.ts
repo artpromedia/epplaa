@@ -5,6 +5,10 @@ import { requireUserId } from "../lib/auth";
 import { recordAudit } from "../lib/audit";
 import { logger } from "../lib/logger";
 import {
+  ApplyManufacturerBody,
+  CreateManufacturerListingBody,
+} from "@workspace/api-zod";
+import {
   getManufacturerForUser,
   newManufacturerId,
   newManufacturerKycId,
@@ -121,14 +125,12 @@ router.get("/manufacturer/me", async (req, res) => {
 router.post("/manufacturer/apply", async (req, res) => {
   const userId = requireUserId(req, res);
   if (!userId) return;
-  const body = (req.body ?? {}) as {
-    originCountry?: string;
-    legalName?: string;
-    contactEmail?: string;
-    contactPhone?: string;
-    exportLicenceNumber?: string;
-    application?: Record<string, unknown>;
-  };
+  const parseResult = ApplyManufacturerBody.safeParse(req.body ?? {});
+  if (!parseResult.success) {
+    res.status(400).json({ error: "bad_request", detail: parseResult.error.flatten() });
+    return;
+  }
+  const body = parseResult.data;
   if (!body.originCountry || !body.legalName) {
     res.status(400).json({ error: "bad_request", detail: "origin_country and legal_name required" });
     return;
@@ -262,20 +264,12 @@ router.get("/manufacturer/listings", requireManufacturer, async (req, res) => {
 
 router.post("/manufacturer/listings", requireManufacturer, async (req, res) => {
   const mfr = (req as ManufacturerRequest).manufacturer;
-  const body = (req.body ?? {}) as {
-    sku?: string;
-    title: string;
-    description?: string;
-    hsCode: string;
-    originCurrencyCode: string;
-    wholesalePriceMinor: number;
-    moq?: number;
-    leadDays?: number;
-    weightGrams?: number;
-    dimensions?: Record<string, unknown>;
-    images?: string[];
-    category?: string;
-  };
+  const parseResult = CreateManufacturerListingBody.safeParse(req.body ?? {});
+  if (!parseResult.success) {
+    res.status(400).json({ error: "bad_request", detail: parseResult.error.flatten() });
+    return;
+  }
+  const body = parseResult.data;
   if (!body.title || typeof body.wholesalePriceMinor !== "number" || body.wholesalePriceMinor <= 0) {
     res.status(400).json({ error: "bad_request", detail: "title and wholesalePriceMinor required" });
     return;

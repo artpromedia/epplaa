@@ -400,6 +400,46 @@ export function exitCodeFor(outcome: SunsetCheckOutcome): 0 | 1 | 2 {
 }
 
 /**
+ * Split a regex string on TOP-LEVEL `|` — i.e. `|` characters that
+ * are not inside a `[...]` character class or a `(...)` group, and
+ * are not escaped with `\`. Hostname regexes in this inventory are
+ * simple anchored patterns so this lightweight scanner is enough.
+ *
+ * Canonical definition lives here (task #222). The same logic is
+ * also present in scripts/src/syncSentryOptOutAuditFilter.ts (which
+ * re-exports from here) and in
+ * artifacts/api-server/src/scripts/checkRateLimitOptOutInventoryDrift.ts
+ * (which keeps its own copy with a mirror comment).
+ */
+export function splitOnTopLevelPipe(regex: string): string[] {
+  const out: string[] = [];
+  let buf = "";
+  let bracketDepth = 0;
+  let parenDepth = 0;
+  for (let i = 0; i < regex.length; i++) {
+    const ch = regex[i];
+    if (ch === "\\" && i + 1 < regex.length) {
+      buf += ch + regex[i + 1];
+      i += 1;
+      continue;
+    }
+    if (ch === "[") bracketDepth += 1;
+    else if (ch === "]" && bracketDepth > 0) bracketDepth -= 1;
+    else if (ch === "(" && bracketDepth === 0) parenDepth += 1;
+    else if (ch === ")" && bracketDepth === 0 && parenDepth > 0)
+      parenDepth -= 1;
+    if (ch === "|" && bracketDepth === 0 && parenDepth === 0) {
+      out.push(buf);
+      buf = "";
+      continue;
+    }
+    buf += ch;
+  }
+  out.push(buf);
+  return out;
+}
+
+/**
  * CLI entrypoint. Exported so tests can drive it with mocked
  * dependencies, but the bottom of the file actually invokes it when
  * the module is run directly.

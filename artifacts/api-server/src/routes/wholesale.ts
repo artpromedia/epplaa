@@ -7,6 +7,7 @@ import { logger } from "../lib/logger";
 import { COUNTRY_BY_CODE } from "../lib/static";
 import { computeLandedCost, type ShipMode } from "../lib/landedCost";
 import { selectFreightProvider } from "../lib/freight";
+import { QuoteWholesaleOrderBody, CreateWholesaleOrderBody } from "@workspace/api-zod";
 import {
   newCustomsEventId,
   newFreightBookingId,
@@ -118,12 +119,12 @@ router.get("/wholesale/listings/:listingId", async (req, res) => {
 // ---------------------------------------------------------------------------
 
 router.post("/wholesale/quote", async (req, res) => {
-  const body = (req.body ?? {}) as {
-    listingId?: string;
-    qty?: number;
-    destinationCountryCode?: string;
-    shipMode?: ShipMode;
-  };
+  const parseResult = QuoteWholesaleOrderBody.safeParse(req.body ?? {});
+  if (!parseResult.success) {
+    res.status(400).json({ error: "bad_request", detail: parseResult.error.flatten() });
+    return;
+  }
+  const body = parseResult.data;
   const listingId = String(body.listingId ?? "");
   const qty = Math.max(1, Number(body.qty ?? 1));
   const destCountry = String(body.destinationCountryCode ?? "NG");
@@ -173,13 +174,12 @@ router.post("/wholesale/quote", async (req, res) => {
 router.post("/wholesale/orders", async (req, res) => {
   const userId = requireUserId(req, res);
   if (!userId) return;
-  const body = (req.body ?? {}) as {
-    listingId?: string;
-    qty?: number;
-    destinationCountryCode?: string;
-    shipMode?: ShipMode;
-    notes?: string;
-  };
+  const parseResult = CreateWholesaleOrderBody.safeParse(req.body ?? {});
+  if (!parseResult.success) {
+    res.status(400).json({ error: "bad_request", detail: parseResult.error.flatten() });
+    return;
+  }
+  const body = parseResult.data;
   const listingId = String(body.listingId ?? "");
   const qty = Math.max(1, Number(body.qty ?? 1));
   const destCountry = String(body.destinationCountryCode ?? "NG");
