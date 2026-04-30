@@ -1,0 +1,7 @@
+# If you find a security issue in the Epplaa platform, please report it
+# privately so we can fix it before it is publicly disclosed.
+Contact: mailto:security@epplaa.com
+Expires: 2027-04-30T00:00:00.000Z
+Preferred-Languages: en
+Canonical: https://epplaa.com/.well-known/security.txt
+Policy: https://github.com/artpromedia/epplaa/blob/main/docs/SECURITY.md

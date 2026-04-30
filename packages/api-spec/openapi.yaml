@@ -1,0 +1,4698 @@
+openapi: 3.1.0
+info:
+  # Do not change the title, if the title changes, the import paths will be broken
+  title: Api
+  version: 0.1.0
+  description: Epplaa API
+servers:
+  - url: /api
+    description: Base API path
+tags:
+  - { name: health }
+  - { name: identity }
+  - { name: countries }
+  - { name: catalog }
+  - { name: streams }
+  - { name: replays }
+  - { name: fulfillment }
+  - { name: promo }
+  - { name: cart }
+  - { name: checkout }
+  - { name: orders }
+  - { name: returns }
+  - { name: wallet }
+  - { name: safety }
+  - { name: onboarding }
+  - { name: notifications }
+  - { name: referrals }
+  - { name: follows }
+  - { name: wishlist }
+  - { name: reviews }
+  - { name: discovery }
+  - { name: seller }
+  - { name: admin }
+  - { name: csrf }
+  - { name: mfa }
+  - { name: manufacturer }
+  - { name: wholesale }
+paths:
+  /healthz:
+    get:
+      operationId: healthCheck
+      tags: [health]
+      summary: Health check
+      responses:
+        "200":
+          description: Healthy
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/HealthStatus" }
+
+  /csrf-token:
+    get:
+      operationId: issueCsrfToken
+      tags: [csrf]
+      summary: Issue a CSRF double-submit token (sets the cookie, returns the token)
+      description: |
+        Issues a fresh CSRF token, sets the `csrf_token` cookie, and returns
+        the token in the body so the SPA can echo it as `X-CSRF-Token` on
+        mutating requests. This endpoint is itself exempt from CSRF
+        verification (see `EXEMPT_PATH_PREFIXES` in the server middleware).
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CsrfToken" }
+
+  /me:
+    get:
+      operationId: getMe
+      tags: [identity]
+      summary: Get the signed-in user (provisions if first call)
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/User" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    patch:
+      operationId: updateMe
+      tags: [identity]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/UpdateMeBody" } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/User" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /me/phone:
+    patch:
+      operationId: linkMyPhone
+      tags: [identity]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/PhoneLinkBody" } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Ok" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /auth/otp/start:
+    post:
+      operationId: startOtp
+      tags: [auth]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/OtpStartBody" } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/OtpStartResponse" } } } }
+  /auth/otp/verify:
+    post:
+      operationId: verifyOtp
+      tags: [auth]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/OtpVerifyBody" } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/OtpVerifyResponse" } } } }
+
+  /web-push/vapid-public-key:
+    get:
+      operationId: getVapidPublicKey
+      tags: [push]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/VapidPublicKey" } } } }
+  /push-tokens:
+    post:
+      operationId: registerPushToken
+      tags: [push]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/PushTokenBody" } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/PushTokenRegistered" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    delete:
+      operationId: deletePushToken
+      tags: [push]
+      parameters:
+        - { in: query, name: token, required: true, schema: { type: string } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Ok" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /countries:
+    get:
+      operationId: listCountries
+      tags: [countries]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Country" }
+
+  /products:
+    get:
+      operationId: listProducts
+      tags: [catalog]
+      parameters:
+        - { in: query, name: countryCode, schema: { type: string } }
+        - { in: query, name: search, schema: { type: string } }
+        - { in: query, name: category, schema: { type: string } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/Product" } }
+  /products/{productId}:
+    get:
+      operationId: getProduct
+      tags: [catalog]
+      parameters:
+        - { in: path, name: productId, required: true, schema: { type: string } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Product" } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /streams:
+    get:
+      operationId: listStreams
+      tags: [streams]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/Stream" } }
+    post:
+      operationId: createStream
+      tags: [streams]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title]
+              properties:
+                title: { type: string }
+                posterImage: { type: string }
+                currentProductId: { type: string }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/StreamWithSecrets" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /streams/{streamId}:
+    get:
+      operationId: getStream
+      tags: [streams]
+      parameters:
+        - { in: path, name: streamId, required: true, schema: { type: string } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Stream" } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /streams/{streamId}/go-live:
+    post:
+      operationId: goLive
+      tags: [streams]
+      parameters:
+        - { in: path, name: streamId, required: true, schema: { type: string } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/GoLiveResponse" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /seller/go-live:
+    post:
+      operationId: sellerGoLiveBroadcast
+      tags: [streams]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title]
+              properties:
+                title: { type: string }
+                streamId: { type: string }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/GoLiveResponse" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+
+  /streams/_provider/info:
+    get:
+      operationId: getStreamingProviderInfo
+      tags: [streams]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/StreamingProviderInfo" } } } }
+  /streams/{streamId}/start:
+    post:
+      operationId: startStream
+      tags: [streams]
+      parameters:
+        - { in: path, name: streamId, required: true, schema: { type: string } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/StreamWithSecrets" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /streams/{streamId}/stop:
+    post:
+      operationId: stopStream
+      tags: [streams]
+      parameters:
+        - { in: path, name: streamId, required: true, schema: { type: string } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/StreamWithSecrets" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /streams/{streamId}/rotate-key:
+    post:
+      operationId: rotateStreamKey
+      tags: [streams]
+      parameters:
+        - { in: path, name: streamId, required: true, schema: { type: string } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/StreamWithSecrets" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /streams/{streamId}/playback:
+    get:
+      operationId: getStreamPlayback
+      tags: [streams]
+      parameters:
+        - { in: path, name: streamId, required: true, schema: { type: string } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/StreamPlayback" } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /streams/{streamId}/messages:
+    get:
+      operationId: listStreamMessages
+      tags: [streams]
+      parameters:
+        - { in: path, name: streamId, required: true, schema: { type: string } }
+        - { in: query, name: limit, required: false, schema: { type: integer, minimum: 1, maximum: 200 } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [messages]
+                properties:
+                  messages:
+                    type: array
+                    items: { $ref: "#/components/schemas/StreamChatMessage" }
+    post:
+      operationId: sendStreamMessage
+      tags: [streams]
+      parameters:
+        - { in: path, name: streamId, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [text]
+              properties:
+                text: { type: string, maxLength: 280 }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/StreamChatMessage" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+  /streams/{streamId}/messages/{messageId}:
+    delete:
+      operationId: deleteStreamMessage
+      tags: [streams]
+      parameters:
+        - { in: path, name: streamId, required: true, schema: { type: string } }
+        - { in: path, name: messageId, required: true, schema: { type: string } }
+      responses:
+        "204": { description: No Content }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /streams/{streamId}/mod-config:
+    post:
+      operationId: updateStreamModConfig
+      tags: [streams]
+      parameters:
+        - { in: path, name: streamId, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                slowModeSeconds: { type: integer, minimum: 0, maximum: 300 }
+                addBannedWord: { type: string }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/StreamModConfig" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /streams/{streamId}/moderators:
+    get:
+      operationId: listStreamModerators
+      tags: [streams]
+      parameters:
+        - { in: path, name: streamId, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [moderators]
+                properties:
+                  moderators:
+                    type: array
+                    items: { $ref: "#/components/schemas/StreamModerator" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    post:
+      operationId: addStreamModerator
+      tags: [streams]
+      parameters:
+        - { in: path, name: streamId, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                userId: { type: string }
+                fromMessageId: { type: string }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [moderator, moderators]
+                properties:
+                  moderator: { $ref: "#/components/schemas/StreamModerator" }
+                  moderators:
+                    type: array
+                    items: { $ref: "#/components/schemas/StreamModerator" }
+        "400": { description: Bad Request }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /streams/{streamId}/moderators/{userId}:
+    delete:
+      operationId: removeStreamModerator
+      tags: [streams]
+      parameters:
+        - { in: path, name: streamId, required: true, schema: { type: string } }
+        - { in: path, name: userId, required: true, schema: { type: string } }
+      responses:
+        "204": { description: No Content }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /streams/{streamId}/moderation-role:
+    get:
+      operationId: getStreamModerationRole
+      tags: [streams]
+      parameters:
+        - { in: path, name: streamId, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [role]
+                properties:
+                  role: { type: string, enum: [host, mod, viewer] }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /streams/{streamId}/reactions:
+    post:
+      operationId: addStreamReaction
+      tags: [streams]
+      parameters:
+        - { in: path, name: streamId, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                kind: { type: string, maxLength: 16 }
+                count: { type: integer, minimum: 1, maximum: 10 }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { type: object, required: [ok], properties: { ok: { type: boolean } } } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /streams/{streamId}/reactions/recent:
+    get:
+      operationId: listRecentStreamReactions
+      tags: [streams]
+      parameters:
+        - { in: path, name: streamId, required: true, schema: { type: string } }
+        - { in: query, name: windowSeconds, required: false, schema: { type: integer, minimum: 1, maximum: 300 } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [buckets]
+                properties:
+                  buckets:
+                    type: array
+                    items: { $ref: "#/components/schemas/StreamReactionBucket" }
+  /replays:
+    get:
+      operationId: listReplays
+      tags: [replays]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/Replay" } }
+  /replays/{replayId}:
+    get:
+      operationId: getReplay
+      tags: [replays]
+      parameters:
+        - { in: path, name: replayId, required: true, schema: { type: string } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Replay" } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /fulfillment-locations:
+    get:
+      operationId: listFulfillmentLocations
+      tags: [fulfillment]
+      parameters:
+        - { in: query, name: countryCode, required: true, schema: { type: string } }
+        - { in: query, name: optionId, schema: { type: string } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/FulfillmentLocation" } }
+
+  /fulfillment/verify-address:
+    post:
+      operationId: verifyAddress
+      tags: [fulfillment]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/VerifyAddressBody" } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/AddressVerification" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+
+  /fulfillment/rates:
+    post:
+      operationId: rateShipment
+      tags: [fulfillment]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/RateShipmentBody" } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/RateShipmentResponse" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+
+  /box/unlock:
+    post:
+      operationId: unlockBoxReservation
+      tags: [fulfillment]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/BoxUnlockBody" } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/BoxUnlockResponse" } } } }
+        "403": { description: Wrong OTP }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { description: Reservation closed }
+
+  /promo-codes/apply:
+    post:
+      operationId: applyPromoCode
+      tags: [promo]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/PromoApplyBody" } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/PromoApplyResult" } } } }
+
+  /cart:
+    get:
+      operationId: getCart
+      tags: [cart]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Cart" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    delete:
+      operationId: clearCart
+      tags: [cart]
+      responses:
+        "204": { description: Cleared }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /cart/items/{productId}:
+    put:
+      operationId: upsertCartItem
+      tags: [cart]
+      parameters:
+        - { in: path, name: productId, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/CartItemUpsertBody" } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Cart" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    delete:
+      operationId: removeCartItem
+      tags: [cart]
+      parameters:
+        - { in: path, name: productId, required: true, schema: { type: string } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Cart" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /checkout-draft:
+    get:
+      operationId: getCheckoutDraft
+      tags: [checkout]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/CheckoutDraft" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    put:
+      operationId: putCheckoutDraft
+      tags: [checkout]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/CheckoutDraft" } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/CheckoutDraft" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    delete:
+      operationId: deleteCheckoutDraft
+      tags: [checkout]
+      responses:
+        "204": { description: Cleared }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /orders:
+    get:
+      operationId: listOrders
+      tags: [orders]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/Order" } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    post:
+      operationId: placeOrder
+      tags: [orders]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/PlaceOrderBody" } } }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/PlaceOrderResponse" } } } }
+        "400": { description: Bad request }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "502": { description: Payment gateway initialization failed }
+  /orders/quote:
+    post:
+      operationId: quoteOrder
+      tags: [orders]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/PlaceOrderBody" } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/OrderQuote" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /orders/{orderId}:
+    get:
+      operationId: getOrder
+      tags: [orders]
+      parameters:
+        - { in: path, name: orderId, required: true, schema: { type: string } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Order" } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /orders/{orderId}/cancel:
+    post:
+      operationId: cancelOrder
+      tags: [orders]
+      parameters:
+        - { in: path, name: orderId, required: true, schema: { type: string } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Order" } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /orders/{orderId}/refund:
+    post:
+      operationId: refundOrder
+      tags: [orders]
+      parameters: [{ in: path, name: orderId, required: true, schema: { type: string } }]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason: { type: string }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/RefundResponse" } } } }
+        "400": { description: Refund not eligible }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "502": { description: Gateway refund failed }
+
+  /payments/mode:
+    get:
+      operationId: getPaymentsMode
+      tags: [payments]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [mode]
+                properties:
+                  mode: { type: string }
+
+  /payments/intents/{intentId}:
+    get:
+      operationId: getPaymentIntent
+      tags: [payments]
+      parameters: [{ in: path, name: intentId, required: true, schema: { type: string } }]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/PaymentIntent" } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /payments/intents/{intentId}/verify:
+    post:
+      operationId: verifyPaymentIntent
+      tags: [payments]
+      parameters: [{ in: path, name: intentId, required: true, schema: { type: string } }]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/PaymentIntent" } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /admin/payment-gateway-health:
+    get:
+      operationId: adminGetGatewayHealth
+      tags: [admin]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/GatewayHealthSnapshot" }
+        "403": { description: Forbidden }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /admin/db-health:
+    get:
+      operationId: adminGetDbHealth
+      tags: [admin]
+      summary: Per-replica Postgres latency snapshot
+      description: |
+        Runs a small burst of `SELECT 1` probes on the api-server's
+        Postgres pool and returns the p50/p95 round-trip time plus the
+        timestamp of the last successful probe. Used by the admin
+        status page to show whether the api-server's primary backing
+        store is responding within expected limits.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DbHealthSnapshot" }
+        "403": { description: Forbidden }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /admin/queue-health:
+    get:
+      operationId: adminGetQueueHealth
+      tags: [admin]
+      summary: Background notification-outbox queue depth
+      description: |
+        Aggregate counts of pending vs in-flight (processing) vs failed
+        rows in the `notifications_outbox` table, plus the timestamp of
+        the oldest unprocessed row. This is the same queue the
+        scheduler drains every 30s for retryable notifications and
+        recurring jobs (reconciliation, payouts) that fan out through
+        it.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/QueueHealthSnapshot" }
+        "403": { description: Forbidden }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /admin/replica-degraded-alerts:
+    post:
+      operationId: adminReportReplicaDegraded
+      tags: [admin]
+      summary: |
+        Report a degraded replica observed by the admin status panel.
+        The server dedups across operators / tabs and pages on-call
+        (Sentry) at most once per outage window per replicaId.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ReplicaDegradedReport" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ReplicaDegradedReportResult" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { description: Forbidden }
+
+  /admin/replica-degraded-alerts/recovery:
+    post:
+      operationId: adminReportReplicaRecovered
+      tags: [admin]
+      summary: |
+        Report a previously-degraded replica is healthy again. Closes
+        any open alert in the dedup table and emits a Sentry recovery
+        event so on-call sees the all-clear without manually
+        resolving the issue.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ReplicaRecoveredReport" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ReplicaRecoveredReportResult" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { description: Forbidden }
+
+  /admin/reconciliation-runs:
+    get:
+      operationId: adminListReconciliationRuns
+      tags: [admin]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/ReconciliationRun" }
+        "403": { description: Forbidden }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /admin/reconciliation/run:
+    post:
+      operationId: adminRunReconciliation
+      tags: [admin]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { ok: { type: boolean }, runs: { type: integer } }
+        "403": { description: Forbidden }
+
+  /admin/payouts/run-due:
+    post:
+      operationId: adminRunDuePayouts
+      tags: [admin]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { ok: { type: boolean }, processed: { type: integer }, failed: { type: integer } }
+        "403": { description: Forbidden }
+
+  /admin/payment-intents:
+    get:
+      operationId: adminListPaymentIntents
+      tags: [admin]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/PaymentIntent" }
+        "403": { description: Forbidden }
+
+  /returns:
+    get:
+      operationId: listReturns
+      tags: [returns]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/ReturnRecord" } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    post:
+      operationId: createReturn
+      tags: [returns]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/CreateReturnBody" } } }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/ReturnRecord" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /returns/{returnId}:
+    get:
+      operationId: getReturn
+      tags: [returns]
+      parameters: [{ in: path, name: returnId, required: true, schema: { type: string } }]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/ReturnRecord" } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /returns/{returnId}/transitions:
+    post:
+      operationId: transitionReturn
+      tags: [returns]
+      parameters: [{ in: path, name: returnId, required: true, schema: { type: string } }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status: { type: string }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/ReturnRecord" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /returns/{returnId}/messages:
+    post:
+      operationId: appendReturnMessage
+      tags: [returns]
+      parameters: [{ in: path, name: returnId, required: true, schema: { type: string } }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [actor, body]
+              properties:
+                actor: { type: string }
+                body: { type: string }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/ReturnRecord" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /wallet:
+    get:
+      operationId: getWallet
+      tags: [wallet]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Wallet" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /wallet/topup:
+    post:
+      operationId: walletTopUp
+      tags: [wallet]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [amountMinor]
+              properties:
+                amountMinor: { type: integer }
+                label: { type: string }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/WalletTopupResponse" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "502": { description: Top-up payment init failed }
+  /wallet/spend:
+    post:
+      operationId: walletSpend
+      tags: [wallet]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [amountMinor, label]
+              properties:
+                amountMinor: { type: integer }
+                label: { type: string }
+                refId: { type: string }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Wallet" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /wallet/withdraw:
+    post:
+      operationId: walletWithdraw
+      tags: [wallet]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [amountMinor, destinationLabel, bankCode, bankAccount]
+              properties:
+                amountMinor: { type: integer }
+                destinationLabel: { type: string }
+                bankCode: { type: string }
+                bankAccount: { type: string, description: "Full destination account number (digits only)." }
+                bankAccountName: { type: string }
+                bankLast4: { type: string }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/WalletWithdrawResponse" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /wallet/refund:
+    post:
+      operationId: walletRefund
+      tags: [wallet]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [returnId, amountMinor, label]
+              properties:
+                returnId: { type: string }
+                amountMinor: { type: integer }
+                label: { type: string }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Wallet" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /wallet/settings:
+    patch:
+      operationId: updateWalletSettings
+      tags: [wallet]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [currencyCode]
+              properties:
+                currencyCode: { type: string }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Wallet" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /safety/reports:
+    get:
+      operationId: listSafetyReports
+      tags: [safety]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/SafetyReport" } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    post:
+      operationId: submitSafetyReport
+      tags: [safety]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/SubmitSafetyReportBody" } } }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/SafetyReport" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /safety/blocked:
+    get:
+      operationId: listBlockedSellers
+      tags: [safety]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/BlockedSeller" } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    post:
+      operationId: blockSeller
+      tags: [safety]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [sellerName]
+              properties:
+                sellerName: { type: string }
+                reason: { type: string }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/BlockedSeller" } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /safety/blocked/{sellerName}:
+    delete:
+      operationId: unblockSeller
+      tags: [safety]
+      parameters: [{ in: path, name: sellerName, required: true, schema: { type: string } }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/BlockedSeller" } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /onboarding:
+    get:
+      operationId: getOnboarding
+      tags: [onboarding]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Onboarding" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /onboarding/complete:
+    post:
+      operationId: completeOnboarding
+      tags: [onboarding]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [interests, notificationsOptIn]
+              properties:
+                interests:
+                  type: array
+                  items: { type: string }
+                notificationsOptIn: { type: boolean }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Onboarding" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /notification-prefs:
+    get:
+      operationId: getNotificationPrefs
+      tags: [notifications]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/NotificationPrefs" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    put:
+      operationId: putNotificationPrefs
+      tags: [notifications]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/NotificationPrefs" } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/NotificationPrefs" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /referrals/me:
+    get:
+      operationId: getMyReferrals
+      tags: [referrals]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/ReferralHub" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /follows:
+    get:
+      operationId: listFollows
+      tags: [follows]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { type: array, items: { type: string } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /follows/{sellerName}:
+    post:
+      operationId: followSeller
+      tags: [follows]
+      parameters: [{ in: path, name: sellerName, required: true, schema: { type: string } }]
+      responses:
+        "200":
+          description: OK
+          content: { application/json: { schema: { type: array, items: { type: string } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    delete:
+      operationId: unfollowSeller
+      tags: [follows]
+      parameters: [{ in: path, name: sellerName, required: true, schema: { type: string } }]
+      responses:
+        "200":
+          description: OK
+          content: { application/json: { schema: { type: array, items: { type: string } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /wishlist:
+    get:
+      operationId: listWishlist
+      tags: [wishlist]
+      responses:
+        "200":
+          description: OK
+          content: { application/json: { schema: { type: array, items: { type: string } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    delete:
+      operationId: clearWishlist
+      tags: [wishlist]
+      responses:
+        "204": { description: Cleared }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /wishlist/{productId}:
+    post:
+      operationId: addToWishlist
+      tags: [wishlist]
+      parameters: [{ in: path, name: productId, required: true, schema: { type: string } }]
+      responses:
+        "200":
+          description: OK
+          content: { application/json: { schema: { type: array, items: { type: string } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    delete:
+      operationId: removeFromWishlist
+      tags: [wishlist]
+      parameters: [{ in: path, name: productId, required: true, schema: { type: string } }]
+      responses:
+        "200":
+          description: OK
+          content: { application/json: { schema: { type: array, items: { type: string } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /reviews:
+    get:
+      operationId: listReviews
+      tags: [reviews]
+      parameters:
+        - { in: query, name: productId, schema: { type: string } }
+        - { in: query, name: sellerName, schema: { type: string } }
+        - { in: query, name: orderId, schema: { type: string } }
+        - { in: query, name: mine, schema: { type: boolean } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/Review" } }
+    post:
+      operationId: createReview
+      tags: [reviews]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [orderId, productId, sellerName, rating]
+              properties:
+                orderId: { type: string }
+                productId: { type: string }
+                sellerName: { type: string }
+                rating: { type: integer }
+                text: { type: string }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/Review" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /recently-viewed:
+    get:
+      operationId: listRecentlyViewed
+      tags: [discovery]
+      responses:
+        "200":
+          description: OK
+          content: { application/json: { schema: { type: array, items: { type: string } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    delete:
+      operationId: clearRecentlyViewed
+      tags: [discovery]
+      responses:
+        "204": { description: Cleared }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /recently-viewed/{productId}:
+    post:
+      operationId: trackRecentlyViewed
+      tags: [discovery]
+      parameters: [{ in: path, name: productId, required: true, schema: { type: string } }]
+      responses:
+        "200":
+          description: OK
+          content: { application/json: { schema: { type: array, items: { type: string } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /recent-searches:
+    get:
+      operationId: listRecentSearches
+      tags: [discovery]
+      responses:
+        "200":
+          description: OK
+          content: { application/json: { schema: { type: array, items: { type: string } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    post:
+      operationId: addRecentSearch
+      tags: [discovery]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [query]
+              properties:
+                query: { type: string }
+      responses:
+        "200":
+          description: OK
+          content: { application/json: { schema: { type: array, items: { type: string } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    delete:
+      operationId: clearRecentSearches
+      tags: [discovery]
+      responses:
+        "204": { description: Cleared }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /search/_provider/info:
+    get:
+      operationId: getSearchProviderInfo
+      tags: [search]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/SearchProviderInfo" } } } }
+
+  /search/products:
+    get:
+      operationId: searchProducts
+      tags: [search]
+      parameters:
+        - { in: query, name: q, schema: { type: string } }
+        - { in: query, name: countryCode, schema: { type: string } }
+        - { in: query, name: category, schema: { type: string } }
+        - { in: query, name: minPriceMinor, schema: { type: integer } }
+        - { in: query, name: maxPriceMinor, schema: { type: integer } }
+        - { in: query, name: minRating, schema: { type: number } }
+        - { in: query, name: freeShippingOnly, schema: { type: boolean } }
+        - { in: query, name: liveOnly, schema: { type: boolean } }
+        - { in: query, name: sort, schema: { type: string, enum: [relevance, price_asc, price_desc, rating, popular] } }
+        - { in: query, name: limit, schema: { type: integer } }
+        - { in: query, name: offset, schema: { type: integer } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/SearchProductsResponse" } } } }
+
+  /search/sellers:
+    get:
+      operationId: searchSellers
+      tags: [search]
+      parameters:
+        - { in: query, name: q, schema: { type: string } }
+        - { in: query, name: limit, schema: { type: integer } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/SellerHit" } }
+
+  /search/streams:
+    get:
+      operationId: searchStreams
+      tags: [search]
+      parameters:
+        - { in: query, name: q, schema: { type: string } }
+        - { in: query, name: limit, schema: { type: integer } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/StreamHit" } }
+
+  /discovery/for-you:
+    get:
+      operationId: getForYou
+      tags: [discovery]
+      parameters:
+        - { in: query, name: country, schema: { type: string } }
+        - { in: query, name: limit, schema: { type: integer } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/ForYouProduct" } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /discovery/trending-streams:
+    get:
+      operationId: getTrendingStreams
+      tags: [discovery]
+      parameters:
+        - { in: query, name: limit, schema: { type: integer } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/TrendingStream" } }
+
+  /seller/me:
+    get:
+      operationId: getSellerMe
+      tags: [seller]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/SellerProfile" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /seller/apply:
+    post:
+      operationId: applySeller
+      tags: [seller]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/SellerProfile" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /seller/mode:
+    post:
+      operationId: setSellerMode
+      tags: [seller]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [mode]
+              properties:
+                mode: { type: string, enum: [buyer, seller] }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/SellerProfile" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /seller/upgrade:
+    post:
+      operationId: upgradeSellerTier
+      tags: [seller]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [tier]
+              properties:
+                tier: { type: string, enum: [starter, pro, elite] }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/SellerProfile" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /seller/listings:
+    get:
+      operationId: listSellerListings
+      tags: [seller]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/SellerListing" } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    post:
+      operationId: createSellerListing
+      tags: [seller]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title, priceMinor, countryCode]
+              properties:
+                title: { type: string }
+                priceMinor: { type: integer }
+                countryCode: { type: string }
+                category: { type: string }
+                inventory: { type: integer }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/SellerListing" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /seller/listings/{listingId}:
+    delete:
+      operationId: deleteSellerListing
+      tags: [seller]
+      parameters: [{ in: path, name: listingId, required: true, schema: { type: string } }]
+      responses:
+        "204": { description: Deleted }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    patch:
+      operationId: updateSellerListing
+      tags: [seller]
+      parameters: [{ in: path, name: listingId, required: true, schema: { type: string } }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                title: { type: string }
+                priceMinor: { type: integer }
+                category: { type: string }
+                inventory: { type: integer }
+                status: { type: string, enum: [draft, active] }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/SellerListing" } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /seller/orders:
+    get:
+      operationId: listSellerOrders
+      tags: [seller]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/SellerOrder" } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /seller/orders/{sellerOrderId}/transitions:
+    post:
+      operationId: transitionSellerOrder
+      tags: [seller]
+      parameters: [{ in: path, name: sellerOrderId, required: true, schema: { type: string } }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status: { type: string }
+                trackingNote: { type: string }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/SellerOrder" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /seller/streams:
+    get:
+      operationId: listSellerStreams
+      tags: [seller]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/SellerStreamRecord" } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /seller/earnings:
+    get:
+      operationId: getSellerEarnings
+      tags: [seller]
+      parameters:
+        - { in: query, name: countryCode, required: true, schema: { type: string } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/EarningsSummary" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /seller/payouts:
+    post:
+      operationId: requestSellerPayout
+      tags: [seller]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [amountMinor]
+              properties:
+                amountMinor: { type: integer }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/Payout" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /seller/payouts/{payoutId}/mark-paid:
+    post:
+      operationId: markSellerPayoutPaid
+      tags: [seller]
+      parameters: [{ in: path, name: payoutId, required: true, schema: { type: string } }]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Payout" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  # ---- KYC ---------------------------------------------------------------
+  # Sellers move through tiers 1 → 3 as their rolling-30d GMV crosses
+  # NGN 500k and NGN 5M thresholds. Each tier requires more verifications
+  # (gov_id, bank, CAC, UBO). Documents are uploaded under signed URLs
+  # (or inline encrypted in dev) and reviewed by an admin.
+  /kyc/me:
+    get:
+      operationId: getKycStatus
+      tags: [kyc]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/KycStatus" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /kyc/documents:
+    post:
+      operationId: claimKycDocument
+      tags: [kyc]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [kind, contentType, filename, sizeBytes]
+              properties:
+                kind: { type: string, description: "gov_id | bank_verification | cac | ubo | selfie | address_proof" }
+                contentType: { type: string }
+                filename: { type: string }
+                sizeBytes: { type: integer }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [id, uploadPath]
+                properties:
+                  id: { type: string }
+                  uploadPath: { type: string }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /kyc/documents/{id}/upload:
+    put:
+      operationId: uploadKycDocument
+      tags: [kyc]
+      parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [blobBase64]
+              properties:
+                blobBase64: { type: string }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, sha256]
+                properties:
+                  ok: { type: boolean }
+                  sha256: { type: string }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /kyc/documents/{id}:
+    get:
+      operationId: getKycDocument
+      tags: [kyc]
+      parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [id, kind, status, contentType, filename]
+                properties:
+                  id: { type: string }
+                  kind: { type: string }
+                  status: { type: string }
+                  contentType: { type: string }
+                  filename: { type: string }
+                  blobBase64: { type: ["string", "null"] }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /kyc/start:
+    post:
+      operationId: startKycVerification
+      tags: [kyc]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [kind]
+              properties:
+                kind: { type: string, description: "gov_id | bank_verification | cac | ubo" }
+                tier: { type: integer, enum: [1, 2, 3] }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [id, status]
+                properties:
+                  id: { type: string }
+                  status: { type: string }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /kyc/verifications/{id}/submit:
+    post:
+      operationId: submitKycVerification
+      tags: [kyc]
+      parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                documentIds:
+                  type: array
+                  items: { type: string }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [id, status]
+                properties:
+                  id: { type: string }
+                  status: { type: string }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  # ---- Admin KYC -------------------------------------------------------
+  /admin/kyc/pending:
+    get:
+      operationId: listPendingKyc
+      tags: [admin]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/AdminKycVerification" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /admin/kyc/{id}/approve:
+    post:
+      operationId: approveKycVerification
+      tags: [admin]
+      parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                note: { type: string }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Ok" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /admin/kyc/{id}/reject:
+    post:
+      operationId: rejectKycVerification
+      tags: [admin]
+      parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason: { type: string }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Ok" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /admin/kyc/{id}:
+    get:
+      operationId: getAdminKycDetail
+      tags: [admin]
+      summary: Verification detail with attached document metadata.
+      parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AdminKycVerificationDetail" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /admin/kyc/documents/{id}:
+    get:
+      operationId: getAdminKycDocumentBlob
+      tags: [admin]
+      summary: Decrypted document blob (base64) for review thumbnail rendering. PII read.
+      parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AdminKycDocumentBlob" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  # ---- Sanctions / PEP screening review queue --------------------------
+  /admin/sanctions:
+    get:
+      operationId: listAdminSanctionsHits
+      tags: [admin]
+      summary: List sanctions / PEP screening rows. Filterable by status.
+      parameters:
+        - in: query
+          name: status
+          required: false
+          schema:
+            type: string
+            enum: [all, pending, flagged, blocked, clear]
+        - in: query
+          name: limit
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 200 }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AdminSanctionsPage" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  # ---- NDPR data-subject request review queue (admin) ------------------
+  /admin/ndpr/requests:
+    get:
+      operationId: listAdminNdprRequests
+      tags: [admin]
+      summary: List data-subject requests across all users.
+      parameters:
+        - in: query
+          name: kind
+          required: false
+          schema:
+            type: string
+            enum: [all, export, erase, rectify, restrict, portability]
+        - in: query
+          name: status
+          required: false
+          schema:
+            type: string
+            enum: [all, pending, ready, completed, cancelled, failed]
+        - in: query
+          name: limit
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 200 }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AdminNdprPage" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /admin/ndpr/requests/{id}/cancel:
+    post:
+      operationId: cancelAdminNdprRequest
+      tags: [admin]
+      summary: Operator cancels a pending NDPR request (typically a within-grace erase).
+      parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                note: { type: string }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AdminNdprRow" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { description: Not cancellable, content: { application/json: { schema: { $ref: "#/components/schemas/ApiError" } } } }
+
+  # ---- Audit log search (admin) ----------------------------------------
+  /admin/audit:
+    get:
+      operationId: searchAdminAuditLog
+      tags: [admin]
+      summary: Search the append-only audit log by actor, entity, action, or date.
+      parameters:
+        - in: query
+          name: actorId
+          required: false
+          schema: { type: string }
+        - in: query
+          name: entity
+          required: false
+          schema: { type: string }
+        - in: query
+          name: entityId
+          required: false
+          schema: { type: string }
+        - in: query
+          name: action
+          required: false
+          schema: { type: string, description: "Exact action verb or prefix (e.g. ndpr.* matches ndpr.export.requested)." }
+        - in: query
+          name: piiOnly
+          required: false
+          schema: { type: boolean }
+        - in: query
+          name: sinceIso
+          required: false
+          schema: { type: string }
+        - in: query
+          name: limit
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 500 }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AdminAuditPage" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  # ---- Rate-limit forensic search (admin) -----------------------------
+  /admin/rate-limit-events:
+    get:
+      operationId: listAdminRateLimitEvents
+      tags: [admin]
+      summary: |
+        Forensic search of the bounded `rate_limit_events` table (90-day
+        window). Lets admins reconstruct credential-stuffing or scraping
+        bursts after the fact, filtered by identity / route / tier /
+        time window. The search itself is audited.
+      parameters:
+        - in: query
+          name: identity
+          required: false
+          schema: { type: string, description: "Identity key — usually 'user:<id>' or 'ip:<addr>'. Case-sensitive exact match." }
+        - in: query
+          name: route
+          required: false
+          schema: { type: string, description: "Request path the rate limit fired on. Substring (LIKE) match." }
+        - in: query
+          name: tier
+          required: false
+          schema: { type: string, description: "anon | buyer | seller | admin" }
+        - in: query
+          name: sinceIso
+          required: false
+          schema: { type: string }
+        - in: query
+          name: untilIso
+          required: false
+          schema: { type: string }
+        - in: query
+          name: limit
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 500 }
+        - in: query
+          name: offset
+          required: false
+          schema: { type: integer, minimum: 0 }
+        - in: query
+          name: sortDir
+          required: false
+          schema:
+            type: string
+            enum: [desc, asc]
+            description: |
+              Direction to sort by `ts`. Defaults to `desc` (newest first)
+              which is the typical "what just happened" view; `asc`
+              (oldest first) is useful for replaying a burst from its
+              beginning.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AdminRateLimitEventPage" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  # ---- NDPR ------------------------------------------------------------
+  # Nigeria Data Protection Regulation — data-subject rights. All write
+  # operations are audited and create rows in `ndpr_requests`.
+  /ndpr/requests:
+    get:
+      operationId: listNdprRequests
+      tags: [ndpr]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/NdprRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /ndpr/requests/{id}:
+    get:
+      operationId: getNdprRequest
+      tags: [ndpr]
+      parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/NdprRequest" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /ndpr/export:
+    post:
+      operationId: requestNdprExport
+      tags: [ndpr]
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/NdprRequest" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /ndpr/portability:
+    post:
+      operationId: requestNdprPortability
+      tags: [ndpr]
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/NdprRequest" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /ndpr/erase:
+    post:
+      operationId: requestNdprErase
+      tags: [ndpr]
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/NdprRequest" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /ndpr/requests/{id}/cancel:
+    post:
+      operationId: cancelNdprRequest
+      tags: [ndpr]
+      parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/NdprRequest" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /ndpr/rectify:
+    post:
+      operationId: requestNdprRectify
+      tags: [ndpr]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [patch]
+              properties:
+                patch:
+                  type: object
+                  additionalProperties: true
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/NdprRequest" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /ndpr/restrict:
+    post:
+      operationId: requestNdprRestrict
+      tags: [ndpr]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                lift: { type: boolean }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/NdprRequest" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  # --- MFA (TOTP enrolment) ---------------------------------------------------
+  /mfa/status:
+    get:
+      operationId: getMfaStatus
+      tags: [mfa]
+      summary: Returns enrolment + assertion status and whether MFA is required for this user.
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/MfaStatus" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /mfa/totp/setup:
+    post:
+      operationId: setupMfaTotp
+      tags: [mfa]
+      summary: Begin TOTP enrolment. Returns secret, otpauth URL, QR data URL, and one-time backup codes.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MfaSetupBody" }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/MfaSetupResult" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "500": { description: Setup failed, content: { application/json: { schema: { $ref: "#/components/schemas/ApiError" } } } }
+  /mfa/totp/verify:
+    post:
+      operationId: verifyMfaTotp
+      tags: [mfa]
+      summary: Verify a 6-digit TOTP code. mode=activate flips a pending enrolment to active; mode=assert satisfies a recent-challenge requirement.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MfaVerifyBody" }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Ok" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { description: Code rejected, content: { application/json: { schema: { $ref: "#/components/schemas/ApiError" } } } }
+  /mfa/backup-code:
+    post:
+      operationId: consumeMfaBackupCode
+      tags: [mfa]
+      summary: Consume a single-use backup code as an MFA assertion.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MfaBackupCodeBody" }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Ok" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { description: Code rejected, content: { application/json: { schema: { $ref: "#/components/schemas/ApiError" } } } }
+  /mfa/totp/disable:
+    post:
+      operationId: disableMfaTotp
+      tags: [mfa]
+      summary: Remove the TOTP factor. Requires a recent assertion; otherwise returns 403.
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Ok" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /mfa/totp/regenerate-backup-codes:
+    post:
+      operationId: regenerateMfaBackupCodes
+      tags: [mfa]
+      summary: Issue a fresh batch of 10 single-use backup codes, replacing the existing ones. Requires a recent assertion; otherwise returns 403.
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/MfaBackupCodesResult" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /mfa/security-alerts:
+    get:
+      operationId: listMfaSecurityAlerts
+      tags: [mfa]
+      summary: Returns up to the last 20 MFA-related audit events for the authenticated user.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/MfaSecurityAlert" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /mfa/security-alerts/{id}:
+    delete:
+      operationId: dismissMfaSecurityAlert
+      tags: [mfa]
+      summary: Marks an MFA security alert as reviewed. Audit is append-only — the underlying audit row is not deleted; instead a `mfa.security_alert.reviewed` audit row is appended.
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Ok" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  # --- Admin operator console -------------------------------------------------
+  /admin/dashboard:
+    get:
+      operationId: adminDashboard
+      tags: [admin]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/AdminDashboard" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /admin/me/roles:
+    get:
+      operationId: adminMyRoles
+      tags: [admin]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/UserRoles" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /admin/cases:
+    get:
+      operationId: adminListCases
+      tags: [admin]
+      parameters:
+        - { in: query, name: state, schema: { type: string } }
+        - { in: query, name: kind, schema: { type: string } }
+        - { in: query, name: assignee, schema: { type: string } }
+        - { in: query, name: limit, schema: { type: integer } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/CasePage" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /admin/cases/{id}:
+    get:
+      operationId: adminGetCase
+      tags: [admin]
+      parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/ModerationCaseDetail" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /admin/cases/{id}/transition:
+    post:
+      operationId: adminTransitionCase
+      tags: [admin]
+      parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [state], properties: { state: { type: string } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/ModerationCase" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /admin/cases/{id}/assign:
+    post:
+      operationId: adminAssignCase
+      tags: [admin]
+      parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties: { assignee: { type: ["string", "null"] } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/ModerationCase" } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /admin/cases/{id}/decide:
+    post:
+      operationId: adminDecideCase
+      tags: [admin]
+      parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [decision]
+              properties:
+                decision: { type: string }
+                reason: { type: string }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/ModerationCase" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /admin/disputes:
+    get:
+      operationId: adminListDisputes
+      tags: [admin]
+      parameters:
+        - { in: query, name: state, schema: { type: string } }
+        - { in: query, name: limit, schema: { type: integer } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/DisputePage" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /admin/disputes/{id}/decide:
+    post:
+      operationId: adminDecideDispute
+      tags: [admin]
+      parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [decision]
+              properties:
+                decision: { type: string, enum: [refund, deny, partial] }
+                reason: { type: string }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/ModerationCase" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /admin/payouts:
+    get:
+      operationId: adminListPayouts
+      tags: [admin]
+      parameters:
+        - { in: query, name: status, schema: { type: string } }
+        - { in: query, name: limit, schema: { type: integer } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/PayoutOpsPage" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /admin/payouts/{id}/hold:
+    post:
+      operationId: adminHoldPayout
+      tags: [admin]
+      parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [reason], properties: { reason: { type: string } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/PayoutOpsRow" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /admin/payouts/{id}/release:
+    post:
+      operationId: adminReleasePayout
+      tags: [admin]
+      parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { type: object, properties: { reason: { type: string } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/PayoutOpsRow" } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /admin/payouts/{id}/clawback:
+    post:
+      operationId: adminClawbackPayout
+      tags: [admin]
+      parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [reason], properties: { reason: { type: string } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/PayoutOpsRow" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /admin/payouts/{id}/actions:
+    get:
+      operationId: adminListPayoutActions
+      tags: [admin]
+      parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/PayoutAction" } }
+  /admin/takedowns:
+    get:
+      operationId: adminListTakedowns
+      tags: [admin]
+      parameters:
+        - { in: query, name: limit, schema: { type: integer } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/Takedown" } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    post:
+      operationId: adminCreateTakedown
+      tags: [admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [targetKind, targetId, reasonCode]
+              properties:
+                targetKind: { type: string }
+                targetId: { type: string }
+                reasonCode: { type: string }
+                notes: { type: string }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/Takedown" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+  /admin/takedowns/mine:
+    get:
+      operationId: listMyTakedowns
+      tags: [safety]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/OwnerTakedown" } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /admin/takedowns/{id}/appeal:
+    post:
+      operationId: appealTakedown
+      tags: [safety]
+      parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason: { type: string }
+      responses:
+        "202":
+          description: Accepted
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TakedownAppealResult" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { description: Forbidden }
+        "404": { description: Not Found }
+  /admin/users/{userId}/roles:
+    get:
+      operationId: adminGetUserRoles
+      tags: [admin]
+      parameters: [{ in: path, name: userId, required: true, schema: { type: string } }]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/UserRoles" } } } }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    post:
+      operationId: adminGrantUserRole
+      tags: [admin]
+      parameters: [{ in: path, name: userId, required: true, schema: { type: string } }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [role]
+              properties: { role: { type: string } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/UserRoles" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+  /admin/users/{userId}/roles/{role}:
+    delete:
+      operationId: adminRevokeUserRole
+      tags: [admin]
+      parameters:
+        - { in: path, name: userId, required: true, schema: { type: string } }
+        - { in: path, name: role, required: true, schema: { type: string } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/UserRoles" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+  /admin/scan/text:
+    post:
+      operationId: adminScanText
+      tags: [admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [text], properties: { text: { type: string } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/ModerationScanResult" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+
+  # ---- Manufacturer (cross-border seller-portal) ------------------------
+  # See artifacts/api-server/src/routes/manufacturer.ts. The manufacturer
+  # portal SPA is the only consumer; admin moderation of manufacturers
+  # lives under /admin/manufacturers and is generated separately.
+  /manufacturer/me:
+    get:
+      operationId: getManufacturerMe
+      tags: [manufacturer]
+      summary: Resolve the signed-in user's manufacturer profile
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/ManufacturerMeResponse" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /manufacturer/apply:
+    post:
+      operationId: applyManufacturer
+      tags: [manufacturer]
+      summary: Submit (or update) a manufacturer onboarding application
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ManufacturerApplyBody" }
+      responses:
+        "200": { description: Updated, content: { application/json: { schema: { $ref: "#/components/schemas/ManufacturerMeResponse" } } } }
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/ManufacturerMeResponse" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "409": { description: Application already finalised, content: { application/json: { schema: { $ref: "#/components/schemas/ApiError" } } } }
+  /manufacturer/kyc:
+    get:
+      operationId: listManufacturerKyc
+      tags: [manufacturer]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/ManufacturerKyc" } } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    post:
+      operationId: uploadManufacturerKyc
+      tags: [manufacturer]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ManufacturerKycUploadBody" }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/ManufacturerKyc" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /manufacturer/listings:
+    get:
+      operationId: listManufacturerListings
+      tags: [manufacturer]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/ManufacturerListing" } } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    post:
+      operationId: createManufacturerListing
+      tags: [manufacturer]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ManufacturerListingCreateBody" }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/ManufacturerListing" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /manufacturer/listings/{listingId}:
+    parameters:
+      - { in: path, name: listingId, required: true, schema: { type: string } }
+    patch:
+      operationId: updateManufacturerListing
+      tags: [manufacturer]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ManufacturerListingUpdateBody" }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/ManufacturerListing" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      operationId: deleteManufacturerListing
+      tags: [manufacturer]
+      responses:
+        "204": { description: Deleted }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /manufacturer/orders:
+    get:
+      operationId: listManufacturerOrders
+      tags: [manufacturer]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/WholesaleOrder" } } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /manufacturer/orders/{orderId}:
+    parameters:
+      - { in: path, name: orderId, required: true, schema: { type: string } }
+    get:
+      operationId: getManufacturerOrder
+      tags: [manufacturer]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/ManufacturerOrderDetail" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /manufacturer/orders/{orderId}/ship:
+    parameters:
+      - { in: path, name: orderId, required: true, schema: { type: string } }
+    post:
+      operationId: shipManufacturerOrder
+      tags: [manufacturer]
+      summary: Mark an order as shipped (idempotent for post-ship states)
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/WholesaleOrder" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { description: Wrong state for ship transition, content: { application/json: { schema: { $ref: "#/components/schemas/ApiError" } } } }
+  /manufacturer/payouts:
+    get:
+      operationId: listManufacturerPayouts
+      tags: [manufacturer]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/ManufacturerPayout" } } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  # ---- Wholesale (seller/buyer-facing cross-border catalog + orders) ----
+  # See artifacts/api-server/src/routes/wholesale.ts. Catalog browsing and
+  # the landed-cost quote are intentionally public so prospective Epplaa
+  # sellers can preview pricing before signing up.
+  /wholesale/listings:
+    get:
+      operationId: listWholesaleListings
+      tags: [wholesale]
+      parameters:
+        - { in: query, name: search, schema: { type: string } }
+        - { in: query, name: originCountry, schema: { type: string } }
+        - { in: query, name: category, schema: { type: string } }
+        - { in: query, name: hsCode, schema: { type: string } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/WholesaleCatalogListing" } } } } }
+  /wholesale/listings/{listingId}:
+    parameters:
+      - { in: path, name: listingId, required: true, schema: { type: string } }
+    get:
+      operationId: getWholesaleListing
+      tags: [wholesale]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/WholesaleCatalogListing" } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /wholesale/quote:
+    post:
+      operationId: quoteWholesaleOrder
+      tags: [wholesale]
+      summary: Preview the landed cost for a prospective wholesale order
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/WholesaleQuoteBody" }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/WholesaleQuoteResponse" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /wholesale/orders:
+    get:
+      operationId: listWholesaleOrders
+      tags: [wholesale]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/WholesaleOrder" } } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    post:
+      operationId: createWholesaleOrder
+      tags: [wholesale]
+      summary: Place a wholesale order (freezes landed cost; books with the forwarder)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/WholesaleOrderCreateBody" }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/WholesaleOrder" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /wholesale/orders/{orderId}:
+    parameters:
+      - { in: path, name: orderId, required: true, schema: { type: string } }
+    get:
+      operationId: getWholesaleOrder
+      tags: [wholesale]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/WholesaleOrderDetail" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /wholesale/orders/{orderId}/cancel:
+    parameters:
+      - { in: path, name: orderId, required: true, schema: { type: string } }
+    post:
+      operationId: cancelWholesaleOrder
+      tags: [wholesale]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/WholesaleOrder" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { description: Wrong state for cancel transition, content: { application/json: { schema: { $ref: "#/components/schemas/ApiError" } } } }
+
+components:
+  responses:
+    Unauthorized:
+      description: Sign-in required
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ApiError" }
+    NotFound:
+      description: Not found
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ApiError" }
+    BadRequest:
+      description: Bad request
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ApiError" }
+    Forbidden:
+      description: Forbidden
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ApiError" }
+    TooManyRequests:
+      description: Rate limited
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ApiError" }
+  schemas:
+    HealthStatus:
+      type: object
+      required: [status, rateLimitStore]
+      properties:
+        status: { type: string }
+        rateLimitStore: { $ref: "#/components/schemas/RateLimitStoreStatus" }
+    RateLimitStoreStatus:
+      type: object
+      description: |
+        Live snapshot of the rate-limit bucket store. `kind` reflects the
+        configured backend (memory or redis); the remaining fields describe
+        the current Redis failure-streak as tracked by RedisFailureWatcher
+        on the api-server. For memory replicas the streak fields are
+        constants (state="healthy", failureCount=0, both timestamps null)
+        because there is no Redis to fail.
+      required: [kind, state, failureCount, firstFailureAt, lastRecoveredAt]
+      properties:
+        kind:
+          type: string
+          enum: [memory, redis]
+        state:
+          type: string
+          enum: [healthy, degraded]
+        failureCount:
+          type: integer
+          minimum: 0
+          description: Number of failures in the current Redis streak. 0 when healthy.
+        firstFailureAt:
+          type: ["integer", "null"]
+          description: ms-epoch the current degraded streak began, or null when healthy.
+        lastRecoveredAt:
+          type: ["integer", "null"]
+          description: ms-epoch the most recent streak ended, or null until at least one streak has recovered.
+    ApiError:
+      type: object
+      required: [error]
+      properties:
+        error: { type: string }
+        detail: { type: string }
+    CsrfToken:
+      type: object
+      required: [csrfToken]
+      properties:
+        csrfToken: { type: string }
+
+    User:
+      type: object
+      required: [clerkId, email, displayName, avatarUrl, countryCode, addresses, paymentMethods]
+      properties:
+        clerkId: { type: string }
+        email: { type: string }
+        displayName: { type: string }
+        avatarUrl: { type: string }
+        countryCode: { type: string }
+        phone: { type: string }
+        phoneCountry: { type: string }
+        phoneVerifiedAt: { type: ["string", "null"] }
+        addresses:
+          type: array
+          items: { type: object, additionalProperties: true }
+        paymentMethods:
+          type: array
+          items: { type: object, additionalProperties: true }
+    UpdateMeBody:
+      type: object
+      properties:
+        displayName: { type: string }
+        avatarUrl: { type: string }
+        countryCode: { type: string }
+        addresses:
+          type: array
+          items: { type: object, additionalProperties: true }
+        paymentMethods:
+          type: array
+          items: { type: object, additionalProperties: true }
+
+    Country:
+      type: object
+      additionalProperties: true
+      required: [code, name, flag, currency, primaryCity, status]
+      properties:
+        code: { type: string }
+        name: { type: string }
+        flag: { type: string }
+        primaryCity: { type: string }
+        status: { type: string }
+        payoutAuthority: { type: string }
+        currency:
+          type: object
+          required: [code, symbol, decimals, minorPerMajor]
+          properties:
+            code: { type: string }
+            symbol: { type: string }
+            decimals: { type: integer }
+            minorPerMajor: { type: integer }
+        paymentMethods:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        fulfillmentOptions:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        identityDocs:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        businessRegistry:
+          type: object
+          additionalProperties: true
+        bankAccount:
+          type: object
+          additionalProperties: true
+
+    Product:
+      type: object
+      required: [id, title, priceMinor, originCountry, originLabel, sellerName, rating, soldCount, isLiveNow, images, variants, category, countryCode]
+      properties:
+        id: { type: string }
+        title: { type: string }
+        priceMinor: { type: integer }
+        originalPriceMinor: { type: ["integer", "null"] }
+        originCountry: { type: string }
+        originLabel: { type: string }
+        sellerName: { type: string }
+        sellerAvatar: { type: string }
+        rating: { type: number }
+        soldCount: { type: integer }
+        isLiveNow: { type: boolean }
+        images:
+          type: array
+          items: { type: string }
+        variants:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        category: { type: string }
+        countryCode: { type: string }
+
+    Stream:
+      type: object
+      required: [id, hostName, hostAvatar, viewerCount, posterImage, title, isLive]
+      properties:
+        id: { type: string }
+        hostName: { type: string }
+        hostAvatar: { type: string }
+        viewerCount: { type: string }
+        posterImage: { type: string }
+        title: { type: string }
+        currentProductId: { type: ["string", "null"] }
+        isLive: { type: boolean }
+
+    SearchProviderInfo:
+      type: object
+      required: [provider, degraded]
+      properties:
+        provider: { type: string }
+        degraded: { type: boolean }
+
+    SearchProductHit:
+      allOf:
+        - $ref: "#/components/schemas/Product"
+        - type: object
+          required: [freeShipping, rank]
+          properties:
+            freeShipping: { type: boolean }
+            rank: { type: number }
+
+    CategoryFacet:
+      type: object
+      required: [category, count]
+      properties:
+        category: { type: string }
+        count: { type: integer }
+
+    SearchProductsResponse:
+      type: object
+      required: [items, totalCount, facets, degraded]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/SearchProductHit" }
+        totalCount: { type: integer }
+        facets:
+          type: object
+          required: [categories]
+          properties:
+            categories:
+              type: array
+              items: { $ref: "#/components/schemas/CategoryFacet" }
+        degraded: { type: boolean }
+
+    SellerHit:
+      type: object
+      required: [sellerName, sellerAvatar, productCount, totalSold]
+      properties:
+        sellerName: { type: string }
+        sellerAvatar: { type: string }
+        productCount: { type: integer }
+        totalSold: { type: integer }
+
+    StreamHit:
+      type: object
+      required: [id, title, hostName, hostAvatar, posterImage, isLive, currentViewers]
+      properties:
+        id: { type: string }
+        title: { type: string }
+        hostName: { type: string }
+        hostAvatar: { type: string }
+        posterImage: { type: string }
+        isLive: { type: boolean }
+        currentViewers: { type: integer }
+
+    ForYouProduct:
+      allOf:
+        - $ref: "#/components/schemas/SearchProductHit"
+        - type: object
+          required: [score, reasons]
+          properties:
+            score: { type: number }
+            reasons:
+              type: array
+              items: { type: string }
+
+    TrendingStream:
+      type: object
+      required: [id, title, hostName, hostAvatar, posterImage, isLive, currentViewers, peakViewers, score]
+      properties:
+        id: { type: string }
+        title: { type: string }
+        hostName: { type: string }
+        hostAvatar: { type: string }
+        posterImage: { type: string }
+        isLive: { type: boolean }
+        currentViewers: { type: integer }
+        peakViewers: { type: integer }
+        score: { type: number }
+
+    Replay:
+      type: object
+      required: [id, hostName, hostAvatar, posterImage, title, durationLabel, durationSeconds, viewCount, recordedAtIso, productIds]
+      properties:
+        id: { type: string }
+        hostName: { type: string }
+        hostAvatar: { type: string }
+        posterImage: { type: string }
+        title: { type: string }
+        durationLabel: { type: string }
+        durationSeconds: { type: integer }
+        viewCount: { type: string }
+        recordedAtIso: { type: string }
+        productIds:
+          type: array
+          items: { type: string }
+        liveStreamId: { type: ["string", "null"] }
+        playbackUrl: { type: ["string", "null"] }
+
+    FulfillmentLocation:
+      type: object
+      required: [id, optionId, countryCode, city, name, addressLine, hours, distanceLabel, mapX, mapY]
+      properties:
+        id: { type: string }
+        optionId: { type: string }
+        countryCode: { type: string }
+        city: { type: string }
+        name: { type: string }
+        addressLine: { type: string }
+        hours: { type: string }
+        distanceLabel: { type: string }
+        mapX: { type: number }
+        mapY: { type: number }
+
+    PromoApplyBody:
+      type: object
+      required: [code, subtotalMinor, shippingMinor, countryCode]
+      properties:
+        code: { type: string }
+        subtotalMinor: { type: integer }
+        shippingMinor: { type: integer }
+        countryCode: { type: string }
+    PromoApplyResult:
+      type: object
+      required: [ok, discountMinor, shippingDiscountMinor]
+      properties:
+        ok: { type: boolean }
+        promo:
+          type: object
+          additionalProperties: true
+        discountMinor: { type: integer }
+        shippingDiscountMinor: { type: integer }
+        label: { type: string }
+        error: { type: string }
+
+    CartItem:
+      type: object
+      required: [productId, qty]
+      properties:
+        productId: { type: string }
+        qty: { type: integer }
+        variantNotes: { type: ["string", "null"] }
+    Cart:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/CartItem" }
+    CartItemUpsertBody:
+      type: object
+      required: [qty]
+      properties:
+        qty: { type: integer }
+        variantNotes: { type: string }
+
+    CheckoutDraft:
+      type: object
+      additionalProperties: true
+
+    Order:
+      type: object
+      required: [id, userId, status, countryCode, currencyCode, items, fulfillment, payment, notificationPrefs, totalsMinor, etaLabel, createdAtIso]
+      properties:
+        id: { type: string }
+        userId: { type: string }
+        status: { type: string }
+        countryCode: { type: string }
+        currencyCode: { type: string }
+        items:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        fulfillment:
+          type: object
+          additionalProperties: true
+        payment:
+          type: object
+          additionalProperties: true
+        notificationPrefs:
+          type: object
+          additionalProperties: true
+        totalsMinor:
+          type: object
+          additionalProperties: true
+        promo:
+          type: object
+          additionalProperties: true
+        pickupOtp: { type: ["string", "null"] }
+        etaLabel: { type: string }
+        gateway: { type: ["string", "null"] }
+        gatewayReference: { type: ["string", "null"] }
+        paymentIntentId: { type: ["string", "null"] }
+        paidAtIso: { type: ["string", "null"] }
+        holdUntilIso: { type: ["string", "null"] }
+        settledAtIso: { type: ["string", "null"] }
+        createdAtIso: { type: string }
+        shipment: { oneOf: [ { $ref: "#/components/schemas/Shipment" }, { type: "null" } ] }
+    Shipment:
+      type: object
+      required: [id, orderId, carrier, service, status, events]
+      properties:
+        id: { type: string }
+        orderId: { type: string }
+        carrier: { type: string }
+        service: { type: string }
+        carrierRef: { type: ["string", "null"] }
+        trackingUrl: { type: ["string", "null"] }
+        labelUrl: { type: ["string", "null"] }
+        status: { type: string }
+        shippedAtIso: { type: ["string", "null"] }
+        deliveredAtIso: { type: ["string", "null"] }
+        events:
+          type: array
+          items: { $ref: "#/components/schemas/ShipmentEvent" }
+    ShipmentEvent:
+      type: object
+      required: [id, status, occurredAtIso]
+      properties:
+        id: { type: string }
+        status: { type: string }
+        rawStatus: { type: string }
+        note: { type: string }
+        location: { type: string }
+        occurredAtIso: { type: string }
+    VerifyAddressBody:
+      type: object
+      required: [countryCode, line]
+      properties:
+        countryCode: { type: string }
+        line: { type: string }
+        area: { type: string }
+        city: { type: string }
+        lat: { type: number }
+        lng: { type: number }
+    AddressVerification:
+      type: object
+      required: [ok, placeId, confidencePct]
+      properties:
+        ok: { type: boolean }
+        placeId: { type: string }
+        confidencePct: { type: integer }
+        suggestion: { type: ["string", "null"] }
+        verificationToken: { type: string }
+        normalized:
+          type: object
+          additionalProperties: true
+    RateShipmentBody:
+      type: object
+      required: [destination, items]
+      properties:
+        currencyCode: { type: string }
+        optionId: { type: string }
+        destination:
+          type: object
+          additionalProperties: true
+        items:
+          type: array
+          items:
+            type: object
+            required: [productId, qty]
+            properties:
+              productId: { type: string }
+              qty: { type: integer }
+    RateQuote:
+      type: object
+      required: [carrier, service, serviceLabel, priceMinor, currencyCode, etaLabel]
+      properties:
+        carrier: { type: string }
+        service: { type: string }
+        serviceLabel: { type: string }
+        priceMinor: { type: integer }
+        currencyCode: { type: string }
+        etaLabel: { type: string }
+        etaDaysMin: { type: integer }
+        etaDaysMax: { type: integer }
+        quoteToken: { type: string }
+        raw:
+          type: object
+          additionalProperties: true
+    RateShipmentResponse:
+      type: object
+      required: [quotes]
+      properties:
+        quotes:
+          type: array
+          items: { $ref: "#/components/schemas/RateQuote" }
+    BoxUnlockBody:
+      type: object
+      required: [reservationId, otp]
+      properties:
+        reservationId: { type: string }
+        otp: { type: string }
+    BoxUnlockResponse:
+      type: object
+      required: [ok, reservationId, collectedAtIso]
+      properties:
+        ok: { type: boolean }
+        reservationId: { type: string }
+        collectedAtIso: { type: string }
+    PlaceOrderBody:
+      type: object
+      additionalProperties: true
+
+    OrderQuote:
+      type: object
+      required: [countryCode, vatRateBp, vatMinor, vatEligibleSubtotalMinor, totalMinor]
+      properties:
+        countryCode: { type: string }
+        vatRateBp: { type: integer }
+        vatMinor: { type: integer }
+        vatEligibleSubtotalMinor: { type: integer }
+        totalMinor: { type: integer }
+
+    PaymentIntent:
+      type: object
+      required: [id, purpose, gateway, reference, amountMinor, vatMinor, currencyCode, status, createdAtIso]
+      properties:
+        id: { type: string }
+        purpose: { type: string }
+        orderId: { type: ["string", "null"] }
+        gateway: { type: string }
+        reference: { type: string }
+        amountMinor: { type: integer }
+        vatMinor: { type: integer }
+        currencyCode: { type: string }
+        status: { type: string }
+        authorizationUrl: { type: ["string", "null"] }
+        paidAtIso: { type: ["string", "null"] }
+        createdAtIso: { type: string }
+
+    PlaceOrderResponse:
+      type: object
+      required: [id, userId, status, countryCode, currencyCode, items, fulfillment, payment, notificationPrefs, totalsMinor, etaLabel, createdAtIso, paymentIntent]
+      properties:
+        id: { type: string }
+        userId: { type: string }
+        status: { type: string }
+        countryCode: { type: string }
+        currencyCode: { type: string }
+        items: { type: array, items: { type: object, additionalProperties: true } }
+        fulfillment: { type: object, additionalProperties: true }
+        payment: { type: object, additionalProperties: true }
+        notificationPrefs: { type: object, additionalProperties: true }
+        totalsMinor: { type: object, additionalProperties: true }
+        promo: { type: object, additionalProperties: true }
+        pickupOtp: { type: ["string", "null"] }
+        etaLabel: { type: string }
+        gateway: { type: ["string", "null"] }
+        gatewayReference: { type: ["string", "null"] }
+        paymentIntentId: { type: ["string", "null"] }
+        paidAtIso: { type: ["string", "null"] }
+        createdAtIso: { type: string }
+        # Populated for cash-on-collection orders, where the dispatch
+        # pipeline runs inline at order placement so the client can
+        # render the tracking pane without a follow-up GET. Null for
+        # prepaid orders (which are dispatched after the gateway
+        # webhook fires) and for any COD order whose dispatch failed
+        # — the order is still placed and an admin can retry.
+        shipment: { oneOf: [ { $ref: "#/components/schemas/Shipment" }, { type: "null" } ] }
+        paymentIntent:
+          type: object
+          required: [id, reference, gateway, status]
+          properties:
+            id: { type: string }
+            reference: { type: string }
+            gateway: { type: string }
+            status: { type: string }
+            authorizationUrl: { type: ["string", "null"] }
+
+    RefundResponse:
+      type: object
+      required: [ok]
+      properties:
+        ok: { type: boolean }
+        refundId: { type: string }
+        refundReference: { type: string }
+
+    GatewayHealthSnapshot:
+      type: object
+      required: [gateway, successCount, failureCount]
+      properties:
+        gateway: { type: string }
+        successCount: { type: integer }
+        failureCount: { type: integer }
+        windowStartedAtIso: { type: string }
+        circuitOpenUntilIso: { type: ["string", "null"] }
+        lastEventAtIso: { type: ["string", "null"] }
+
+    DbHealthSnapshot:
+      type: object
+      description: |
+        Live, on-demand Postgres latency probe answered by the
+        api-server replica that handled the request. The replica runs a
+        small burst of `SELECT 1` queries and reports the resulting
+        p50/p95 round-trip time in milliseconds. `state` is `degraded`
+        if the burst threw, exceeded the slow-probe threshold, or no
+        sample completed.
+      required:
+        [replicaId, state, sampleCount, p50LatencyMs, p95LatencyMs, lastProbedAtIso, lastSuccessAtIso, lastError]
+      properties:
+        replicaId:
+          type: string
+          description: Hostname or `pid:<n>` identifier of the replica that answered.
+        state:
+          type: string
+          enum: [healthy, degraded]
+        sampleCount:
+          type: integer
+          minimum: 0
+          description: Number of `SELECT 1` round-trips that completed in this burst.
+        p50LatencyMs:
+          type: ["number", "null"]
+          description: 50th-percentile round-trip in milliseconds, null when sampleCount is 0.
+        p95LatencyMs:
+          type: ["number", "null"]
+          description: 95th-percentile round-trip in milliseconds, null when sampleCount is 0.
+        lastProbedAtIso:
+          type: string
+          description: ISO timestamp when this burst started.
+        lastSuccessAtIso:
+          type: ["string", "null"]
+          description: |
+            ISO timestamp of the most recent `SELECT 1` that completed
+            in this burst, or null if every probe failed.
+        lastError:
+          type: ["string", "null"]
+          description: |
+            Error message from the failing probe(s), or null when the
+            full burst succeeded.
+
+    QueueHealthSnapshot:
+      type: object
+      description: |
+        Aggregate row counts of the `notifications_outbox` table, the
+        single shared queue the api-server drains every 30s for
+        retryable notifications and the periodic background jobs that
+        fan out through it (reconciliation, payouts).
+      required:
+        [state, pendingCount, processingCount, failedCount, oldestPendingAtIso, oldestProcessingAtIso, sampledAtIso]
+      properties:
+        state:
+          type: string
+          enum: [healthy, degraded]
+          description: |
+            `degraded` when there is at least one failed row OR the oldest
+            unprocessed row has been waiting longer than the configured
+            staleness threshold (default 10 minutes).
+        pendingCount:
+          type: integer
+          minimum: 0
+          description: Rows in `pending` status (waiting for the next drain).
+        processingCount:
+          type: integer
+          minimum: 0
+          description: Rows currently leased to a worker (`processing`).
+        failedCount:
+          type: integer
+          minimum: 0
+          description: Rows that have exhausted retries (`failed`).
+        oldestPendingAtIso:
+          type: ["string", "null"]
+          description: |
+            `nextAttemptAt` of the oldest pending row whose attempt time
+            has already elapsed, or null when no pending row is overdue.
+        oldestProcessingAtIso:
+          type: ["string", "null"]
+          description: |
+            `nextAttemptAt` of the oldest in-flight row, or null when no
+            row is currently leased.
+        sampledAtIso:
+          type: string
+          description: ISO timestamp when the snapshot was taken.
+
+    ReplicaDegradedReport:
+      type: object
+      required: [replicaId, httpStatus, failingChecks, failures]
+      properties:
+        replicaId:
+          type: string
+          description: |
+            The /healthz + /readyz `replicaId` field the panel groups
+            on. Falls back to `pid:<n>` on dev replicas without a
+            platform-set HOSTNAME.
+        httpStatus:
+          type: integer
+          description: HTTP status the panel observed from /readyz for this replica.
+        failingChecks:
+          type: array
+          items: { type: string }
+          description: |
+            Names of checks that were `failed` in the /readyz body.
+            Surfaced separately so on-call can scan the failing
+            dependency list without parsing the full failures map.
+        failures:
+          type: object
+          additionalProperties: { type: string }
+          description: The /readyz body's `failures` map, copied verbatim.
+        consecutivePolls:
+          type: integer
+          minimum: 1
+          description: |
+            How many consecutive polls the panel observed this replica
+            as degraded before reporting. Echoed in the Sentry payload
+            so on-call can see whether this was the second consecutive
+            poll (the threshold) or a sustained outage the panel has
+            been watching for many cycles.
+    ReplicaDegradedReportResult:
+      type: object
+      required: [emitted, replicaId]
+      properties:
+        emitted:
+          type: boolean
+          description: True when this report fired a fresh Sentry event.
+        dedupReason:
+          type: string
+          enum: [within_cooldown]
+          description: Reason the report was deduped (only set when emitted=false).
+        replicaId: { type: string }
+    ReplicaRecoveredReport:
+      type: object
+      required: [replicaId]
+      properties:
+        replicaId: { type: string }
+    ReplicaRecoveredReportResult:
+      type: object
+      required: [emitted, replicaId]
+      properties:
+        emitted:
+          type: boolean
+          description: True when an open alert was closed (Sentry recovery emitted).
+        replicaId: { type: string }
+
+
+    ReconciliationRun:
+      type: object
+      required: [id, gateway, status, ranAtIso]
+      properties:
+        id: { type: string }
+        gateway: { type: string }
+        windowStartIso: { type: string }
+        windowEndIso: { type: string }
+        ledgerCount: { type: integer }
+        settlementCount: { type: integer }
+        matchedCount: { type: integer }
+        mismatches: { type: array, items: { type: object, additionalProperties: true } }
+        status: { type: string }
+        errorMessage: { type: ["string", "null"] }
+        ranAtIso: { type: string }
+
+    ReturnRecord:
+      type: object
+      required: [id, userId, orderId, productTitle, refundAmountMinor, currencyCode, reason, reasonLabel, notes, photoCount, status, timeline, dispute, createdAtIso]
+      properties:
+        id: { type: string }
+        userId: { type: string }
+        orderId: { type: string }
+        productTitle: { type: string }
+        productImage: { type: ["string", "null"] }
+        refundAmountMinor: { type: integer }
+        currencyCode: { type: string }
+        reason: { type: string }
+        reasonLabel: { type: string }
+        notes: { type: string }
+        photoCount: { type: integer }
+        status: { type: string }
+        timeline:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        dispute:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        createdAtIso: { type: string }
+    CreateReturnBody:
+      type: object
+      additionalProperties: true
+
+    WalletTxn:
+      type: object
+      required: [id, kind, amountMinor, label, atIso]
+      properties:
+        id: { type: string }
+        kind: { type: string }
+        amountMinor: { type: integer }
+        label: { type: string }
+        refId: { type: ["string", "null"] }
+        atIso: { type: string }
+    Wallet:
+      type: object
+      required: [balanceMinor, currencyCode, txns]
+      properties:
+        balanceMinor: { type: integer }
+        currencyCode: { type: string }
+        txns:
+          type: array
+          items: { $ref: "#/components/schemas/WalletTxn" }
+
+    WalletTopupResponse:
+      type: object
+      required: [balanceMinor, currencyCode, txns]
+      properties:
+        balanceMinor: { type: integer }
+        currencyCode: { type: string }
+        txns: { type: array, items: { $ref: "#/components/schemas/WalletTxn" } }
+        pendingTopup:
+          type: object
+          required: [intentId, reference, gateway, amountMinor, status]
+          properties:
+            intentId: { type: string }
+            reference: { type: string }
+            gateway: { type: string }
+            amountMinor: { type: integer }
+            authorizationUrl: { type: ["string", "null"] }
+            status: { type: string }
+
+    WalletWithdrawResponse:
+      type: object
+      required: [balanceMinor, currencyCode, txns]
+      properties:
+        balanceMinor: { type: integer }
+        currencyCode: { type: string }
+        txns: { type: array, items: { $ref: "#/components/schemas/WalletTxn" } }
+        pendingWithdrawal:
+          type: object
+          required: [payoutId, reference, amountMinor, status]
+          properties:
+            payoutId: { type: string }
+            reference: { type: string }
+            amountMinor: { type: integer }
+            status: { type: string }
+
+    SafetyReport:
+      type: object
+      required: [id, targetKind, targetId, targetLabel, reason, notes, status, blockedAtSubmit, createdAtIso, updatedAtIso]
+      properties:
+        id: { type: string }
+        targetKind: { type: string }
+        targetId: { type: string }
+        targetLabel: { type: string }
+        reason: { type: string }
+        notes: { type: string }
+        status: { type: string }
+        blockedAtSubmit: { type: boolean }
+        # Buyer transparency: linked T&S case id + state (no operator PII).
+        caseId: { type: ["string", "null"] }
+        caseStatus: { type: ["string", "null"] }
+        createdAtIso: { type: string }
+        updatedAtIso: { type: string }
+    SubmitSafetyReportBody:
+      type: object
+      required: [targetKind, targetId, targetLabel, reason]
+      properties:
+        targetKind: { type: string }
+        targetId: { type: string }
+        targetLabel: { type: string }
+        reason: { type: string }
+        notes: { type: string }
+        blockSeller: { type: boolean }
+        sellerName: { type: string }
+    BlockedSeller:
+      type: object
+      required: [sellerName, reason, atIso]
+      properties:
+        sellerName: { type: string }
+        reason: { type: string }
+        atIso: { type: string }
+
+    Onboarding:
+      type: object
+      required: [completed, interests, notificationsOptIn]
+      properties:
+        completed: { type: boolean }
+        interests:
+          type: array
+          items: { type: string }
+        notificationsOptIn: { type: boolean }
+        completedAtIso: { type: ["string", "null"] }
+
+    NotificationPrefs:
+      type: object
+      required:
+        [
+          liveDrops,
+          orderUpdates,
+          marketing,
+          promos,
+          referrals,
+          walletCredits,
+          whatsapp,
+          sms,
+          push,
+          email,
+          quietHoursEnabled,
+          timezone,
+        ]
+      properties:
+        liveDrops: { type: boolean }
+        orderUpdates: { type: boolean }
+        marketing: { type: boolean }
+        promos: { type: boolean }
+        referrals: { type: boolean }
+        walletCredits: { type: boolean }
+        whatsapp: { type: boolean }
+        sms: { type: boolean }
+        push: { type: boolean }
+        email: { type: boolean }
+        whatsappNumber: { type: string }
+        smsNumber: { type: string }
+        quietHoursEnabled: { type: boolean }
+        quietHoursStartMinutes: { type: ["integer", "null"] }
+        quietHoursEndMinutes: { type: ["integer", "null"] }
+        timezone: { type: string }
+
+    OtpStartBody:
+      type: object
+      required: [phone, channel]
+      properties:
+        phone: { type: string }
+        channel: { type: string, enum: [sms, whatsapp] }
+    OtpStartResponse:
+      type: object
+      required: [ok]
+      properties:
+        ok: { type: boolean }
+        otpId: { type: string }
+        devCode: { type: string }
+        expiresInSec: { type: integer }
+    OtpVerifyBody:
+      type: object
+      required: [phone, code]
+      properties:
+        phone: { type: string }
+        code: { type: string }
+    OtpVerifyResponse:
+      type: object
+      required: [ok]
+      properties:
+        ok: { type: boolean }
+        ticket: { type: string }
+        noClerk: { type: boolean }
+        userId: { type: string }
+    PhoneLinkBody:
+      type: object
+      required: [phone, code]
+      properties:
+        phone: { type: string }
+        code: { type: string }
+    PushTokenBody:
+      type: object
+      required: [kind, token]
+      properties:
+        kind: { type: string, enum: [fcm, webpush] }
+        token: { type: string }
+        endpoint: { type: string }
+        p256dh: { type: string }
+        auth: { type: string }
+        userAgent: { type: string }
+    PushTokenRegistered:
+      type: object
+      required: [ok]
+      properties:
+        ok: { type: boolean }
+        id: { type: string }
+    VapidPublicKey:
+      type: object
+      required: [publicKey]
+      properties:
+        publicKey:
+          type: string
+          nullable: true
+          description: Base64url VAPID public key, or null when web push is not configured on the server.
+    GoLiveResponse:
+      type: object
+      required: [ok, fanout]
+      properties:
+        ok: { type: boolean }
+        fanout: { type: boolean }
+    StreamingProviderInfo:
+      type: object
+      required: [provider, webhookConfigured]
+      properties:
+        provider: { type: string, enum: [stub, cloudflare] }
+        webhookConfigured: { type: boolean }
+    StreamWithSecrets:
+      type: object
+      required: [id, title, hostName, hostAvatar, posterImage, status, isLive, provider, currentViewers, peakViewers, slowModeSeconds, bannedWords]
+      properties:
+        id: { type: string }
+        title: { type: string }
+        hostName: { type: string }
+        hostAvatar: { type: string }
+        posterImage: { type: string }
+        currentProductId: { type: string, nullable: true }
+        status: { type: string, enum: [idle, live, ended] }
+        isLive: { type: boolean }
+        provider: { type: string, enum: [stub, cloudflare] }
+        cfInputId: { type: string, nullable: true }
+        rtmpUrl: { type: string, nullable: true }
+        rtmpStreamKey: { type: string, nullable: true }
+        whipUrl: { type: string, nullable: true }
+        hlsUrl: { type: string, nullable: true }
+        currentViewers: { type: integer }
+        peakViewers: { type: integer }
+        slowModeSeconds: { type: integer }
+        bannedWords:
+          type: array
+          items: { type: string }
+        startedAtIso: { type: string, nullable: true }
+        endedAtIso: { type: string, nullable: true }
+        keyRotatedAtIso: { type: string, nullable: true }
+    StreamPlayback:
+      type: object
+      required: [id, status, provider, currentViewers, peakViewers, title, hostName, isLive, slowModeSeconds, bannedWords]
+      properties:
+        id: { type: string }
+        status: { type: string, enum: [idle, live, ended] }
+        hlsUrl: { type: string, nullable: true }
+        provider: { type: string, enum: [stub, cloudflare] }
+        currentViewers: { type: integer }
+        peakViewers: { type: integer }
+        title: { type: string }
+        hostName: { type: string }
+        hostAvatar: { type: string, nullable: true }
+        posterImage: { type: string, nullable: true }
+        currentProductId: { type: string, nullable: true }
+        isLive: { type: boolean }
+        startedAtIso: { type: string, nullable: true }
+        endedAtIso: { type: string, nullable: true }
+        slowModeSeconds: { type: integer }
+        bannedWords:
+          type: array
+          items: { type: string }
+    StreamChatMessage:
+      type: object
+      required: [id, streamId, username, text, role, createdAtIso]
+      properties:
+        id: { type: string }
+        streamId: { type: string }
+        username: { type: string }
+        text: { type: string }
+        role: { type: string, enum: [host, viewer, mod] }
+        createdAtIso: { type: string }
+    StreamModConfig:
+      type: object
+      required: [id, slowModeSeconds, bannedWords]
+      properties:
+        id: { type: string }
+        slowModeSeconds: { type: integer }
+        bannedWords:
+          type: array
+          items: { type: string }
+    StreamModerator:
+      type: object
+      required: [userId, username, grantedBy, grantedAtIso]
+      properties:
+        userId: { type: string }
+        username: { type: string }
+        grantedBy: { type: string }
+        grantedAtIso: { type: string }
+    StreamReactionBucket:
+      type: object
+      required: [bucketAtIso, kind, count]
+      properties:
+        bucketAtIso: { type: string }
+        kind: { type: string }
+        count: { type: integer }
+    Ok:
+      type: object
+      required: [ok]
+      properties:
+        ok: { type: boolean }
+
+    MfaStatus:
+      type: object
+      required:
+        [
+          enrolled,
+          kind,
+          enrolledAt,
+          lastUsedAt,
+          backupCodesRemaining,
+          recentlyAsserted,
+          sessionVerified,
+          required,
+          requiredReason,
+          velocityNgnMinor,
+          velocityThresholdNgnMinor,
+        ]
+      properties:
+        enrolled: { type: boolean }
+        kind: { type: ["string", "null"], enum: ["totp", null] }
+        enrolledAt: { type: ["string", "null"] }
+        lastUsedAt: { type: ["string", "null"] }
+        backupCodesRemaining: { type: integer }
+        recentlyAsserted: { type: boolean }
+        sessionVerified:
+          type: boolean
+          description: >-
+            True when the current Clerk session has a verified second factor
+            (the `fva` JWT claim reports a non-negative second-factor
+            verification age). Source of truth for whether the operator-MFA
+            gate (`requireRole`) will let admin-console requests through:
+            even an enrolled operator must re-verify in the active session
+            before they can act, so a stolen primary session cannot be
+            weaponised. Stays in sync with Clerk-native factors (TOTP,
+            passkey, WebAuthn) — not only the in-house TOTP enrolment.
+        required: { type: boolean }
+        requiredReason:
+          type: ["string", "null"]
+          enum: ["admin_role", "high_velocity", null]
+        velocityNgnMinor: { type: integer }
+        velocityThresholdNgnMinor: { type: integer }
+    MfaSetupBody:
+      type: object
+      properties:
+        accountLabel: { type: string, description: "Label rendered in the authenticator app (defaults to user id)." }
+    MfaSetupResult:
+      type: object
+      required: [enrollmentId, otpauthUrl, qrCodeDataUrl, secret, backupCodes]
+      properties:
+        enrollmentId: { type: string }
+        otpauthUrl: { type: string }
+        qrCodeDataUrl: { type: string }
+        secret: { type: string }
+        backupCodes:
+          type: array
+          items: { type: string }
+    MfaVerifyBody:
+      type: object
+      required: [code]
+      properties:
+        code: { type: string, description: "6-digit TOTP code." }
+        mode:
+          type: string
+          enum: [activate, assert]
+          description: "activate flips a pending enrolment to active; assert satisfies a recent challenge for an already-active factor."
+    MfaBackupCodeBody:
+      type: object
+      required: [code]
+      properties:
+        code: { type: string }
+    MfaBackupCodesResult:
+      type: object
+      required: [backupCodes]
+      properties:
+        backupCodes:
+          type: array
+          items: { type: string }
+          description: "Plaintext single-use backup codes. Returned ONCE; not recoverable after this response."
+    MfaSecurityAlert:
+      type: object
+      required: [id, action, occurredAt]
+      properties:
+        id: { type: string }
+        action:
+          type: string
+          description: "Audit action name. Always begins with `mfa.` (e.g. `mfa.totp.activated`, `mfa.disabled`, `mfa.backup_codes.regenerated`, `mfa.security_alert.reviewed`)."
+        occurredAt: { type: string, format: date-time }
+        payload:
+          description: "Free-form forensic context recorded with the audit row (IP, UA, geo, etc.). Shape depends on the action."
+          nullable: true
+
+    ReferralActivity:
+      type: object
+      required: [id, inviteeHandle, status, rewardMinor, atIso]
+      properties:
+        id: { type: string }
+        inviteeHandle: { type: string }
+        status: { type: string }
+        rewardMinor: { type: integer }
+        atIso: { type: string }
+    ReferralHub:
+      type: object
+      required: [code, shareLink, activity]
+      properties:
+        code: { type: string }
+        shareLink: { type: string }
+        activity:
+          type: array
+          items: { $ref: "#/components/schemas/ReferralActivity" }
+
+    Review:
+      type: object
+      required: [id, userId, orderId, productId, sellerName, rating, text, createdAtIso]
+      properties:
+        id: { type: string }
+        userId: { type: string }
+        orderId: { type: string }
+        productId: { type: string }
+        sellerName: { type: string }
+        rating: { type: integer }
+        text: { type: string }
+        createdAtIso: { type: string }
+
+    SellerProfile:
+      type: object
+      required: [status, tier, mode]
+      properties:
+        status: { type: string }
+        tier: { type: string }
+        mode: { type: string }
+        application:
+          type: object
+          additionalProperties: true
+        stats:
+          type: object
+          additionalProperties: true
+
+    SellerListing:
+      type: object
+      required: [id, title, priceMinor, countryCode, category, inventory, status, createdAtIso]
+      properties:
+        id: { type: string }
+        title: { type: string }
+        priceMinor: { type: integer }
+        countryCode: { type: string }
+        category: { type: string }
+        inventory: { type: integer }
+        status: { type: string }
+        createdAtIso: { type: string }
+
+    SellerOrder:
+      type: object
+      required: [id, buyerName, buyerHandle, productTitle, productImage, qty, unitPriceMinor, countryCode, currencyCode, status, fulfillmentLabel, placedAtIso]
+      properties:
+        id: { type: string }
+        buyerName: { type: string }
+        buyerHandle: { type: string }
+        buyerAvatar: { type: ["string", "null"] }
+        productTitle: { type: string }
+        productImage: { type: string }
+        qty: { type: integer }
+        unitPriceMinor: { type: integer }
+        countryCode: { type: string }
+        currencyCode: { type: string }
+        status: { type: string }
+        fulfillmentLabel: { type: string }
+        pickupOtp: { type: ["string", "null"] }
+        pickupLocationName: { type: ["string", "null"] }
+        trackingNote: { type: ["string", "null"] }
+        placedAtIso: { type: string }
+        shippedAtIso: { type: ["string", "null"] }
+        deliveredAtIso: { type: ["string", "null"] }
+
+    SellerStreamRecord:
+      type: object
+      required: [id, title, category, startedAtIso, durationMinutes, peakViewers, totalViewers, ordersCount, grossMinor, posterImage, productIds]
+      properties:
+        id: { type: string }
+        title: { type: string }
+        category: { type: string }
+        startedAtIso: { type: string }
+        durationMinutes: { type: integer }
+        peakViewers: { type: integer }
+        totalViewers: { type: integer }
+        ordersCount: { type: integer }
+        grossMinor: { type: integer }
+        posterImage: { type: string }
+        productIds:
+          type: array
+          items: { type: string }
+
+    Payout:
+      type: object
+      required: [id, requestedAtIso, amountMinor, status, bankLabel, bankLast4, reference]
+      properties:
+        id: { type: string }
+        requestedAtIso: { type: string }
+        amountMinor: { type: integer }
+        status: { type: string }
+        bankLabel: { type: string }
+        bankLast4: { type: string }
+        reference: { type: string }
+        paidAtIso: { type: ["string", "null"] }
+
+    EarningsSummary:
+      type: object
+      required: [lifetimeGmvMinor, thisMonthGmvMinor, commissionMinor, netLifetimeMinor, pendingPayoutMinor, paidOutMinor, availableMinor, ordersTotal, ordersPending, payouts, payoutThresholdMinor, holdDays]
+      properties:
+        lifetimeGmvMinor: { type: integer }
+        thisMonthGmvMinor: { type: integer }
+        commissionMinor: { type: integer }
+        netLifetimeMinor: { type: integer }
+        pendingPayoutMinor: { type: integer }
+        paidOutMinor: { type: integer }
+        availableMinor: { type: integer }
+        ordersTotal: { type: integer }
+        ordersPending: { type: integer }
+        payouts:
+          type: array
+          items: { $ref: "#/components/schemas/Payout" }
+        payoutThresholdMinor: { type: integer }
+        holdDays: { type: integer }
+
+    # KYC tier status returned by GET /kyc/me. The seller sees their
+    # current tier, the rolling-30d-driven required tier, the docs they've
+    # already uploaded, and the list of doc kinds still missing for the
+    # next tier.
+    KycStatus:
+      type: object
+      required: [kycTier, requiredKycTier, rolling30dGmvMinor, thresholds, documents, verifications]
+      properties:
+        kycTier: { type: integer, enum: [1, 2, 3] }
+        requiredKycTier: { type: integer, enum: [1, 2, 3] }
+        rolling30dGmvMinor: { type: integer }
+        thresholds:
+          type: object
+          required: [tier2Minor, tier3Minor]
+          properties:
+            tier2Minor: { type: integer }
+            tier3Minor: { type: integer }
+        documents:
+          type: array
+          items:
+            type: object
+            required: [id, kind, filename, status, createdAtIso]
+            properties:
+              id: { type: string }
+              kind: { type: string }
+              filename: { type: string }
+              status: { type: string }
+              createdAtIso: { type: string }
+        verifications:
+          type: array
+          items:
+            type: object
+            required: [id, kind, status]
+            properties:
+              id: { type: string }
+              kind: { type: string }
+              status: { type: string }
+              targetTier: { type: ["integer", "null"] }
+              reviewerNote: { type: ["string", "null"] }
+              submittedAtIso: { type: ["string", "null"] }
+              reviewedAtIso: { type: ["string", "null"] }
+
+    AdminKycVerification:
+      type: object
+      required: [id, userId, kind, status, createdAtIso]
+      properties:
+        id: { type: string }
+        userId: { type: string }
+        kind: { type: string }
+        status: { type: string }
+        submittedAtIso: { type: ["string", "null"] }
+        createdAtIso: { type: string }
+    AdminKycDocument:
+      type: object
+      required: [id, kind, filename, contentType, sizeBytes, sha256, status, createdAtIso]
+      properties:
+        id: { type: string }
+        kind: { type: string }
+        filename: { type: string }
+        contentType: { type: string }
+        sizeBytes: { type: integer }
+        sha256: { type: string }
+        status: { type: string }
+        createdAtIso: { type: string }
+    AdminKycVerificationDetail:
+      type: object
+      required: [id, userId, kind, status, targetTier, reviewerNote, documents, createdAtIso]
+      properties:
+        id: { type: string }
+        userId: { type: string }
+        kind: { type: string }
+        status: { type: string }
+        targetTier: { type: integer }
+        reviewerNote: { type: string }
+        reviewedBy: { type: ["string", "null"] }
+        reviewedAtIso: { type: ["string", "null"] }
+        submittedAtIso: { type: ["string", "null"] }
+        createdAtIso: { type: string }
+        documents:
+          type: array
+          items: { $ref: "#/components/schemas/AdminKycDocument" }
+    AdminKycDocumentBlob:
+      type: object
+      required: [id, kind, filename, contentType, sizeBytes, sha256, blobBase64]
+      properties:
+        id: { type: string }
+        kind: { type: string }
+        filename: { type: string }
+        contentType: { type: string }
+        sizeBytes: { type: integer }
+        sha256: { type: string }
+        blobBase64: { type: string }
+    AdminSanctionsHit:
+      type: object
+      required: [id, userId, subjectKind, provider, subjectName, subjectCountry, matchScore, status, listHits, note, createdAtIso]
+      properties:
+        id: { type: string }
+        userId: { type: string }
+        subjectKind: { type: string }
+        provider: { type: string }
+        subjectName: { type: string }
+        subjectCountry: { type: string }
+        matchScore: { type: integer }
+        status: { type: string }
+        note: { type: string }
+        nextReviewAtIso: { type: ["string", "null"] }
+        createdAtIso: { type: string }
+        listHits:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+    AdminSanctionsPage:
+      type: object
+      required: [items, totalCount]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/AdminSanctionsHit" }
+        totalCount: { type: integer }
+    AdminNdprRow:
+      type: object
+      required: [id, userId, kind, status, createdAtIso]
+      properties:
+        id: { type: string }
+        userId: { type: string }
+        kind: { type: string }
+        status: { type: string }
+        createdAtIso: { type: string }
+        effectiveAtIso: { type: ["string", "null"] }
+        completedAtIso: { type: ["string", "null"] }
+        cancelledAtIso: { type: ["string", "null"] }
+        failureReason: { type: ["string", "null"] }
+    AdminNdprPage:
+      type: object
+      required: [items, totalCount]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/AdminNdprRow" }
+        totalCount: { type: integer }
+    AdminAuditEvent:
+      type: object
+      required: [seq, action, entity, entityId, piiRead, payload, createdAtIso]
+      properties:
+        seq: { type: integer }
+        actorId: { type: ["string", "null"] }
+        action: { type: string }
+        entity: { type: string }
+        entityId: { type: string }
+        piiRead: { type: boolean }
+        payload:
+          type: object
+          additionalProperties: true
+        createdAtIso: { type: string }
+    AdminAuditPage:
+      type: object
+      required: [items, totalCount]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/AdminAuditEvent" }
+        totalCount: { type: integer }
+    AdminRateLimitEvent:
+      type: object
+      required: [id, identity, route, tier, tsIso]
+      properties:
+        id: { type: string }
+        identity: { type: string, description: "Identity bucket key — e.g. 'user:abc' or 'ip:1.2.3.4'." }
+        route: { type: string, description: "Request path the rate limit fired on." }
+        tier: { type: string, description: "anon | buyer | seller | admin" }
+        tsIso: { type: string }
+    AdminRateLimitEventPage:
+      type: object
+      required: [items, totalCount]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/AdminRateLimitEvent" }
+        totalCount: { type: integer }
+
+    NdprRequest:
+      type: object
+      required: [id, kind, status, createdAtIso]
+      properties:
+        id: { type: string }
+        kind: { type: string, description: "export | erase | rectify | restrict | portability" }
+        status: { type: string }
+        createdAtIso: { type: string }
+        effectiveAtIso: { type: ["string", "null"] }
+        completedAtIso: { type: ["string", "null"] }
+        cancelledAtIso: { type: ["string", "null"] }
+        bundleToken: { type: ["string", "null"] }
+        bundlePayload:
+          oneOf:
+            - { type: "null" }
+            - { type: object, additionalProperties: true }
+        requestBody:
+          oneOf:
+            - { type: "null" }
+            - { type: object, additionalProperties: true }
+        failureReason: { type: ["string", "null"] }
+
+    AdminDashboard:
+      type: object
+      required: [openCases, dueSoon, pendingDisputes, csamCases, takedowns7d, heldPayouts, moderationProvider, degraded]
+      properties:
+        openCases: { type: integer }
+        dueSoon: { type: integer }
+        pendingDisputes: { type: integer }
+        csamCases: { type: integer }
+        takedowns7d: { type: integer }
+        heldPayouts: { type: integer }
+        moderationProvider: { type: string }
+        degraded: { type: boolean }
+        degradedReason: { type: ["string", "null"] }
+    UserRoles:
+      type: object
+      required: [userId, roles]
+      properties:
+        userId: { type: string }
+        roles:
+          type: array
+          items: { type: string }
+    ModerationCase:
+      type: object
+      required: [id, kind, targetKind, targetId, severity, state, decisionReason, evidence, createdAtIso, updatedAtIso]
+      properties:
+        id: { type: string }
+        kind: { type: string }
+        targetKind: { type: string }
+        targetId: { type: string }
+        severity: { type: string }
+        state: { type: string }
+        assignedTo: { type: ["string", "null"] }
+        slaDueAtIso: { type: ["string", "null"] }
+        decision: { type: ["string", "null"] }
+        decisionReason: { type: string }
+        decidedAtIso: { type: ["string", "null"] }
+        decidedBy: { type: ["string", "null"] }
+        evidence: { type: object, additionalProperties: true }
+        sourceUserId: { type: ["string", "null"] }
+        sourceReportId: { type: ["string", "null"] }
+        takedownId: { type: ["string", "null"] }
+        createdAtIso: { type: string }
+        updatedAtIso: { type: string }
+    ModerationScan:
+      type: object
+      required: [id, provider, decision, scores, csamMatch, scannedAtIso]
+      properties:
+        id: { type: string }
+        provider: { type: string }
+        decision: { type: string }
+        scores: { type: object, additionalProperties: true }
+        csamMatch: { type: boolean }
+        scannedAtIso: { type: string }
+    ModerationCaseDetail:
+      allOf:
+        - { $ref: "#/components/schemas/ModerationCase" }
+        - type: object
+          required: [scans]
+          properties:
+            scans:
+              type: array
+              items: { $ref: "#/components/schemas/ModerationScan" }
+    CasePage:
+      type: object
+      required: [items, totalCount]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/ModerationCase" }
+        totalCount: { type: integer }
+    DisputeReturnRow:
+      type: object
+      required: [id, orderId, productTitle, status, refundAmountMinor, currencyCode, reason, reasonLabel]
+      properties:
+        id: { type: string }
+        orderId: { type: string }
+        productTitle: { type: string }
+        status: { type: string }
+        refundAmountMinor: { type: integer }
+        currencyCode: { type: string }
+        reason: { type: string }
+        reasonLabel: { type: string }
+    DisputeCase:
+      allOf:
+        - { $ref: "#/components/schemas/ModerationCase" }
+        - type: object
+          properties:
+            returnRow:
+              oneOf:
+                - { type: "null" }
+                - { $ref: "#/components/schemas/DisputeReturnRow" }
+    DisputePage:
+      type: object
+      required: [items, totalCount]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/DisputeCase" }
+        totalCount: { type: integer }
+    PayoutOpsRow:
+      type: object
+      required: [id, userId, amountMinor, currencyCode, status, kind, gateway, requestedAtIso]
+      properties:
+        id: { type: string }
+        userId: { type: string }
+        sellerId: { type: ["string", "null"] }
+        orderId: { type: ["string", "null"] }
+        amountMinor: { type: integer }
+        currencyCode: { type: string }
+        status: { type: string }
+        kind: { type: string }
+        gateway: { type: string }
+        gatewayReference: { type: ["string", "null"] }
+        holdUntilIso: { type: ["string", "null"] }
+        errorMessage: { type: ["string", "null"] }
+        requestedAtIso: { type: string }
+        paidAtIso: { type: ["string", "null"] }
+    PayoutOpsPage:
+      type: object
+      required: [items, totalCount]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/PayoutOpsRow" }
+        totalCount: { type: integer }
+    PayoutAction:
+      type: object
+      required: [id, payoutId, action, actorUserId, reason, createdAtIso]
+      properties:
+        id: { type: string }
+        payoutId: { type: string }
+        action: { type: string }
+        actorUserId: { type: string }
+        reason: { type: string }
+        createdAtIso: { type: string }
+    Takedown:
+      type: object
+      required: [id, targetKind, targetId, reasonCode]
+      properties:
+        id: { type: string }
+        targetKind: { type: string }
+        targetId: { type: string }
+        reasonCode: { type: string }
+        actorUserId: { type: string }
+        notifiedAtIso: { type: ["string", "null"] }
+        notes: { type: string }
+        createdAtIso: { type: string }
+        # Buyer transparency: linked T&S case id + state, surfaced on
+        # /admin/takedowns/mine so the appeal CTA can reflect whether
+        # an appeal is already in flight.
+        caseId: { type: ["string", "null"] }
+        caseStatus: { type: ["string", "null"] }
+    # Seller-facing variant of `Takedown` returned by /admin/takedowns/mine.
+    # Intentionally omits `actorUserId` so the moderator's identity is
+    # never disclosed to the affected user. Operator-facing endpoints
+    # continue to use the full `Takedown` schema.
+    OwnerTakedown:
+      type: object
+      required: [id, targetKind, targetId, reasonCode]
+      properties:
+        id: { type: string }
+        targetKind: { type: string }
+        targetId: { type: string }
+        reasonCode: { type: string }
+        notifiedAtIso: { type: ["string", "null"] }
+        notes: { type: string }
+        createdAtIso: { type: string }
+        caseId: { type: ["string", "null"] }
+        caseStatus: { type: ["string", "null"] }
+    TakedownAppealResult:
+      type: object
+      required: [id, caseId, caseStatus, appealedAtIso]
+      properties:
+        id: { type: string }
+        caseId: { type: string }
+        caseStatus: { type: string }
+        appealedAtIso: { type: string }
+    ModerationScanResult:
+      type: object
+      required: [blocked, decision, scanId]
+      properties:
+        blocked: { type: boolean }
+        caseId: { type: ["string", "null"] }
+        decision: { type: string }
+        scanId: { type: string }
+        csamMatch: { type: boolean }
+
+    # ---- Manufacturer & wholesale schemas ---------------------------------
+    ManufacturerStatus:
+      type: string
+      enum: [pending, review, approved, rejected, suspended]
+    Manufacturer:
+      type: object
+      required: [id, userId, originCountry, legalName, contactEmail, contactPhone, exportLicenceNumber, status, application, createdAtIso, updatedAtIso]
+      properties:
+        id: { type: string }
+        userId: { type: string }
+        originCountry: { type: string }
+        legalName: { type: string }
+        contactEmail: { type: string }
+        contactPhone: { type: ["string", "null"] }
+        exportLicenceNumber: { type: ["string", "null"] }
+        status: { $ref: "#/components/schemas/ManufacturerStatus" }
+        application:
+          oneOf:
+            - { type: "null" }
+            - { type: object, additionalProperties: true }
+        createdAtIso: { type: string }
+        updatedAtIso: { type: string }
+    ManufacturerMeStatus:
+      type: string
+      description: |
+        `none` when the signed-in user has not started a manufacturer
+        application yet; otherwise mirrors `Manufacturer.status`.
+      enum: [none, pending, review, approved, rejected, suspended]
+    ManufacturerMeResponse:
+      type: object
+      required: [status, manufacturer]
+      properties:
+        status: { $ref: "#/components/schemas/ManufacturerMeStatus" }
+        manufacturer:
+          oneOf:
+            - { type: "null" }
+            - { $ref: "#/components/schemas/Manufacturer" }
+    ManufacturerApplyBody:
+      type: object
+      required: [originCountry, legalName]
+      properties:
+        originCountry: { type: string }
+        legalName: { type: string }
+        contactEmail: { type: string }
+        contactPhone: { type: string }
+        exportLicenceNumber: { type: string }
+        application: { type: object, additionalProperties: true }
+    ManufacturerKycStatus:
+      type: string
+      enum: [pending, approved, rejected]
+    ManufacturerKyc:
+      type: object
+      required: [id, manufacturerId, kind, documentUrl, status, reviewedBy, reviewedAtIso, rejectReason, createdAtIso, updatedAtIso]
+      properties:
+        id: { type: string }
+        manufacturerId: { type: string }
+        kind: { type: string }
+        documentUrl: { type: string }
+        status: { $ref: "#/components/schemas/ManufacturerKycStatus" }
+        reviewedBy: { type: ["string", "null"] }
+        reviewedAtIso: { type: ["string", "null"] }
+        rejectReason: { type: ["string", "null"] }
+        createdAtIso: { type: string }
+        updatedAtIso: { type: string }
+    ManufacturerKycUploadBody:
+      type: object
+      required: [kind, documentUrl]
+      properties:
+        kind:
+          type: string
+          enum: [export_licence, business_registration, tax_id, ubo, factory_audit]
+        documentUrl: { type: string }
+    ManufacturerListingStatus:
+      type: string
+      enum: [draft, active, paused]
+    ManufacturerListing:
+      type: object
+      required: [id, manufacturerId, sku, title, description, hsCode, originCountry, originCurrencyCode, wholesalePriceMinor, moq, leadDays, weightGrams, dimensions, images, category, status, createdAtIso, updatedAtIso]
+      properties:
+        id: { type: string }
+        manufacturerId: { type: string }
+        sku: { type: string }
+        title: { type: string }
+        description: { type: string }
+        hsCode: { type: string }
+        originCountry: { type: string }
+        originCurrencyCode: { type: string }
+        wholesalePriceMinor: { type: integer }
+        moq: { type: integer }
+        leadDays: { type: integer }
+        weightGrams: { type: integer }
+        dimensions:
+          oneOf:
+            - { type: "null" }
+            - { type: object, additionalProperties: true }
+        images: { type: array, items: { type: string } }
+        category: { type: string }
+        status: { $ref: "#/components/schemas/ManufacturerListingStatus" }
+        createdAtIso: { type: string }
+        updatedAtIso: { type: string }
+    ManufacturerListingCreateBody:
+      type: object
+      required: [title, hsCode, originCurrencyCode, wholesalePriceMinor]
+      properties:
+        sku: { type: string }
+        title: { type: string }
+        description: { type: string }
+        hsCode: { type: string }
+        originCurrencyCode: { type: string }
+        wholesalePriceMinor: { type: integer, minimum: 1 }
+        moq: { type: integer, minimum: 1 }
+        leadDays: { type: integer, minimum: 0 }
+        weightGrams: { type: integer, minimum: 0 }
+        dimensions: { type: object, additionalProperties: true }
+        images: { type: array, items: { type: string } }
+        category: { type: string }
+    ManufacturerListingUpdateBody:
+      type: object
+      properties:
+        title: { type: string }
+        description: { type: string }
+        hsCode: { type: string }
+        wholesalePriceMinor: { type: integer, minimum: 1 }
+        moq: { type: integer, minimum: 1 }
+        leadDays: { type: integer, minimum: 0 }
+        weightGrams: { type: integer, minimum: 0 }
+        dimensions: { type: object, additionalProperties: true }
+        images: { type: array, items: { type: string } }
+        category: { type: string }
+        status: { $ref: "#/components/schemas/ManufacturerListingStatus" }
+    WholesaleCatalogListing:
+      type: object
+      description: |
+        Subset of ManufacturerListing exposed on the public wholesale catalog
+        — drops the lifecycle status and timestamps that only the manufacturer
+        and the admin console need to see.
+      required: [id, manufacturerId, sku, title, description, hsCode, originCountry, originCurrencyCode, wholesalePriceMinor, moq, leadDays, weightGrams, images, category]
+      properties:
+        id: { type: string }
+        manufacturerId: { type: string }
+        sku: { type: string }
+        title: { type: string }
+        description: { type: string }
+        hsCode: { type: string }
+        originCountry: { type: string }
+        originCurrencyCode: { type: string }
+        wholesalePriceMinor: { type: integer }
+        moq: { type: integer }
+        leadDays: { type: integer }
+        weightGrams: { type: integer }
+        images: { type: array, items: { type: string } }
+        category: { type: string }
+    ShipMode:
+      type: string
+      enum: [air, sea]
+    WholesaleOrder:
+      type: object
+      required: [id, listingId, manufacturerId, sellerUserId, qty, fobMinor, originCurrencyCode, freightMinor, insuranceMinor, dutyMinor, vatMinor, clearanceMinor, landedTotalMinor, destinationCurrencyCode, destinationCountryCode, fxRate, status, freightBookingId, etaIso, shipMode, notes, createdAtIso, updatedAtIso]
+      properties:
+        id: { type: string }
+        listingId: { type: string }
+        manufacturerId: { type: string }
+        sellerUserId: { type: string }
+        qty: { type: integer }
+        fobMinor: { type: integer }
+        originCurrencyCode: { type: string }
+        freightMinor: { type: integer }
+        insuranceMinor: { type: integer }
+        dutyMinor: { type: integer }
+        vatMinor: { type: integer }
+        clearanceMinor: { type: integer }
+        landedTotalMinor: { type: integer }
+        destinationCurrencyCode: { type: string }
+        destinationCountryCode: { type: string }
+        fxRate: { type: number }
+        status: { type: string }
+        freightBookingId: { type: ["string", "null"] }
+        etaIso: { type: ["string", "null"] }
+        shipMode: { type: ["string", "null"] }
+        notes: { type: ["string", "null"] }
+        createdAtIso: { type: string }
+        updatedAtIso: { type: string }
+    CustomsEvent:
+      type: object
+      required: [id, kind, note, payload, createdAtIso]
+      properties:
+        id: { type: string }
+        kind: { type: string }
+        note: { type: ["string", "null"] }
+        payload:
+          oneOf:
+            - { type: "null" }
+            - { type: object, additionalProperties: true }
+        createdAtIso: { type: string }
+    FreightBookingView:
+      type: object
+      required: [id, mode, forwarder, ref, originPort, destinationPort, status, etaIso, actualEtaIso, costMinor, currencyCode]
+      properties:
+        id: { type: string }
+        mode: { type: string }
+        forwarder: { type: string }
+        ref: { type: ["string", "null"] }
+        originPort: { type: ["string", "null"] }
+        destinationPort: { type: ["string", "null"] }
+        status: { type: string }
+        etaIso: { type: ["string", "null"] }
+        actualEtaIso: { type: ["string", "null"] }
+        costMinor: { type: ["integer", "null"] }
+        currencyCode: { type: ["string", "null"] }
+    BondedInventoryView:
+      type: object
+      required: [warehouseCode, qtyOnHand, qtyReleased, arrivedAtIso, clearedAtIso, releasedAtIso]
+      properties:
+        warehouseCode: { type: string }
+        qtyOnHand: { type: integer }
+        qtyReleased: { type: integer }
+        arrivedAtIso: { type: ["string", "null"] }
+        clearedAtIso: { type: ["string", "null"] }
+        releasedAtIso: { type: ["string", "null"] }
+    ManufacturerOrderDetail:
+      type: object
+      required: [order, events, booking]
+      properties:
+        order: { $ref: "#/components/schemas/WholesaleOrder" }
+        events:
+          type: array
+          items: { $ref: "#/components/schemas/CustomsEvent" }
+        booking:
+          oneOf:
+            - { type: "null" }
+            - { $ref: "#/components/schemas/FreightBookingView" }
+    WholesaleOrderDetail:
+      type: object
+      required: [order, events, booking, bondedInventory]
+      properties:
+        order: { $ref: "#/components/schemas/WholesaleOrder" }
+        events:
+          type: array
+          items: { $ref: "#/components/schemas/CustomsEvent" }
+        booking:
+          oneOf:
+            - { type: "null" }
+            - { $ref: "#/components/schemas/FreightBookingView" }
+        bondedInventory:
+          oneOf:
+            - { type: "null" }
+            - { $ref: "#/components/schemas/BondedInventoryView" }
+    ManufacturerPayout:
+      type: object
+      required: [id, amountMinor, currencyCode, status, reference, requestedAtIso, paidAtIso]
+      properties:
+        id: { type: string }
+        amountMinor: { type: integer }
+        currencyCode: { type: string }
+        status: { type: string }
+        reference: { type: ["string", "null"] }
+        requestedAtIso: { type: string }
+        paidAtIso: { type: ["string", "null"] }
+    LandedCostBreakdown:
+      type: object
+      required: [fobMinor, fobInDestMinor, freightMinor, insuranceMinor, dutyMinor, vatMinor, clearanceMinor, landedTotalMinor, fxRate, shipMode, etaDays, dutyRate, vatRate]
+      properties:
+        fobMinor: { type: integer }
+        fobInDestMinor: { type: integer }
+        freightMinor: { type: integer }
+        insuranceMinor: { type: integer }
+        dutyMinor: { type: integer }
+        vatMinor: { type: integer }
+        clearanceMinor: { type: integer }
+        landedTotalMinor: { type: integer }
+        fxRate: { type: number }
+        shipMode: { $ref: "#/components/schemas/ShipMode" }
+        etaDays: { type: integer }
+        dutyRate: { type: number }
+        vatRate: { type: number }
+    WholesaleQuoteBody:
+      type: object
+      required: [listingId]
+      properties:
+        listingId: { type: string }
+        qty: { type: integer, minimum: 1 }
+        destinationCountryCode: { type: string }
+        shipMode: { $ref: "#/components/schemas/ShipMode" }
+    WholesaleQuoteResponse:
+      type: object
+      required: [listingId, qty, destinationCountryCode, destinationCurrencyCode, shipMode, leadDays, productionLeadDays, transitDays, breakdown]
+      properties:
+        listingId: { type: string }
+        qty: { type: integer }
+        destinationCountryCode: { type: string }
+        destinationCurrencyCode: { type: string }
+        shipMode: { $ref: "#/components/schemas/ShipMode" }
+        leadDays: { type: integer }
+        productionLeadDays: { type: integer }
+        transitDays: { type: integer }
+        breakdown: { $ref: "#/components/schemas/LandedCostBreakdown" }
+    WholesaleOrderCreateBody:
+      type: object
+      required: [listingId]
+      properties:
+        listingId: { type: string }
+        qty: { type: integer, minimum: 1 }
+        destinationCountryCode: { type: string }
+        shipMode: { $ref: "#/components/schemas/ShipMode" }
+        notes: { type: string }

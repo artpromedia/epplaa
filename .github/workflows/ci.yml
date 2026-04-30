@@ -49,15 +49,22 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: "22"
+          node-version-file: ".nvmrc"
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
 
-      # Repo doesn't yet wire eslint at the root — emit a placeholder until
-      # we standardise on biome or eslint-flat across packages.
+      # Lint placeholder. The flat-config skeleton lives at
+      # eslint.config.mjs (per docs/adr/0002-repository-layout.md) but
+      # ESLint itself is not yet a root devDependency — installing it
+      # would churn pnpm-lock.yaml and is scheduled as its own follow-up
+      # PR per the Phase 0 checklist in
+      # docs/architecture/v4.2-amendment.md.
       - name: Lint (placeholder)
-        run: echo "lint step pending unification"
+        run: |
+          test -f eslint.config.mjs || { echo "eslint.config.mjs missing"; exit 1; }
+          echo "ESLint flat-config skeleton present at eslint.config.mjs."
+          echo "Lint enforcement enabled in a follow-up PR (see docs/architecture/v4.2-amendment.md §Phase 0)."
 
       - name: Typecheck
         run: pnpm run typecheck

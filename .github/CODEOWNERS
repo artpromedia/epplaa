@@ -1,0 +1,30 @@
+# CODEOWNERS — Epplaa monorepo
+#
+# Ownership is documented at the directory level. As the strangler-fig
+# migration progresses (see docs/adr/0001-strangler-fig-migration.md and
+# docs/adr/0002-repository-layout.md) ownership lines will be added per
+# new `services/<name>/` and `apps/<name>/` directory.
+#
+# Default owner — falls through when no more specific rule matches.
+*                                       @artpromedia/epplaa-maintainers
+
+# Architecture, ADRs, and program-level docs.
+/docs/                                  @artpromedia/epplaa-architecture
+/attached_assets/                       @artpromedia/epplaa-architecture
+/SPRINTS.md                             @artpromedia/epplaa-architecture
+
+# CI, security, and ops.
+/.github/                               @artpromedia/epplaa-platform
+/.gitleaks.toml                         @artpromedia/epplaa-security
+/scripts/                               @artpromedia/epplaa-platform
+
+# v4.2 layout (Phase 1 lifted artifacts/* and lib/* into apps/, services/,
+# packages/, and tools/; ownership lines below cover the new homes).
+/apps/                                  @artpromedia/epplaa-frontend
+/apps/mobile/                           @artpromedia/epplaa-mobile
+/services/                              @artpromedia/epplaa-backend
+/services/api-monolith/                 @artpromedia/epplaa-backend
+/packages/                              @artpromedia/epplaa-backend
+/tools/                                 @artpromedia/epplaa-platform
+/infra/                                 @artpromedia/epplaa-platform
+/apis/                                  @artpromedia/epplaa-architecture

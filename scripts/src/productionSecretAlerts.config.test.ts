@@ -28,7 +28,7 @@ describe("PRODUCTION_SECRET_ALERTS", () => {
       expect(alert.summary, alert.messageTag).not.toBe("");
       expect(["sev-1", "sev-2"]).toContain(alert.severity);
       expect(alert.runbookAnchor.startsWith("#")).toBe(true);
-      expect(alert.emittedBy).toMatch(/^artifacts\/api-server\//);
+      expect(alert.emittedBy).toMatch(/^services\/api-monolith\//);
     }
   });
 
@@ -110,7 +110,7 @@ describe("selectSentryAlerts", () => {
       runbookAnchor: "#x",
       sentry: { canonical: false, backstop: false },
       logAggregator: { canonical: true, backstop: false },
-      emittedBy: "artifacts/api-server/src/lib/sentry.ts",
+      emittedBy: "services/api-monolith/src/lib/sentry.ts",
     };
     expect(selectSentryAlerts([fixture])).toEqual([]);
   });
@@ -136,7 +136,7 @@ describe("selectLogAggregatorAlerts", () => {
       runbookAnchor: "#x",
       sentry: { canonical: true, backstop: false },
       logAggregator: { canonical: false, backstop: false },
-      emittedBy: "artifacts/api-server/src/lib/sentry.ts",
+      emittedBy: "services/api-monolith/src/lib/sentry.ts",
     };
     expect(selectLogAggregatorAlerts([fixture])).toEqual([]);
   });

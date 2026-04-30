@@ -108,12 +108,17 @@ export const DEFAULT_INVENTORY_PATH = path.posix.join(
  *  is ignored by the boot path and therefore by this gate too. */
 export const OPT_OUT_ENV_VAR = "RATE_LIMIT_STORE_ALLOW_MEMORY_IN_PRODUCTION";
 
-/** Deploy-config files matched by default. Replit's per-artifact
+/** Deploy-config files matched by default. Replit's per-app
  *  deploy config lives at this path; the `[services.production.*.env]`
  *  tables inside it are what gets exported into the runtime env on a
- *  production deploy. */
+ *  production deploy.
+ *
+ *  After the v4.2 repository restructure, deploy configs live under
+ *  `apps/*`, `services/*`, and `tools/*`. The two-segment glob
+ *  `<root>/<name>/.replit-artifact/artifact.toml` matches all of
+ *  them. */
 export const DEFAULT_DEPLOY_CONFIG_GLOB =
-  "artifacts/*/.replit-artifact/artifact.toml";
+  "*/*/.replit-artifact/artifact.toml";
 
 export type CheckOutcome = "ok" | "missing_inventory_edit" | "probe_error";
 
