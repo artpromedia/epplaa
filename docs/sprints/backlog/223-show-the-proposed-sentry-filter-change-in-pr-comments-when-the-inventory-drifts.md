@@ -9,9 +9,9 @@ Show the proposed Sentry filter change in PR comments when the inventory drifts.
 
 ## Acceptance Criteria
 
-- [ ] Feature is visible in the admin console UI
-- [ ] Appropriate permission checks are enforced
-- [ ] UI renders correctly in the existing test suite
+- [ ] CI script detects drift between the live Sentry filter inventory and the repo-managed config
+- [ ] A formatted diff of the proposed Sentry filter change is posted as a PR comment automatically
+- [ ] The check runs on every PR that touches the Sentry monitor config or inventory script
 
 ## Relevant Files
 

@@ -9,9 +9,9 @@ Notify viewers when they're promoted to moderator. This task tracks the work req
 
 ## Acceptance Criteria
 
-- [ ] Alert fires within the defined threshold
-- [ ] On-call receives the page via PagerDuty / Slack
-- [ ] Runbook entry documents response steps
+- [ ] A push/in-app notification is sent to the viewer immediately upon moderator promotion
+- [ ] The notification message clearly states the stream or channel for which they are now a moderator
+- [ ] Notification delivery is covered by an integration test that verifies the correct recipient and content
 
 ## Relevant Files
 
