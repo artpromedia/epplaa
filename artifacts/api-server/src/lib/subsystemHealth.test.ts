@@ -35,6 +35,8 @@ function makeRecordingNotifier(): {
     notifyRecovered(payload) {
       events.push({ kind: "recovered", payload });
     },
+    notifyDegradedDuration() {},
+    notifyDegradedDurationRecovered() {},
   };
   return { notifier, events };
 }
@@ -147,6 +149,12 @@ describe("DbHealthWatcher — out-of-band paging on transitions", () => {
         notifyRecovered: () => {
           throw new Error("transport down");
         },
+        notifyDegradedDuration: () => {
+          throw new Error("transport down");
+        },
+        notifyDegradedDurationRecovered: () => {
+          throw new Error("transport down");
+        },
       },
     });
     const t0 = 1_700_000_000_000;
@@ -183,6 +191,8 @@ describe("dbHealthWatcher singleton — notifier injection helper", () => {
     __setDbHealthWatcherNotifierForTests({
       notifyDegraded() {},
       notifyRecovered() {},
+      notifyDegradedDuration() {},
+      notifyDegradedDurationRecovered() {},
     });
   });
 });

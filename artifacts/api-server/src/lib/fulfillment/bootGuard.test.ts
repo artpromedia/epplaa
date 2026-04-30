@@ -444,6 +444,7 @@ describe("assertCarrierCredentialsConfiguredForProduction — production-rejecte
       log,
     );
     expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("unreachable");
     expect(result.reason).toMatch(/DEPLOYMENT_ENVIRONMENT=production/);
   });
 
