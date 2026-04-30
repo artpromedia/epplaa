@@ -2554,6 +2554,39 @@ export const RegenerateMfaBackupCodesResponse = zod.object({
     ),
 });
 
+/**
+ * @summary Returns up to the last 20 MFA-related audit events for the authenticated user.
+ */
+export const ListMfaSecurityAlertsResponseItem = zod.object({
+  id: zod.string(),
+  action: zod
+    .string()
+    .describe(
+      "Audit action name. Always begins with `mfa.` (e.g. `mfa.totp.activated`, `mfa.disabled`, `mfa.backup_codes.regenerated`, `mfa.security_alert.reviewed`).",
+    ),
+  occurredAt: zod.coerce.date(),
+  payload: zod
+    .unknown()
+    .nullish()
+    .describe(
+      "Free-form forensic context recorded with the audit row (IP, UA, geo, etc.). Shape depends on the action.",
+    ),
+});
+export const ListMfaSecurityAlertsResponse = zod.array(
+  ListMfaSecurityAlertsResponseItem,
+);
+
+/**
+ * @summary Marks an MFA security alert as reviewed. Audit is append-only — the underlying audit row is not deleted; instead a `mfa.security_alert.reviewed` audit row is appended.
+ */
+export const DismissMfaSecurityAlertParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const DismissMfaSecurityAlertResponse = zod.object({
+  ok: zod.boolean(),
+});
+
 export const AdminDashboardResponse = zod.object({
   openCases: zod.number(),
   dueSoon: zod.number(),

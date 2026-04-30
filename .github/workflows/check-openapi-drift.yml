@@ -16,9 +16,8 @@ name: OpenAPI spec drift check
 # 3. Run `git diff --exit-code` — exits non-zero if any generated file changed.
 #    A non-zero exit means the spec was edited but orval wasn't re-run.
 #
-# Fix: run `pnpm --filter @workspace/api-zod run build` (or the equivalent
-# orval command) locally and commit the updated generated files alongside
-# the spec change.
+# Fix: run `pnpm --filter @workspace/api-spec run codegen` locally and commit
+# the updated generated files alongside the spec change.
 
 on:
   push:
@@ -60,14 +59,14 @@ jobs:
       - run: pnpm install --frozen-lockfile
 
       - name: Regenerate API client + Zod schemas from spec
-        run: pnpm --filter @workspace/api-spec run generate 2>/dev/null || pnpm --filter @workspace/api-zod run build 2>/dev/null || echo "No generate script found — checking for drift via orval directly"
+        run: pnpm --filter @workspace/api-spec run codegen
 
       - name: Check for drift
         run: |
           if ! git diff --exit-code --name-only lib/api-zod/ lib/api-client-react/; then
             echo ""
             echo "::error::Generated API files have drifted from lib/api-spec/openapi.yaml."
-            echo "::error::Run 'pnpm --filter @workspace/api-spec run generate' (or equivalent orval command)"
+            echo "::error::Run 'pnpm --filter @workspace/api-spec run codegen'"
             echo "::error::and commit the updated generated files alongside the spec change."
             {
               echo "## OpenAPI spec drift detected"

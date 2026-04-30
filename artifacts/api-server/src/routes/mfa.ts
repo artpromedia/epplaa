@@ -417,8 +417,9 @@ export default router;
 // MFA security alerts (task #134)
 // ---------------------------------------------------------------------------
 
-// TODO: Add response shapes for these endpoints to lib/api-spec/openapi.yaml
-//       and regenerate lib/api-zod + lib/api-client-react (orval).
+// Audit-row-shaped responses for these two endpoints are specified in
+// lib/api-spec/openapi.yaml as `MfaSecurityAlert` (see operationIds
+// `listMfaSecurityAlerts` / `dismissMfaSecurityAlert`).
 
 router.get("/mfa/security-alerts", async (req: Request, res: Response) => {
   const userId = requireUserId(req, res);
