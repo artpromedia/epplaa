@@ -182,6 +182,77 @@ export const SENTRY_MONITORS: readonly SentryMonitorConfig[] = [
     environment: "production",
     runbookSection: "docs/runbooks/backup-verify.md (Sentry Cron monitor configuration)",
   },
+  {
+    slug: "check-production-hostname-pattern",
+    name: "Production hostname pattern probe (per-15-minute)",
+    workflowFile: ".github/workflows/check-production-hostname-pattern.yml",
+    schedule: "*/15 * * * *",
+    scheduleType: "crontab",
+    timezone: "UTC",
+    checkinMarginMinutes: 10,
+    maxRuntimeMinutes: 8,
+    failureIssueThreshold: 1,
+    recoveryThreshold: 1,
+    environment: "production",
+    runbookSection: "docs/runbooks/staging-only-endpoints.md (Post-deploy verifier: production hostname pattern)",
+  },
+  {
+    slug: "check-readyz-config",
+    name: "Readyz config probe (per-15-minute)",
+    workflowFile: ".github/workflows/check-readyz-config.yml",
+    schedule: "*/15 * * * *",
+    scheduleType: "crontab",
+    timezone: "UTC",
+    checkinMarginMinutes: 10,
+    maxRuntimeMinutes: 8,
+    failureIssueThreshold: 1,
+    recoveryThreshold: 1,
+    environment: "production",
+    runbookSection: "docs/runbooks/staging-only-endpoints.md (Post-deploy verifier: full readyz config block)",
+  },
+  {
+    slug: "check-rate-limit-opt-out-sunsets",
+    name: "Rate-limit opt-out sunset sweep (daily)",
+    workflowFile: ".github/workflows/check-rate-limit-opt-out-sunsets.yml",
+    schedule: "0 13 * * *",
+    scheduleType: "crontab",
+    timezone: "UTC",
+    checkinMarginMinutes: 30,
+    maxRuntimeMinutes: 10,
+    failureIssueThreshold: 1,
+    recoveryThreshold: 1,
+    environment: "production",
+    runbookSection: "docs/runbooks/rate-limit-store-opt-outs.md (Expected sunset enforcement)",
+  },
+  {
+    slug: "probe-rehearsal-notify-webhook",
+    name: "Rehearsal notify webhook liveness probe (daily)",
+    workflowFile: ".github/workflows/probe-rehearsal-notify-webhook.yml",
+    schedule: "23 16 * * *",
+    scheduleType: "crontab",
+    timezone: "UTC",
+    checkinMarginMinutes: 30,
+    maxRuntimeMinutes: 10,
+    failureIssueThreshold: 1,
+    recoveryThreshold: 1,
+    environment: "production",
+    runbookSection: "docs/runbooks/rate-limit-store.md (Daily rehearsal-notify-webhook liveness probe)",
+  },
+  // Pre-existing monitor (#224 migration + pre-existing undeclared-slug fix):
+  {
+    slug: "check-readyz-dependency-probe-wire-shape",
+    name: "Readyz dependency-probe wire-shape check (per-15-minute)",
+    workflowFile: ".github/workflows/check-readyz-dependency-probe-wire-shape.yml",
+    schedule: "*/15 * * * *",
+    scheduleType: "crontab",
+    timezone: "UTC",
+    checkinMarginMinutes: 10,
+    maxRuntimeMinutes: 8,
+    failureIssueThreshold: 1,
+    recoveryThreshold: 1,
+    environment: "production",
+    runbookSection: "docs/runbooks/readyz-dependency-probes.md",
+  },
 ] as const;
 
 /**
@@ -226,51 +297,7 @@ export interface SentryMonitorUiManagedEntry {
  * verified against the runbook (so the next sync run doesn't
  * overwrite a hand-tuned value). The list should shrink, not grow.
  */
-export const SENTRY_MONITORS_KNOWN_UI_MANAGED: readonly SentryMonitorUiManagedEntry[] = [
-  {
-    slug: "check-production-hostname-pattern",
-    workflowFile: ".github/workflows/check-production-hostname-pattern.yml",
-    note:
-      "Per-15-minute post-deploy hostname-pattern probe (task #89). " +
-      "Currently configured in the Sentry UI; will be retired once " +
-      "`check-readyz-config` is confirmed paging on every misconfiguration " +
-      "this workflow caught (the generalised probe is a strict superset — " +
-      "see docs/runbooks/staging-only-endpoints.md, *Post-deploy verifier: " +
-      "full readyz config block*). No migration to SENTRY_MONITORS planned " +
-      "because the workflow itself is on the retirement path.",
-  },
-  {
-    slug: "check-readyz-config",
-    workflowFile: ".github/workflows/check-readyz-config.yml",
-    note:
-      "Per-15-minute post-deploy /readyz config probe (task #101). " +
-      "Currently configured in the Sentry UI; migrate to SENTRY_MONITORS " +
-      "once the runbook (docs/runbooks/staging-only-endpoints.md) " +
-      "documents the check-in margin + max-runtime so the next sync " +
-      "doesn't silently overwrite the UI-tuned values.",
-  },
-  {
-    slug: "check-rate-limit-opt-out-sunsets",
-    workflowFile: ".github/workflows/check-rate-limit-opt-out-sunsets.yml",
-    note:
-      "Daily 13:00 UTC opt-out-sunset check. Currently configured in the " +
-      "Sentry UI; migrate to SENTRY_MONITORS once the runbook " +
-      "(docs/runbooks/rate-limit-store-opt-outs.md) documents the " +
-      "check-in margin + max-runtime so the next sync doesn't silently " +
-      "overwrite the UI-tuned values.",
-  },
-  {
-    slug: "probe-rehearsal-notify-webhook",
-    workflowFile: ".github/workflows/probe-rehearsal-notify-webhook.yml",
-    note:
-      "Daily 16:23 UTC liveness probe for the rehearsal-notify webhook. " +
-      "Currently configured in the Sentry UI; migrate to SENTRY_MONITORS " +
-      "once the runbook (docs/runbooks/rate-limit-store.md, *Daily " +
-      "rehearsal-notify-webhook liveness probe*) documents the check-in " +
-      "margin + max-runtime so the next sync doesn't silently overwrite " +
-      "the UI-tuned values.",
-  },
-] as const;
+export const SENTRY_MONITORS_KNOWN_UI_MANAGED: readonly SentryMonitorUiManagedEntry[] = [] as const;
 
 /**
  * Extract every `cron:` value from a workflow YAML's `on.schedule`

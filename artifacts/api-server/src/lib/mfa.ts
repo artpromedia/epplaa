@@ -659,11 +659,42 @@ export async function pruneExpiredMfaChallenges(
   return pruned;
 }
 
-export async function disableMfa(userId: string): Promise<void> {
+export async function disableMfa(userId: string, context?: MfaSecurityContext): Promise<void> {
   await db.execute(sql`
     DELETE FROM mfa_enrollments WHERE user_id = ${userId};
   `);
   await db.execute(sql`DELETE FROM mfa_challenges WHERE user_id = ${userId};`);
+  try {
+    const { enqueueNotification } = await import("./notifications");
+    const tz = await loadUserTimezone(userId);
+    const where = formatWhereThisHappenedSection(context ? { ...context, occurredAt: context.occurredAt ?? new Date() } : undefined, tz);
+    const body =
+      "Your two-factor authentication was just turned off. " +
+      "If this was you, no action is needed. " +
+      "If it wasn't, change your password and contact support immediately.\n\n" +
+      where;
+    await enqueueNotification({
+      userId,
+      eventType: "mfa_disabled",
+      payload: {
+        title: "Two-factor authentication disabled",
+        body,
+        url: "/account/security",
+        ipAddress: context?.ipAddress ?? "",
+        userAgent: context?.userAgent ?? "",
+        geoCity: context?.geoCity ?? "",
+        geoCountry: context?.geoCountry ?? "",
+        occurredAt: (context?.occurredAt ?? new Date()).toISOString(),
+        timezone: tz,
+      },
+      forcedChannels: [{ channel: "email", to: "*" }],
+    });
+  } catch (err) {
+    logger.warn(
+      { userId, err: (err as Error).message },
+      "mfa_disabled_notification_enqueue_failed",
+    );
+  }
 }
 
 export interface MfaStatus {

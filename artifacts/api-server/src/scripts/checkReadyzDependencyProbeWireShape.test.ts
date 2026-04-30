@@ -8,7 +8,7 @@ import {
   PROBES,
   type ProbeName,
   type ReadyzBody,
-} from "./checkReadyzDependencyProbeWireShape.ts";
+} from "./checkReadyzDependencyProbeWireShape";
 
 /**
  * Build a minimal /readyz body with the dependency-probe blocks for

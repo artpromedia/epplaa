@@ -367,6 +367,8 @@ describe("lib/payments — payment-gateway watcher integration with subsystemHea
       .spyOn(gateways.paystack, "verify")
       .mockResolvedValue({
         ok: false,
+        status: "failed",
+        reference: "ref_stuck_verify",
         errorMessage: "verify_5xx",
       });
     const recordSpy = vi.spyOn(gatewayRouter, "recordDirectCallOutcome");
@@ -449,6 +451,8 @@ describe("lib/payments — payment-gateway watcher integration with subsystemHea
       .spyOn(gateways.flutterwave, "payout")
       .mockResolvedValue({
         ok: false,
+        transferReference: "",
+        status: "failed",
         errorMessage: "transfer_timeout",
       });
     const recordSpy = vi.spyOn(gatewayRouter, "recordDirectCallOutcome");

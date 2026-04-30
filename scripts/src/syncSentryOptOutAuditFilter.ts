@@ -110,8 +110,13 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   parseInventoryTable,
+  splitOnTopLevelPipe,
   type InventoryRow,
 } from "./checkRateLimitOptOutSunsets.js";
+
+// Re-export so callers that import splitOnTopLevelPipe from this module
+// still work after the de-duplication in task #222.
+export { splitOnTopLevelPipe };
 
 /**
  * This file lives at scripts/src/syncSentryOptOutAuditFilter.ts. We
@@ -176,45 +181,6 @@ function stripBackticks(s: string): string {
     return t.slice(1, -1);
   }
   return t;
-}
-
-/**
- * Split a regex string on TOP-LEVEL `|` — i.e. `|` characters that
- * are not inside a `[...]` character class or a `(...)` group, and
- * are not escaped with `\`. Mirrors the splitter in the sibling
- * drift rehearsal (`checkRateLimitOptOutInventoryDrift.ts`) so the
- * two scripts agree on what counts as one alternative vs two.
- *
- * Hostname regexes in this inventory are simple anchored patterns
- * and the docs only sanction `|` as an alternation between sibling
- * hostnames — so this is the right granularity to compare on.
- */
-export function splitOnTopLevelPipe(regex: string): string[] {
-  const out: string[] = [];
-  let buf = "";
-  let bracketDepth = 0;
-  let parenDepth = 0;
-  for (let i = 0; i < regex.length; i++) {
-    const ch = regex[i];
-    if (ch === "\\" && i + 1 < regex.length) {
-      buf += ch + regex[i + 1];
-      i += 1;
-      continue;
-    }
-    if (ch === "[") bracketDepth += 1;
-    else if (ch === "]" && bracketDepth > 0) bracketDepth -= 1;
-    else if (ch === "(" && bracketDepth === 0) parenDepth += 1;
-    else if (ch === ")" && bracketDepth === 0 && parenDepth > 0)
-      parenDepth -= 1;
-    if (ch === "|" && bracketDepth === 0 && parenDepth === 0) {
-      out.push(buf);
-      buf = "";
-      continue;
-    }
-    buf += ch;
-  }
-  out.push(buf);
-  return out;
 }
 
 /**

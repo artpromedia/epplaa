@@ -38,6 +38,9 @@ const EVENT_CHANNEL_DEFAULTS: Record<EventType, ChannelKind[]> = {
   // suppress, and so the alert lands in the user's inbox where it can
   // be reviewed weeks later if needed.
   mfa_backup_codes_regenerated: ["email"],
+  // Security alert — fired when MFA is disabled (task #135). Email-only
+  // for the same reason as mfa_backup_codes_regenerated above.
+  mfa_disabled: ["email"],
   // Trust & Safety: due-process notifications. Push for in-app
   // immediacy, email for the audit trail the seller / reporter can
   // search later (e.g. "when was my listing removed?", "what reason
@@ -79,6 +82,9 @@ const EVENT_CATEGORY: Record<EventType, "orderUpdates" | "liveDrops" | "promos" 
   // silent takeover, so it must reach them regardless of which
   // marketing categories they've muted.
   mfa_backup_codes_regenerated: null,
+  // Security: disabling MFA is also ungated — the user must know their
+  // second factor was removed regardless of category preferences.
+  mfa_disabled: null,
   // Trust & Safety due-process notifications: never gated by category
   // toggles. Telling a seller their content was removed (and how to
   // appeal) is a regulatory requirement under EU/UK transparency

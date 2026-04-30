@@ -126,6 +126,18 @@ jobs:
           SENTRY_PROJECT: ${{ vars.SENTRY_PROJECT }}
         run: pnpm --filter @workspace/scripts run check-sentry-issue-alert-credentials
 
+      # Env-var misconfig guard (task #146).
+      # Runs the rate-limit opt-out PR-inventory check to catch deploy
+      # configs that flip RATE_LIMIT_STORE_ALLOW_MEMORY_IN_PRODUCTION=1
+      # without also editing the inventory markdown. This is a CI gate
+      # that blocks merges when the env var is newly opted-in without
+      # the corresponding inventory row.
+      - name: Rate-limit opt-out inventory gate
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_REF: ${{ github.sha }}
+        run: pnpm --filter @workspace/scripts run check-rate-limit-opt-out-pr-inventory
+
       - name: Vitest unit tests with coverage threshold
         run: pnpm run test:coverage
         env:

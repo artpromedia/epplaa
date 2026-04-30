@@ -462,8 +462,17 @@ describe("main", () => {
       ],
       readWorkflow: () => ({
         exists: true,
-        source:
-          "          sentry-cli monitors run --environment production managed-in-ui -- ./run.sh",
+        source: [
+          "on:",
+          "  schedule:",
+          '    - cron: "*/15 * * * *"',
+          "  workflow_dispatch: {}",
+          "",
+          "jobs:",
+          "  probe:",
+          "    steps:",
+          "      - run: sentry-cli monitors run --environment production managed-in-ui -- ./run.sh",
+        ].join("\n"),
       }),
       discoverWorkflows: () => [".github/workflows/ui-managed.yml"],
       stdout: (line) => stdout.push(line),

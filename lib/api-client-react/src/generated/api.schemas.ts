@@ -1129,6 +1129,15 @@ export interface MfaBackupCodesResult {
   backupCodes: string[];
 }
 
+export interface MfaSecurityAlert {
+  id: string;
+  /** Audit action name. Always begins with `mfa.` (e.g. `mfa.totp.activated`, `mfa.disabled`, `mfa.backup_codes.regenerated`, `mfa.security_alert.reviewed`). */
+  action: string;
+  occurredAt: string;
+  /** Free-form forensic context recorded with the audit row (IP, UA, geo, etc.). Shape depends on the action. */
+  payload?: unknown | null;
+}
+
 export interface ReferralActivity {
   id: string;
   inviteeHandle: string;

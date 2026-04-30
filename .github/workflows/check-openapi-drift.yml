@@ -1,0 +1,84 @@
+name: OpenAPI spec drift check
+
+# Fails CI when the generated Zod schemas (lib/api-zod/) or React Query
+# hooks (lib/api-client-react/) have drifted from lib/api-spec/openapi.yaml.
+#
+# Why this exists (task #150):
+# The generated client/zod files are committed to the repo so they can be
+# imported without a build step, but orval must be re-run whenever the spec
+# changes. Without this check, a PR that edits openapi.yaml without also
+# running `orval` ships a runtime mismatch between the spec and the
+# generated types.
+#
+# How it works:
+# 1. Install dependencies (which sets up the orval binary).
+# 2. Re-run orval to regenerate the files in-place.
+# 3. Run `git diff --exit-code` — exits non-zero if any generated file changed.
+#    A non-zero exit means the spec was edited but orval wasn't re-run.
+#
+# Fix: run `pnpm --filter @workspace/api-spec run codegen` locally and commit
+# the updated generated files alongside the spec change.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "lib/api-spec/openapi.yaml"
+      - "lib/api-spec/orval.config.ts"
+      - "lib/api-zod/**"
+      - "lib/api-client-react/**"
+  pull_request:
+    branches: [main]
+    paths:
+      - "lib/api-spec/openapi.yaml"
+      - "lib/api-spec/orval.config.ts"
+      - "lib/api-zod/**"
+      - "lib/api-client-react/**"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  drift-check:
+    name: OpenAPI → generated files drift check
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Regenerate API client + Zod schemas from spec
+        run: pnpm --filter @workspace/api-spec run codegen
+
+      - name: Check for drift
+        run: |
+          if ! git diff --exit-code --name-only lib/api-zod/ lib/api-client-react/; then
+            echo ""
+            echo "::error::Generated API files have drifted from lib/api-spec/openapi.yaml."
+            echo "::error::Run 'pnpm --filter @workspace/api-spec run codegen'"
+            echo "::error::and commit the updated generated files alongside the spec change."
+            {
+              echo "## OpenAPI spec drift detected"
+              echo ""
+              echo "The following generated files differ from what orval produces from the current spec:"
+              echo ""
+              echo '```'
+              git diff --name-only lib/api-zod/ lib/api-client-react/ || true
+              echo '```'
+              echo ""
+              echo "Fix: re-run orval locally and commit the regenerated files."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          echo "No drift detected — generated files match the spec."

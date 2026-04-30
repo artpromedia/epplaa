@@ -2177,6 +2177,33 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
+  /mfa/security-alerts:
+    get:
+      operationId: listMfaSecurityAlerts
+      tags: [mfa]
+      summary: Returns up to the last 20 MFA-related audit events for the authenticated user.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/MfaSecurityAlert" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /mfa/security-alerts/{id}:
+    delete:
+      operationId: dismissMfaSecurityAlert
+      tags: [mfa]
+      summary: Marks an MFA security alert as reviewed. Audit is append-only — the underlying audit row is not deleted; instead a `mfa.security_alert.reviewed` audit row is appended.
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Ok" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
 
   # --- Admin operator console -------------------------------------------------
   /admin/dashboard:
@@ -3829,6 +3856,18 @@ components:
           type: array
           items: { type: string }
           description: "Plaintext single-use backup codes. Returned ONCE; not recoverable after this response."
+    MfaSecurityAlert:
+      type: object
+      required: [id, action, occurredAt]
+      properties:
+        id: { type: string }
+        action:
+          type: string
+          description: "Audit action name. Always begins with `mfa.` (e.g. `mfa.totp.activated`, `mfa.disabled`, `mfa.backup_codes.regenerated`, `mfa.security_alert.reviewed`)."
+        occurredAt: { type: string, format: date-time }
+        payload:
+          description: "Free-form forensic context recorded with the audit row (IP, UA, geo, etc.). Shape depends on the action."
+          nullable: true
 
     ReferralActivity:
       type: object

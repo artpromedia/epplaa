@@ -113,6 +113,7 @@ import type {
   ManufacturerPayout,
   MfaBackupCodeBody,
   MfaBackupCodesResult,
+  MfaSecurityAlert,
   MfaSetupBody,
   MfaSetupResult,
   MfaStatus,
@@ -12315,6 +12316,166 @@ export const useRegenerateMfaBackupCodes = <
   TContext
 > => {
   return useMutation(getRegenerateMfaBackupCodesMutationOptions(options));
+};
+
+/**
+ * @summary Returns up to the last 20 MFA-related audit events for the authenticated user.
+ */
+export const getListMfaSecurityAlertsUrl = () => {
+  return `/api/mfa/security-alerts`;
+};
+
+export const listMfaSecurityAlerts = async (
+  options?: RequestInit,
+): Promise<MfaSecurityAlert[]> => {
+  return customFetch<MfaSecurityAlert[]>(getListMfaSecurityAlertsUrl(), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getListMfaSecurityAlertsQueryKey = () => {
+  return [`/api/mfa/security-alerts`] as const;
+};
+
+export const getListMfaSecurityAlertsQueryOptions = <
+  TData = Awaited<ReturnType<typeof listMfaSecurityAlerts>>,
+  TError = ErrorType<UnauthorizedResponse>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof listMfaSecurityAlerts>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getListMfaSecurityAlertsQueryKey();
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof listMfaSecurityAlerts>>
+  > = ({ signal }) => listMfaSecurityAlerts({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof listMfaSecurityAlerts>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type ListMfaSecurityAlertsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listMfaSecurityAlerts>>
+>;
+export type ListMfaSecurityAlertsQueryError = ErrorType<UnauthorizedResponse>;
+
+/**
+ * @summary Returns up to the last 20 MFA-related audit events for the authenticated user.
+ */
+
+export function useListMfaSecurityAlerts<
+  TData = Awaited<ReturnType<typeof listMfaSecurityAlerts>>,
+  TError = ErrorType<UnauthorizedResponse>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof listMfaSecurityAlerts>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getListMfaSecurityAlertsQueryOptions(options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Marks an MFA security alert as reviewed. Audit is append-only — the underlying audit row is not deleted; instead a `mfa.security_alert.reviewed` audit row is appended.
+ */
+export const getDismissMfaSecurityAlertUrl = (id: string) => {
+  return `/api/mfa/security-alerts/${id}`;
+};
+
+export const dismissMfaSecurityAlert = async (
+  id: string,
+  options?: RequestInit,
+): Promise<Ok> => {
+  return customFetch<Ok>(getDismissMfaSecurityAlertUrl(id), {
+    ...options,
+    method: "DELETE",
+  });
+};
+
+export const getDismissMfaSecurityAlertMutationOptions = <
+  TError = ErrorType<UnauthorizedResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof dismissMfaSecurityAlert>>,
+    TError,
+    { id: string },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof dismissMfaSecurityAlert>>,
+  TError,
+  { id: string },
+  TContext
+> => {
+  const mutationKey = ["dismissMfaSecurityAlert"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof dismissMfaSecurityAlert>>,
+    { id: string }
+  > = (props) => {
+    const { id } = props ?? {};
+
+    return dismissMfaSecurityAlert(id, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type DismissMfaSecurityAlertMutationResult = NonNullable<
+  Awaited<ReturnType<typeof dismissMfaSecurityAlert>>
+>;
+
+export type DismissMfaSecurityAlertMutationError =
+  ErrorType<UnauthorizedResponse>;
+
+/**
+ * @summary Marks an MFA security alert as reviewed. Audit is append-only — the underlying audit row is not deleted; instead a `mfa.security_alert.reviewed` audit row is appended.
+ */
+export const useDismissMfaSecurityAlert = <
+  TError = ErrorType<UnauthorizedResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof dismissMfaSecurityAlert>>,
+    TError,
+    { id: string },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof dismissMfaSecurityAlert>>,
+  TError,
+  { id: string },
+  TContext
+> => {
+  return useMutation(getDismissMfaSecurityAlertMutationOptions(options));
 };
 
 export const getAdminDashboardUrl = () => {

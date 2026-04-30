@@ -9,6 +9,8 @@ import {
 } from "@workspace/api-zod";
 import { hasMfaVerifiedSession, requireUserId } from "../lib/auth";
 import { recordAudit } from "../lib/audit";
+import { db } from "../lib/db";
+import { sql } from "drizzle-orm";
 import { logger } from "../lib/logger";
 import { sendValidated } from "../lib/responseSchema";
 import { userHasAnyRole } from "../lib/roles";
@@ -214,7 +216,11 @@ router.post("/mfa/totp/disable", sensitiveMfaRateLimit, async (req: Request, res
     });
     return;
   }
-  await disableMfa(userId);
+  await disableMfa(userId, {
+    ipAddress: clientIpFromRequest(req),
+    userAgent: (req.get("user-agent") ?? "").slice(0, 256),
+    occurredAt: new Date(),
+  });
   sendValidated(res, DisableMfaTotpResponse, { ok: true });
 });
 
@@ -308,6 +314,13 @@ export function requireMfa(): RequestHandler {
       if (!needs) return next();
       const status = await getMfaStatus(userId);
       if (!status.enrolled) {
+        void recordAudit({
+          actorId: userId,
+          action: "admin.request.blocked.mfa_not_enrolled",
+          entity: "adminRequest",
+          entityId: userId,
+          payload: { path: (req as import("express").Request).path ?? "" },
+        }).catch(() => undefined);
         res.status(403).json({
           error: "mfa_required",
           detail: "This account requires multi-factor authentication. Set up TOTP in account settings.",
@@ -315,6 +328,13 @@ export function requireMfa(): RequestHandler {
         return;
       }
       if (!status.recentlyAsserted) {
+        void recordAudit({
+          actorId: userId,
+          action: "admin.request.blocked.mfa_challenge_required",
+          entity: "adminRequest",
+          entityId: userId,
+          payload: { path: (req as import("express").Request).path ?? "" },
+        }).catch(() => undefined);
         res.status(403).json({
           error: "mfa_challenge_required",
           detail: "Verify your authenticator code to continue.",
@@ -392,3 +412,55 @@ async function emitBackupCodeRegenerationAuditRow(
 }
 
 export default router;
+
+// ---------------------------------------------------------------------------
+// MFA security alerts (task #134)
+// ---------------------------------------------------------------------------
+
+// Audit-row-shaped responses for these two endpoints are specified in
+// lib/api-spec/openapi.yaml as `MfaSecurityAlert` (see operationIds
+// `listMfaSecurityAlerts` / `dismissMfaSecurityAlert`).
+
+router.get("/mfa/security-alerts", async (req: Request, res: Response) => {
+  const userId = requireUserId(req, res);
+  if (!userId) return;
+  const result = await db.execute<{
+    id: string;
+    action: string;
+    payload: unknown;
+    occurred_at: string;
+  }>(sql`
+    SELECT id, action, payload, occurred_at
+    FROM audit_events
+    WHERE actor_id = ${userId}
+      AND action LIKE 'mfa.%'
+    ORDER BY occurred_at DESC
+    LIMIT 20;
+  `);
+  res.json(
+    result.rows.map((r) => ({
+      id: r.id,
+      action: r.action,
+      occurredAt: r.occurred_at,
+      payload: r.payload,
+    })),
+  );
+});
+
+router.delete("/mfa/security-alerts/:id", async (req: Request, res: Response) => {
+  const userId = requireUserId(req, res);
+  if (!userId) return;
+  const alertId = Array.isArray(req.params.id) ? (req.params.id[0] ?? "") : (req.params.id ?? "");
+  // Audit is append-only — this records that the user reviewed the alert
+  // rather than deleting the underlying audit row.
+  void recordAudit({
+    actorId: userId,
+    action: "mfa.security_alert.reviewed",
+    entity: "auditEvent",
+    entityId: alertId,
+    payload: { reviewedAt: new Date().toISOString() },
+  }).catch((err) => {
+    logger.warn({ err: (err as Error).message, userId, alertId }, "mfa_security_alert_reviewed_audit_failed");
+  });
+  res.json({ ok: true });
+});
