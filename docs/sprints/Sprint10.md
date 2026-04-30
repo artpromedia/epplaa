@@ -1,0 +1,17 @@
+# Sprint 10 — Admin Console & Moderation
+
+Fix broken admin console tests, surface slowdown and degraded banners, extend NDPR and KYC tooling, add automated takedown/appeal tests, and rate-limit repeated appeals per seller.
+
+## Tasks
+
+| Ref | Title | Status | Notes |
+|-----|-------|--------|-------|
+| [#165](./backlog/165-fix-the-broken-status-page-tests-in-the-admin-console.md) | Fix the broken Status page tests in the admin console | 📋 Backlog | Stub: [docs/sprints/backlog/165-fix-the-broken-status-page-tests-in-the-admin-console.md](./backlog/165-fix-the-broken-status-page-tests-in-the-admin-console.md) |
+| [#166](./backlog/166-surface-the-slowdown-banner-on-the-admin-console-too.md) | Surface the slowdown banner on the admin console too | 📋 Backlog | Stub: [docs/sprints/backlog/166-surface-the-slowdown-banner-on-the-admin-console-too.md](./backlog/166-surface-the-slowdown-banner-on-the-admin-console-too.md) |
+| [#188](./backlog/188-let-admins-approve-or-reject-ndpr-data-requests-not-just-cancel-them.md) | Let admins approve or reject NDPR data requests, not just cancel them | 📋 Backlog | Stub: [docs/sprints/backlog/188-let-admins-approve-or-reject-ndpr-data-requests-not-just-cancel-them.md](./backlog/188-let-admins-approve-or-reject-ndpr-data-requests-not-just-cancel-them.md) |
+| [#189](./backlog/189-show-full-size-kyc-document-images-instead-of-thumbnails.md) | Show full-size KYC document images instead of thumbnails | 📋 Backlog | Stub: [docs/sprints/backlog/189-show-full-size-kyc-document-images-instead-of-thumbnails.md](./backlog/189-show-full-size-kyc-document-images-instead-of-thumbnails.md) |
+| [#191](./backlog/191-add-an-end-to-end-test-for-the-moderation-pipeline-using-a-mock-provider.md) | Add an end-to-end test for the moderation pipeline using a mock provider | 📋 Backlog | Stub: [docs/sprints/backlog/191-add-an-end-to-end-test-for-the-moderation-pipeline-using-a-mock-provider.md](./backlog/191-add-an-end-to-end-test-for-the-moderation-pipeline-using-a-mock-provider.md) |
+| [#192](./backlog/192-cache-and-rate-limit-the-boot-time-provider-health-probe.md) | Cache and rate-limit the boot-time provider health probe | 📋 Backlog | Stub: [docs/sprints/backlog/192-cache-and-rate-limit-the-boot-time-provider-health-probe.md](./backlog/192-cache-and-rate-limit-the-boot-time-provider-health-probe.md) |
+| [#193](./backlog/193-surface-the-moderation-degraded-banner-in-a-system-wide-site-notice.md) | Surface the moderation degraded banner in a system-wide site notice | 📋 Backlog | Stub: [docs/sprints/backlog/193-surface-the-moderation-degraded-banner-in-a-system-wide-site-notice.md](./backlog/193-surface-the-moderation-degraded-banner-in-a-system-wide-site-notice.md) |
+| [#207](./backlog/207-add-automated-tests-for-the-takedown-notification-and-appeal-flow.md) | Add automated tests for the takedown notification and appeal flow | 📋 Backlog | Stub: [docs/sprints/backlog/207-add-automated-tests-for-the-takedown-notification-and-appeal-flow.md](./backlog/207-add-automated-tests-for-the-takedown-notification-and-appeal-flow.md) |
+| [#208](./backlog/208-track-and-rate-limit-repeated-takedown-appeals-per-seller.md) | Track and rate-limit repeated takedown appeals per seller | 📋 Backlog | Stub: [docs/sprints/backlog/208-track-and-rate-limit-repeated-takedown-appeals-per-seller.md](./backlog/208-track-and-rate-limit-repeated-takedown-appeals-per-seller.md) |
