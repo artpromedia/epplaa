@@ -14,7 +14,7 @@ export default defineConfig({
         __dirname,
         "..",
         "..",
-        "lib",
+        "packages",
         "api-client-react",
         "src",
       ),

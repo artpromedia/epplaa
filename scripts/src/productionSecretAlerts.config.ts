@@ -125,7 +125,7 @@ export const PRODUCTION_SECRET_ALERTS: readonly ProductionSecretAlertConfig[] = 
     // page.
     sentry: { canonical: false, backstop: true },
     logAggregator: { canonical: true, backstop: false },
-    emittedBy: "artifacts/api-server/src/lib/sentry.ts",
+    emittedBy: "services/api-monolith/src/lib/sentry.ts",
   },
   {
     messageTag: "clerk_secret_key_missing_for_production",
@@ -136,7 +136,7 @@ export const PRODUCTION_SECRET_ALERTS: readonly ProductionSecretAlertConfig[] = 
     runbookAnchor: "#clerk_secret_key",
     sentry: { canonical: true, backstop: false },
     logAggregator: { canonical: false, backstop: true },
-    emittedBy: "artifacts/api-server/src/middlewares/clerkProxyMiddleware.ts",
+    emittedBy: "services/api-monolith/src/middlewares/clerkProxyMiddleware.ts",
   },
   {
     messageTag: "session_secret_missing_for_production",
@@ -149,7 +149,7 @@ export const PRODUCTION_SECRET_ALERTS: readonly ProductionSecretAlertConfig[] = 
     runbookAnchor: "#session_secret",
     sentry: { canonical: true, backstop: false },
     logAggregator: { canonical: false, backstop: true },
-    emittedBy: "artifacts/api-server/src/lib/sessionSecret.ts",
+    emittedBy: "services/api-monolith/src/lib/sessionSecret.ts",
   },
 ] as const;
 

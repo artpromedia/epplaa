@@ -3,25 +3,23 @@
 User-facing applications. Each subdirectory is an independently
 buildable, independently deployable application.
 
-This directory is **empty by design** until [Phase 1 of the v4.2
-amendment](../docs/architecture/v4.2-amendment.md) lands. At that
-time the following moves are performed via `git mv` so file history
-is preserved:
+This directory was populated in [Phase 1 of the v4.2
+amendment](../docs/architecture/v4.2-amendment.md). The moves were
+performed via `git mv` so file history is preserved:
 
-| From | To |
+| Previous location | Current location |
 | :--- | :--- |
 | `artifacts/epplaa-app` | `apps/web-buyer-spa` |
 | `artifacts/admin-console` | `apps/admin` |
 | `artifacts/manufacturer-portal` | `apps/partner` |
 | `artifacts/epplaa-mobile` | `apps/mobile` |
 
-A new empty Vite + React app is also scaffolded at `apps/studio` for
-seller-facing tooling that is currently embedded inside the buyer
-SPA. It is populated in Phase 8.
+A placeholder for `apps/studio` (seller / studio surface) lives
+alongside as an empty Vite + React target; it is populated in Phase 8
+when seller-facing tooling is carved out of the buyer SPA.
 
-A new Next.js 15 app is scaffolded at `apps/web` in Phase 6 and
-takes over from `apps/web-buyer-spa` once feature parity is
-reached.
+A new Next.js 15 app will be scaffolded at `apps/web` in Phase 6 and
+takes over from `apps/web-buyer-spa` once feature parity is reached.
 
 ## Conventions
 

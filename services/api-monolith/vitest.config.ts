@@ -27,7 +27,7 @@ export default defineConfig({
   },
   resolve: {
     alias: {
-      "@workspace/db": path.resolve(__dirname, "..", "..", "lib", "db", "src"),
+      "@workspace/db": path.resolve(__dirname, "..", "..", "packages", "db", "src"),
     },
   },
 });

@@ -25,11 +25,15 @@ export default defineConfig({
     dedupe: ["react", "react-dom", "@tanstack/react-query"],
     alias: {
       "@": path.resolve(__dirname, "src"),
+      // Mirror the `@assets` alias from `vite.config.ts` so source-tree
+      // components that import attached binary assets (logos, etc.) can
+      // be rendered inside vitest without the test resolver throwing.
+      "@assets": path.resolve(__dirname, "..", "..", "attached_assets"),
       "@workspace/api-client-react": path.resolve(
         __dirname,
         "..",
         "..",
-        "lib",
+        "packages",
         "api-client-react",
         "src",
       ),

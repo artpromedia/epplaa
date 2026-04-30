@@ -3,11 +3,11 @@
 Backend services. Each subdirectory is an independently buildable,
 independently deployable Node.js service.
 
-This directory is **empty by design** until [Phase 1 of the v4.2
-amendment](../docs/architecture/v4.2-amendment.md) lands. At that
-time the existing monolith moves here:
+This directory was populated in [Phase 1 of the v4.2
+amendment](../docs/architecture/v4.2-amendment.md) by relocating the
+existing monolith here:
 
-| From | To |
+| Previous location | Current location |
 | :--- | :--- |
 | `artifacts/api-server` | `services/api-monolith` |
 

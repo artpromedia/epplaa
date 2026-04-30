@@ -3,11 +3,11 @@
 Shared TypeScript libraries published only inside the workspace. Not
 released to npm. Consumed by `apps/*` and `services/*`.
 
-This directory is **empty by design** until [Phase 1 of the v4.2
-amendment](../docs/architecture/v4.2-amendment.md) lands. At that
-time the existing libraries move here:
+This directory was populated in [Phase 1 of the v4.2
+amendment](../docs/architecture/v4.2-amendment.md) by relocating the
+existing libraries here:
 
-| From | To |
+| Previous location | Current location |
 | :--- | :--- |
 | `lib/db` | `packages/db` |
 | `lib/api-spec` | `packages/api-spec` |

@@ -21,7 +21,7 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, "..", "..");
 
 const SCAN_DIRS = [
-  "artifacts/api-server/src",
+  "services/api-monolith/src",
   "scripts/src",
 ];
 

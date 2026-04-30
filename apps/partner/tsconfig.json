@@ -16,7 +16,7 @@
   },
   "references": [
     {
-      "path": "../../lib/api-client-react"
+      "path": "../../packages/api-client-react"
     }
   ]
 }
