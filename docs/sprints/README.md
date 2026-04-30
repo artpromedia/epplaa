@@ -1,7 +1,7 @@
 # Sprint Backlog
 
 This document is the authoritative sprint plan for the epplaa project.  
-It contains **13 sprints** covering **98 tasks** (97 unique task identifiers — #164 appears in both Sprint 3 and Sprint 5).
+It contains **13 sprints** covering **97 unique tasks** (98 task assignments — #164 appears in both Sprint 3 and Sprint 5).
 
 ## Sprint Execution Order
 

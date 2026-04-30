@@ -9,9 +9,9 @@ Pay sellers their share when buyers choose pay-on-collection. This task tracks t
 
 ## Acceptance Criteria
 
-- [ ] Backup artefact is produced on schedule
-- [ ] Verification script passes against the new artefact
-- [ ] Stale-backup alert fires when artefact is overdue
+- [ ] Seller payout is correctly calculated and disbursed when an order is collected
+- [ ] Pay-on-collection flow is covered by an end-to-end test
+- [ ] No double-payment or missed-payment edge cases remain
 
 ## Relevant Files
 

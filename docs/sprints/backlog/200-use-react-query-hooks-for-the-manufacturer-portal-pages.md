@@ -9,9 +9,9 @@ Use React Query hooks for the manufacturer portal pages. This task tracks the wo
 
 ## Acceptance Criteria
 
-- [ ] Alert fires within the defined threshold
-- [ ] On-call receives the page via PagerDuty / Slack
-- [ ] Runbook entry documents response steps
+- [ ] All manufacturer portal pages use generated React Query hooks instead of raw fetch calls
+- [ ] Loading, error, and success states are handled consistently via React Query
+- [ ] Existing page behaviour and tests pass unchanged
 
 ## Relevant Files
 

@@ -9,9 +9,9 @@ Provision the shared Redis the multi-instance chat actually needs. This task tra
 
 ## Acceptance Criteria
 
-- [ ] Backup artefact is produced on schedule
-- [ ] Verification script passes against the new artefact
-- [ ] Stale-backup alert fires when artefact is overdue
+- [ ] A shared Redis instance is provisioned and reachable by all API server replicas
+- [ ] Chat messages are correctly brokered across multiple server instances via the shared Redis
+- [ ] Provisioning steps and connection config are documented in the runbook
 
 ## Relevant Files
 

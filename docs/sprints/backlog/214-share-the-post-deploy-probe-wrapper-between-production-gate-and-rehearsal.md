@@ -9,9 +9,9 @@ Share the post-deploy probe wrapper between production gate and rehearsal. This 
 
 ## Acceptance Criteria
 
-- [ ] Backup artefact is produced on schedule
-- [ ] Verification script passes against the new artefact
-- [ ] Stale-backup alert fires when artefact is overdue
+- [ ] A single shared probe-wrapper module is used by both the production gate and the rehearsal workflow
+- [ ] Duplicate code is removed from both call sites
+- [ ] Both workflows continue to pass in CI after the refactor
 
 ## Relevant Files
 
