@@ -5,201 +5,181 @@
  *   load config → hydrate memory → call gateway → validate tool calls
  *   → dispatch or wait for approval → emit trace
  *
- * AI Sprint 0: all method bodies are TODO stubs with comments referencing
- * the relevant §14 subsection. The class skeleton is complete so that
- * downstream code can import and construct it, and the smoke test can
- * assert construction succeeds.
+ * AI Sprint 1: real wiring (this file). Approval-bus suspension and the
+ * Langfuse trace exporter still ship in AI Sprint 2 / late Sprint 1
+ * respectively — those paths are clearly marked.
  */
 
+import type { z } from "zod";
 import type { AgentConfig } from "../agents/types.js";
-import type { ToolCall, ToolResult } from "../registry/ToolRegistry.js";
-import type { ModelResponse } from "../gateway/ModelGateway.js";
+import type {
+  IModelGateway,
+  Message,
+  ModelResponse,
+} from "../gateway/ModelGateway.js";
+import type { IShortTermMemory, ConversationMessage } from "../memory/ShortTermMemory.js";
+import type { IAgentRegistry } from "../registry/AgentRegistry.js";
+import type { IPromptRegistry } from "../registry/PromptRegistry.js";
+import type {
+  IToolRegistry,
+  ToolCall,
+  ToolDescriptor,
+  ToolResult,
+} from "../registry/ToolRegistry.js";
 
 export interface AgentRuntimeOptions {
-  /** Identifies the agent being run. Must match a config in the AgentRegistry. */
   agentId: string;
-  /** Opaque session identifier (e.g., Clerk userId + timestamp hash). */
   sessionId: string;
+  registries: {
+    agents: IAgentRegistry;
+    prompts: IPromptRegistry;
+    tools: IToolRegistry;
+  };
+  gateway: IModelGateway;
+  memory: IShortTermMemory;
+  /** Hook for dispatching tools that don't require approval. */
+  toolDispatcher: (call: ToolCall, descriptor: ToolDescriptor) => Promise<ToolResult>;
+  /** Optional hook for AI Sprint 2 approval bus; not required in Sprint 1. */
+  approvalBus?: { propose: (call: ToolCall, agentId: string) => Promise<ToolResult> };
+  /** Optional hook for Langfuse / OTel trace emission. */
+  emitTrace?: (event: TraceEvent) => Promise<string>;
 }
 
 export interface HandleInput {
-  /** The user's message text (already PII-redacted and language-normalised). */
   message: string;
-  /** ISO-8601 timestamp of message receipt. */
   receivedAt: string;
 }
 
 export interface HandleOutput {
-  /** The agent's response text. */
   response: string;
-  /** Whether the turn required a human-approval suspension. */
   awaitedApproval: boolean;
-  /** Langfuse trace ID for this turn. */
   traceId: string;
 }
 
-/**
- * AgentRuntime orchestrates a single conversation turn for one agent.
- *
- * One AgentRuntime instance is created per HTTP request (or per LiveKit
- * session turn). It is NOT a long-lived singleton.
- */
+export interface TraceEvent {
+  agentId: string;
+  sessionId: string;
+  modelResponse: ModelResponse;
+  toolResults: ToolResult[];
+  durationMs: number;
+}
+
 export class AgentRuntime {
   private readonly agentId: string;
   private readonly sessionId: string;
+  private readonly opts: AgentRuntimeOptions;
 
   constructor(options: AgentRuntimeOptions) {
     this.agentId = options.agentId;
     this.sessionId = options.sessionId;
+    this.opts = options;
   }
 
-  // -------------------------------------------------------------------------
-  // §14.3.2 Step 1: Load agent config from PromptRegistry + ToolRegistry
-  // -------------------------------------------------------------------------
-  /**
-   * Loads the agent's prompt reference and tool-set for this request.
-   * TODO (AI Sprint 1): replace stub with real PromptRegistry.load() call.
-   * @see §14.6 (Prompt Registry)
-   * @see §14.7 (Tool Registry)
-   */
+  async handle(input: HandleInput): Promise<HandleOutput> {
+    const start = Date.now();
+    const config = await this.loadConfig();
+    const prompt = await this.opts.registries.prompts.load(config.promptRef);
+    const history = await this.opts.memory.get(this.sessionId);
+
+    const userMsg: ConversationMessage = {
+      role: "user",
+      content: input.message,
+      timestamp: input.receivedAt,
+    };
+
+    const systemMsg: Message = { role: "system", content: prompt.systemPrompt };
+    const llmMessages: Message[] = [
+      systemMsg,
+      ...history.map(historyToGatewayMessage),
+      { role: "user", content: input.message },
+    ];
+
+    const response = await this.opts.gateway.complete({
+      agentId: this.agentId,
+      sessionId: this.sessionId,
+      messages: llmMessages,
+      availableTools: config.tools,
+      model: config.modelPolicy.primary,
+      maxTokens: config.modelPolicy.maxTokens,
+      temperature: config.modelPolicy.temperature,
+    });
+
+    const validCalls = this.validateToolCalls(
+      response.toolCalls.map((tc) => ({ name: tc.name, args: tc.args, callId: tc.callId })),
+      config,
+    );
+
+    let awaitedApproval = false;
+    const toolResults: ToolResult[] = [];
+    for (const call of validCalls) {
+      const desc = this.opts.registries.tools.get(call.name);
+      if (!desc) continue; // unreachable: validateToolCalls already filtered.
+      if (desc.approvalThreshold === "single-human") {
+        if (!this.opts.approvalBus) {
+          // Sprint 1 doesn't ship the bus yet; surface the request to the
+          // caller so the operator can wire it up by Sprint 2 without
+          // changing this code path.
+          toolResults.push({
+            callId: call.callId,
+            name: call.name,
+            output: null,
+            error: "approval-bus-not-wired",
+          });
+          awaitedApproval = true;
+          continue;
+        }
+        const result = await this.opts.approvalBus.propose(call, this.agentId);
+        toolResults.push(result);
+        awaitedApproval = true;
+      } else {
+        toolResults.push(await this.opts.toolDispatcher(call, desc));
+      }
+    }
+
+    const assistantMsg: ConversationMessage = {
+      role: "assistant",
+      content: response.text,
+      timestamp: new Date().toISOString(),
+    };
+    await this.opts.memory.append(this.sessionId, [userMsg, assistantMsg]);
+
+    const traceId =
+      (await this.opts.emitTrace?.({
+        agentId: this.agentId,
+        sessionId: this.sessionId,
+        modelResponse: response,
+        toolResults,
+        durationMs: Date.now() - start,
+      })) ?? `local-trace-${this.agentId}-${this.sessionId}-${Date.now()}`;
+
+    return { response: response.text, awaitedApproval, traceId };
+  }
+
   private async loadConfig(): Promise<AgentConfig> {
-    // TODO (AI Sprint 1): look up this.agentId in AgentRegistry;
-    // call PromptRegistry.load(config.promptRef) to hydrate the system prompt.
-    throw new Error(
-      `loadConfig() not yet implemented for agent '${this.agentId}' — AI Sprint 1`,
-    );
+    const cfg = this.opts.registries.agents.get(this.agentId);
+    if (!cfg) {
+      throw new Error(`AgentRegistry: unknown agent '${this.agentId}'`);
+    }
+    return cfg;
   }
 
-  // -------------------------------------------------------------------------
-  // §14.3.2 Step 2: Hydrate short-term memory from Redis
-  // -------------------------------------------------------------------------
-  /**
-   * Retrieves the conversation history for this session from Redis.
-   * TODO (AI Sprint 1): connect to ShortTermMemory and retrieve the
-   * last N turns for this.sessionId.
-   * @see §14.8 (Memory Architecture)
-   */
-  private async hydrateMemory(): Promise<unknown[]> {
-    // TODO (AI Sprint 1): return ShortTermMemory.get(this.sessionId)
-    return [];
+  private validateToolCalls(calls: ToolCall[], config: AgentConfig): ToolCall[] {
+    const allowed = new Set(config.tools);
+    const valid: ToolCall[] = [];
+    for (const call of calls) {
+      if (!allowed.has(call.name)) continue;
+      const desc = this.opts.registries.tools.get(call.name);
+      if (!desc) continue;
+      const parsed = (desc.inputSchema as z.ZodTypeAny).safeParse(call.args);
+      if (!parsed.success) continue;
+      valid.push({ name: call.name, args: parsed.data, callId: call.callId });
+    }
+    return valid;
   }
+}
 
-  // -------------------------------------------------------------------------
-  // §14.3.2 Step 3: Call the LiteLLM-backed ModelGateway
-  // -------------------------------------------------------------------------
-  /**
-   * Sends the assembled prompt + conversation history to the model gateway.
-   * TODO (AI Sprint 1): construct the messages array and call
-   * ModelGateway.complete().
-   * @see §14.5 (Model Gateway)
-   */
-  private async callGateway(
-    _systemPrompt: string,
-    _messages: unknown[],
-    _userMessage: string,
-  ): Promise<ModelResponse> {
-    // TODO (AI Sprint 1): inject ModelGateway via constructor;
-    // call gateway.complete({ agentId, messages, tools }).
-    throw new Error("callGateway() not yet implemented — AI Sprint 1");
-  }
-
-  // -------------------------------------------------------------------------
-  // §14.3.2 Step 4: Validate tool calls against ToolRegistry schema
-  // -------------------------------------------------------------------------
-  /**
-   * Validates each proposed tool call from the model against:
-   *   1. The agent's declared tool-set (scope check).
-   *   2. The tool's Zod inputSchema (data validation).
-   * Rejects any call that fails either check without executing it.
-   * @see §14.7.1 (Tool descriptor fields)
-   * @see §14.9.1 (Prompt Injection Defense — scope enforcement)
-   */
-  private validateToolCalls(_calls: ToolCall[]): ToolCall[] {
-    // TODO (AI Sprint 1): for each call in _calls:
-    //   1. Check call.name is in agentConfig.tools.
-    //   2. Parse call.args through the tool's Zod inputSchema.
-    //   3. Reject (throw or filter) calls that fail either check.
-    return [];
-  }
-
-  // -------------------------------------------------------------------------
-  // §14.3.2 Step 5a: Dispatch tool directly (approval not required)
-  // -------------------------------------------------------------------------
-  /**
-   * Executes a tool whose approvalThreshold is 'none'.
-   * TODO (AI Sprint 1): call the platform API backing the tool.
-   * @see §14.7.2 (High-traffic tool subset)
-   */
-  private async dispatchTool(_call: ToolCall): Promise<ToolResult> {
-    // TODO (AI Sprint 1): route call.name to the appropriate platform API;
-    // validate the result against the tool's Zod outputSchema.
-    throw new Error("dispatchTool() not yet implemented — AI Sprint 1");
-  }
-
-  // -------------------------------------------------------------------------
-  // §14.3.2 Step 5b: Publish to ApprovalBus and await human decision
-  // -------------------------------------------------------------------------
-  /**
-   * Publishes a proposed-action event and suspends until a human approves
-   * or rejects (or until the 15-minute timeout expires).
-   * ADR-014: this path is MANDATORY for all money/account/messaging tools.
-   * @see §14.7.3 (Approval Bus)
-   * @see ADR-014 (autonomy ceiling)
-   */
-  private async waitForApproval(_call: ToolCall): Promise<ToolResult> {
-    // TODO (AI Sprint 2): publish to ApprovalBus.produce();
-    // await agent.action_approved / agent.action_rejected event;
-    // on timeout (15 min): return scripted safe response.
-    throw new Error("waitForApproval() not yet implemented — AI Sprint 2");
-  }
-
-  // -------------------------------------------------------------------------
-  // §14.3.2 Step 6: Emit Langfuse trace
-  // -------------------------------------------------------------------------
-  /**
-   * Emits a structured trace to Langfuse for every LLM call.
-   * TODO (AI Sprint 1): inject @langfuse/sdk LangfuseClient via constructor
-   * and emit the trace with agentId, sessionId, tokens, latency.
-   * @see §14.10 (Observability)
-   */
-  private async emitTrace(
-    _response: ModelResponse,
-    _toolResults: ToolResult[],
-  ): Promise<string> {
-    // TODO (AI Sprint 1): langfuseClient.trace({ agentId, sessionId, ... });
-    // return the trace ID.
-    return `stub-trace-${this.agentId}-${this.sessionId}-${Date.now()}`;
-  }
-
-  // -------------------------------------------------------------------------
-  // Public API
-  // -------------------------------------------------------------------------
-  /**
-   * Handle one conversation turn.
-   *
-   * This is the top-level entry point called by the HTTP handler or the
-   * LiveKit Agent worker. It orchestrates the full §14.3.2 lifecycle.
-   *
-   * AI Sprint 0: throws NotImplementedError — the lifecycle stubs are
-   * present for the smoke test to confirm construction succeeds, but the
-   * end-to-end path is wired in AI Sprint 1.
-   */
-  async handle(_input: HandleInput): Promise<HandleOutput> {
-    // TODO (AI Sprint 1): orchestrate the full lifecycle:
-    //   const config = await this.loadConfig();
-    //   const history = await this.hydrateMemory();
-    //   const response = await this.callGateway(systemPrompt, history, input.message);
-    //   const validCalls = this.validateToolCalls(response.toolCalls);
-    //   const toolResults = await Promise.all(validCalls.map(call =>
-    //     tool.approvalThreshold === 'single-human'
-    //       ? this.waitForApproval(call)
-    //       : this.dispatchTool(call)
-    //   ));
-    //   const traceId = await this.emitTrace(response, toolResults);
-    //   return { response: response.text, awaitedApproval: false, traceId };
-    throw new Error(
-      `AgentRuntime.handle() not yet implemented — AI Sprint 1. ` +
-        `Agent: ${this.agentId}, Session: ${this.sessionId}`,
-    );
-  }
+function historyToGatewayMessage(m: ConversationMessage): Message {
+  return m.role === "tool"
+    ? { role: "tool", content: m.content, toolCallId: m.toolCallId }
+    : { role: m.role, content: m.content };
 }
