@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@opentelemetry/api": "^1.9.1",
+    "@workspace/events": "workspace:*",
     "drizzle-orm": "catalog:",
     "drizzle-zod": "^0.8.3",
     "pg": "^8.20.0",
