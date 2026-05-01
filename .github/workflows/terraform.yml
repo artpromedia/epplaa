@@ -1,0 +1,78 @@
+name: Terraform
+
+# Plan on every PR that touches infra/terraform/.
+# Apply only on push to main, behind a GitHub Environment with required reviewers
+# (configure in repo Settings → Environments → tf-{staging,prod}).
+
+on:
+  pull_request:
+    branches: [main]
+    paths: ["infra/terraform/**"]
+  push:
+    branches: [main]
+    paths: ["infra/terraform/**"]
+  workflow_dispatch:
+    inputs:
+      env:
+        description: "Environment to apply"
+        required: true
+        type: choice
+        options: [staging, prod]
+        default: staging
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: terraform-${{ github.event.inputs.env || 'staging' }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    name: Plan • ${{ matrix.env }}
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'pull_request' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        env: [staging, prod]
+    defaults:
+      run:
+        working-directory: infra/terraform/environments/${{ matrix.env }}
+    env:
+      HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.HCLOUD_OS_ACCESS_KEY }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.HCLOUD_OS_SECRET_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.8
+      - run: terraform fmt -check -recursive ../..
+      - run: terraform init -backend-config=backend.hcl
+      - run: terraform validate
+      - run: terraform plan -no-color -input=false
+        continue-on-error: true
+
+  apply:
+    name: Apply • ${{ github.event.inputs.env }}
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'workflow_dispatch' }}
+    environment: tf-${{ github.event.inputs.env }}
+    defaults:
+      run:
+        working-directory: infra/terraform/environments/${{ github.event.inputs.env }}
+    env:
+      HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.HCLOUD_OS_ACCESS_KEY }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.HCLOUD_OS_SECRET_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.8
+      - run: terraform init -backend-config=backend.hcl
+      - run: terraform apply -auto-approve -input=false

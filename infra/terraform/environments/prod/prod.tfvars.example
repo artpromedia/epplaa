@@ -1,0 +1,3 @@
+cloudflare_account_id = "REPLACE_ME"
+cloudflare_zone       = "epplaa.com"
+ssh_public_keys       = []

@@ -1,0 +1,56 @@
+#cloud-config
+# k3s control-plane bootstrap.
+#
+# Templated by Terraform with: is_first, join_url, k3s_token, node_index, cluster.
+#
+# - is_first=true   → `k3s server --cluster-init` (initialises embedded etcd).
+# - is_first=false  → `k3s server --server <join_url> --token <k3s_token>`.
+#
+# We disable Traefik that ships with k3s — Traefik is installed via Helm
+# from infra/helm/traefik/ so we control its version and config in code.
+
+hostname: ${cluster}-cp-${node_index}
+
+package_update: true
+package_upgrade: false
+
+packages:
+  - curl
+  - ca-certificates
+  - jq
+
+write_files:
+  - path: /etc/systemd/journald.conf.d/persistent.conf
+    content: |
+      [Journal]
+      Storage=persistent
+      SystemMaxUse=2G
+
+runcmd:
+  - sysctl -w net.bridge.bridge-nf-call-iptables=1
+  - sysctl -w net.ipv4.ip_forward=1
+  %{ if is_first ~}
+  - |
+    curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION=v1.31.4+k3s1 sh -s - server \
+      --cluster-init \
+      --token "${k3s_token}" \
+      --disable=traefik \
+      --disable=servicelb \
+      --tls-san "${cluster}-cp-lb" \
+      --kube-apiserver-arg=audit-log-path=/var/log/k3s-audit.log \
+      --kube-apiserver-arg=audit-log-maxage=30 \
+      --kube-apiserver-arg=audit-log-maxbackup=10 \
+      --node-label "topology.kubernetes.io/zone=${cluster}"
+  %{ else ~}
+  - |
+    until curl -sk "${join_url}" >/dev/null 2>&1; do
+      echo "waiting for first control-plane node to be reachable…"
+      sleep 5
+    done
+    curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION=v1.31.4+k3s1 sh -s - server \
+      --server "${join_url}" \
+      --token "${k3s_token}" \
+      --disable=traefik \
+      --disable=servicelb \
+      --kube-apiserver-arg=audit-log-path=/var/log/k3s-audit.log
+  %{ endif ~}

@@ -1,0 +1,7 @@
+# Copy to staging.tfvars (gitignored) and fill in values.
+
+cloudflare_account_id = "REPLACE_ME"
+cloudflare_zone       = "epplaa.com"
+ssh_public_keys = [
+  # "ssh-ed25519 AAAA... ops@epplaa",
+]
