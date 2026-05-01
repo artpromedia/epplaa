@@ -1,7 +1,7 @@
 # #167 — Re-screen sellers if their account country changes outside the application form
 
 **Sprint:** Sprint 9 — Seller & Shopper Experience  
-**Status:** Backlog  
+**Status:** Implemented  
 
 ## Problem Statement
 

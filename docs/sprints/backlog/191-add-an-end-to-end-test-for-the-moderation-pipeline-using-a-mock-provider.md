@@ -1,7 +1,7 @@
 # #191 — Add an end-to-end test for the moderation pipeline using a mock provider
 
 **Sprint:** Sprint 10 — Admin Console & Moderation  
-**Status:** Backlog  
+**Status:** Implemented  
 
 ## Problem Statement
 

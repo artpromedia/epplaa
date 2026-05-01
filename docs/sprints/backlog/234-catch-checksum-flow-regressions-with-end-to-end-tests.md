@@ -1,7 +1,7 @@
 # #234 — Catch checksum-flow regressions with end-to-end tests
 
 **Sprint:** Sprint 4 — Backup, Data Integrity & Audit Pipeline  
-**Status:** Backlog  
+**Status:** Implemented  
 
 ## Problem Statement
 

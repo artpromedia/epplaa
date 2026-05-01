@@ -1,7 +1,7 @@
 # #166 — Surface the slowdown banner on the admin console too
 
 **Sprint:** Sprint 10 — Admin Console & Moderation  
-**Status:** Backlog  
+**Status:** Implemented  
 
 ## Problem Statement
 

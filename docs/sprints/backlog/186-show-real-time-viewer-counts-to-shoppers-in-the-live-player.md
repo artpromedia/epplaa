@@ -1,7 +1,7 @@
 # #186 — Show real-time viewer counts to shoppers in the live player
 
 **Sprint:** Sprint 8 — Live Streaming & Recordings  
-**Status:** Backlog  
+**Status:** Implemented  
 
 ## Problem Statement
 

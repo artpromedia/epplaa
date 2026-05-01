@@ -1,7 +1,7 @@
 # #221 — Add an end-to-end test that proves the tamper detector pages correctly
 
 **Sprint:** Sprint 4 — Backup, Data Integrity & Audit Pipeline  
-**Status:** Backlog  
+**Status:** Implemented  
 
 ## Problem Statement
 

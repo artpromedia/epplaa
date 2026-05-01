@@ -1,7 +1,7 @@
 # #176 — Add an integration test that runs the full PUDO push against a real database
 
 **Sprint:** Sprint 7 — Shipping, Carriers & PUDO Delivery  
-**Status:** Backlog  
+**Status:** Implemented  
 
 ## Problem Statement
 

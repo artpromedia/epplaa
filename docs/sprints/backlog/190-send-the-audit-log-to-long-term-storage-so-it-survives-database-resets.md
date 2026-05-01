@@ -1,7 +1,7 @@
 # #190 — Send the audit log to long-term storage so it survives database resets
 
 **Sprint:** Sprint 4 — Backup, Data Integrity & Audit Pipeline  
-**Status:** Backlog  
+**Status:** Implemented  
 
 ## Problem Statement
 

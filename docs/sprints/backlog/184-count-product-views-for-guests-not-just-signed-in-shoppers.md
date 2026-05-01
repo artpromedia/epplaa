@@ -1,7 +1,7 @@
 # #184 — Count product views for guests, not just signed-in shoppers
 
 **Sprint:** Sprint 9 — Seller & Shopper Experience  
-**Status:** Backlog  
+**Status:** Implemented  
 
 ## Problem Statement
 

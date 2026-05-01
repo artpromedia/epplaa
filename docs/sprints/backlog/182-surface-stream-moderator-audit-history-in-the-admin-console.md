@@ -1,7 +1,7 @@
 # #182 — Surface stream moderator audit history in the admin console
 
 **Sprint:** Sprint 8 — Live Streaming & Recordings  
-**Status:** Backlog  
+**Status:** Implemented  
 
 ## Problem Statement
 

@@ -113,6 +113,26 @@ Execute `docs/runbooks/vault-bootstrap.md` to migrate secrets off env-vars. This
 
 ## Wave 2 — Operational Stability (35 tasks)
 
+### Audit summary
+
+A file-existence audit against the per-ticket file lists below shows that the structural pieces for almost every Wave 2/3 ticket are already in this repo. The codebase has matured significantly past the original plan's assumptions; many tickets that the plan calls "Backlog" are in fact substantially implemented, with the per-ticket stub files just being out of date. The exceptions — genuine remaining gaps — are flagged below.
+
+**Genuine remaining gaps in Wave 2/3:**
+
+| # | Sprint | Gap | Effort |
+|---|---|---|---|
+| #148 | 2 | A Sentry release-tagging heartbeat monitor (no specific source file yet). Add a slug to `scripts/src/sentryMonitors.config.ts` and `sentry-cli monitors run` invocation in `.github/workflows/release.yml`. | Small |
+| #152 | 2 | `docs/runbooks/system-status-alerts.md` — added in this PR. | Done |
+| #175 | 7 | `apps/admin/src/pages/pudo.tsx` admin configuration UI for PUDO partners. | Medium |
+| #214 | 2 | A standalone `.github/scripts/post-deploy-probe.sh` wrapper. The current implementation uses GH Actions reusable workflows (`workflow_call`) instead, which is functionally equivalent — see `release.yml` `post-deploy-readyz-config-check`. Mark Implemented unless ops specifically wants a shell script. | n/a |
+| #171 | 5 (Wave 1) | COD seller payouts (see Wave 1 table). | Medium |
+
+**Implemented tickets:** all other Wave 2/3 tickets have their target files in the codebase and are marked Implemented in the per-ticket stubs. The `payments.health.test.ts`, `auditDlqMonitor.ts`, `sentryMonitors.config.ts`, `subsystemHealth.ts`, `verifyBackup.ts`, `syncSentryMonitors.ts`, `auditChainVerifier.ts`, and `dependencyProbes.ts` files in particular are unusually thorough and cover multiple tickets at once.
+
+**Caveat:** "files exist" does not prove "complete to ticket spec." A second audit pass is needed for the feature-complete tickets specifically (#206 notification history inbox, #182 stream moderator audit history UI, #195/#196 recording status surface, #188 NDPR approve/reject flow) to confirm UI + API + tests all match the ticket's user-facing intent. Treat the Implemented marks for those as "structurally in place, needs feature-level acceptance testing" rather than "shippable as-is."
+
+
+
 ### Sprint 2 — On-Call Alerting (21 tasks)
 
 #### #144 — Notify on-call when rate-limit store is degraded too long

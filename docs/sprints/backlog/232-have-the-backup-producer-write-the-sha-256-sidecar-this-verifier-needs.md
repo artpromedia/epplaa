@@ -1,7 +1,7 @@
 # #232 — Have the backup producer write the SHA-256 sidecar this verifier needs
 
 **Sprint:** Sprint 4 — Backup, Data Integrity & Audit Pipeline  
-**Status:** Backlog  
+**Status:** Implemented  
 
 ## Problem Statement
 

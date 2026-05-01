@@ -1,7 +1,7 @@
 # #161 — Surface unresolvable legacy streams to ops in the admin console
 
 **Sprint:** Sprint 9 — Seller & Shopper Experience  
-**Status:** Backlog  
+**Status:** Implemented  
 
 ## Problem Statement
 

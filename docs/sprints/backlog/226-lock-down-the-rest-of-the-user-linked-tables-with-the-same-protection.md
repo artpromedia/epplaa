@@ -1,7 +1,7 @@
 # #226 — Lock down the rest of the user-linked tables with the same protection
 
 **Sprint:** Sprint 13 — Ops Tooling & Monitoring Infrastructure  
-**Status:** Backlog  
+**Status:** Implemented  
 
 ## Problem Statement
 

@@ -1,7 +1,7 @@
 # #189 — Show full-size KYC document images instead of thumbnails
 
 **Sprint:** Sprint 10 — Admin Console & Moderation  
-**Status:** Backlog  
+**Status:** Implemented  
 
 ## Problem Statement
 

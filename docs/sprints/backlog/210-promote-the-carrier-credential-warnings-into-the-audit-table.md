@@ -1,7 +1,7 @@
 # #210 — Promote the carrier credential warnings into the audit table
 
 **Sprint:** Sprint 7 — Shipping, Carriers & PUDO Delivery  
-**Status:** Backlog  
+**Status:** Implemented  
 
 ## Problem Statement
 

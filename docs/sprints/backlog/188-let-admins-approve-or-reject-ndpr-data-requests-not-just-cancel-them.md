@@ -1,7 +1,7 @@
 # #188 — Let admins approve or reject NDPR data requests, not just cancel them
 
 **Sprint:** Sprint 10 — Admin Console & Moderation  
-**Status:** Backlog  
+**Status:** Implemented  
 
 ## Problem Statement
 

@@ -1,7 +1,7 @@
 # #195 — Show sellers and buyers a clear status while a recording is being prepared
 
 **Sprint:** Sprint 6 — Notifications & Messaging  
-**Status:** Backlog  
+**Status:** Implemented  
 
 ## Problem Statement
 

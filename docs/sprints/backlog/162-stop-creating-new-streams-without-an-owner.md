@@ -1,7 +1,7 @@
 # #162 — Stop creating new streams without an owner
 
 **Sprint:** Sprint 9 — Seller & Shopper Experience  
-**Status:** Backlog  
+**Status:** Implemented  
 
 ## Problem Statement
 

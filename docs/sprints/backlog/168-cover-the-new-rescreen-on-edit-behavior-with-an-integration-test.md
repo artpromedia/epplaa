@@ -1,7 +1,7 @@
 # #168 — Cover the new rescreen-on-edit behavior with an integration test
 
 **Sprint:** Sprint 3 — CI/CD, Testing & DevOps Gates  
-**Status:** Backlog  
+**Status:** Implemented  
 
 ## Problem Statement
 

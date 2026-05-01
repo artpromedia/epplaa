@@ -1,7 +1,7 @@
 # #160 — Cover the live-counts comparison end-to-end in CI
 
 **Sprint:** Sprint 3 — CI/CD, Testing & DevOps Gates  
-**Status:** Backlog  
+**Status:** Implemented  
 
 ## Problem Statement
 

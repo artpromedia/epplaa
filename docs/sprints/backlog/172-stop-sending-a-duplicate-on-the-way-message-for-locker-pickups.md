@@ -1,7 +1,7 @@
 # #172 — Stop sending a duplicate 'on the way' message for locker pickups
 
 **Sprint:** Sprint 6 — Notifications & Messaging  
-**Status:** Backlog  
+**Status:** Implemented  
 
 ## Problem Statement
 

@@ -1,7 +1,7 @@
 # #233 — Promote the sidecar check to a hard failure once producers reliably emit them
 
 **Sprint:** Sprint 4 — Backup, Data Integrity & Audit Pipeline  
-**Status:** Backlog  
+**Status:** Implemented  
 
 ## Problem Statement
 

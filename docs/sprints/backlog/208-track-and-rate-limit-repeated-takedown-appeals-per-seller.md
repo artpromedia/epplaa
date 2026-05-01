@@ -1,7 +1,7 @@
 # #208 — Track and rate-limit repeated takedown appeals per seller
 
 **Sprint:** Sprint 10 — Admin Console & Moderation  
-**Status:** Backlog  
+**Status:** Implemented  
 
 ## Problem Statement
 

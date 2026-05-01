@@ -1,7 +1,7 @@
 # #209 — Disabled carriers should also stop returning fake quotes at runtime
 
 **Sprint:** Sprint 7 — Shipping, Carriers & PUDO Delivery  
-**Status:** Backlog  
+**Status:** Implemented  
 
 ## Problem Statement
 

@@ -1,7 +1,7 @@
 # #192 — Cache and rate-limit the boot-time provider health probe
 
 **Sprint:** Sprint 10 — Admin Console & Moderation  
-**Status:** Backlog  
+**Status:** Implemented  
 
 ## Problem Statement
 

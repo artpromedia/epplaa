@@ -1,7 +1,7 @@
 # #144 — Notify on-call if the rate-limit store has been degraded for too long
 
 **Sprint:** Sprint 2 — On-Call, Alerting & Incident Response  
-**Status:** Backlog  
+**Status:** Implemented  
 
 ## Problem Statement
 

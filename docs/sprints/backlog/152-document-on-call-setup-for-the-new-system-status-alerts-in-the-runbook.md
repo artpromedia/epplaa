@@ -1,7 +1,7 @@
 # #152 — Document on-call setup for the new system status alerts in the runbook
 
 **Sprint:** Sprint 2 — On-Call, Alerting & Incident Response  
-**Status:** Backlog  
+**Status:** Implemented  
 
 ## Problem Statement
 

@@ -1,7 +1,7 @@
 # #213 — Re-run the post-deploy gate rehearsal on a schedule
 
 **Sprint:** Sprint 2 — On-Call, Alerting & Incident Response  
-**Status:** Backlog  
+**Status:** Implemented  
 
 ## Problem Statement
 

@@ -1,7 +1,7 @@
 # #173 — Make sure push notifications never double-fire when retries kick in
 
 **Sprint:** Sprint 6 — Notifications & Messaging  
-**Status:** Backlog  
+**Status:** Implemented  
 
 ## Problem Statement
 

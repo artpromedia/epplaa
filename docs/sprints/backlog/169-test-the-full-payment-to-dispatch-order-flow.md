@@ -1,7 +1,7 @@
 # #169 — Test the full payment-to-dispatch order flow
 
 **Sprint:** Sprint 7 — Shipping, Carriers & PUDO Delivery  
-**Status:** Backlog  
+**Status:** Implemented  
 
 ## Problem Statement
 

@@ -1,7 +1,7 @@
 # #230 — Catch broken on-call message bodies before they ship
 
 **Sprint:** Sprint 2 — On-Call, Alerting & Incident Response  
-**Status:** Backlog  
+**Status:** Implemented  
 
 ## Problem Statement
 

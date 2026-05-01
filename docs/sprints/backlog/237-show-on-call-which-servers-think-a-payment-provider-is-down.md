@@ -1,7 +1,7 @@
 # #237 — Show on-call which servers think a payment provider is down
 
 **Sprint:** Sprint 2 — On-Call, Alerting & Incident Response  
-**Status:** Backlog  
+**Status:** Implemented  
 
 ## Problem Statement
 

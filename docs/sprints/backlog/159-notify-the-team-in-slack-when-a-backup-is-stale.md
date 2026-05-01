@@ -1,7 +1,7 @@
 # #159 — Notify the team in Slack when a backup is stale
 
 **Sprint:** Sprint 4 — Backup, Data Integrity & Audit Pipeline  
-**Status:** Backlog  
+**Status:** Implemented  
 
 ## Problem Statement
 

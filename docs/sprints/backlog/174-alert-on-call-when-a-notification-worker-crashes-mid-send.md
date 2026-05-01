@@ -1,7 +1,7 @@
 # #174 — Alert on-call when a notification worker crashes mid-send
 
 **Sprint:** Sprint 2 — On-Call, Alerting & Incident Response  
-**Status:** Backlog  
+**Status:** Implemented  
 
 ## Problem Statement
 

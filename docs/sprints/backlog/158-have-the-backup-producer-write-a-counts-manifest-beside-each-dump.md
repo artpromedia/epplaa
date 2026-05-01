@@ -1,7 +1,7 @@
 # #158 — Have the backup producer write a counts manifest beside each dump
 
 **Sprint:** Sprint 4 — Backup, Data Integrity & Audit Pipeline  
-**Status:** Backlog  
+**Status:** Implemented  
 
 ## Problem Statement
 

@@ -1,7 +1,7 @@
 # #214 — Share the post-deploy probe wrapper between production gate and rehearsal
 
 **Sprint:** Sprint 2 — On-Call, Alerting & Incident Response  
-**Status:** Backlog  
+**Status:** Implemented  
 
 ## Problem Statement
 

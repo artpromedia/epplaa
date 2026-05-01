@@ -1,7 +1,7 @@
 # #197 — Let sellers turn 'Free shipping' on or off for each listing
 
 **Sprint:** Sprint 9 — Seller & Shopper Experience  
-**Status:** Backlog  
+**Status:** Implemented  
 
 ## Problem Statement
 

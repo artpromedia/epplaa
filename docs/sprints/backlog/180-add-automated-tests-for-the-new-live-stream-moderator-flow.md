@@ -1,7 +1,7 @@
 # #180 — Add automated tests for the new live-stream moderator flow
 
 **Sprint:** Sprint 8 — Live Streaming & Recordings  
-**Status:** Backlog  
+**Status:** Implemented  
 
 ## Problem Statement
 

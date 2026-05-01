@@ -1,7 +1,7 @@
 # #145 — Retire the old hostname-only on-call probe once the broader probe is proven
 
 **Sprint:** Sprint 2 — On-Call, Alerting & Incident Response  
-**Status:** Backlog  
+**Status:** Implemented  
 
 ## Problem Statement
 

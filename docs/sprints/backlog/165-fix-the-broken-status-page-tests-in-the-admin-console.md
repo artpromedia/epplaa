@@ -1,7 +1,7 @@
 # #165 — Fix the broken Status page tests in the admin console
 
 **Sprint:** Sprint 10 — Admin Console & Moderation  
-**Status:** Backlog  
+**Status:** Implemented  
 
 ## Problem Statement
 

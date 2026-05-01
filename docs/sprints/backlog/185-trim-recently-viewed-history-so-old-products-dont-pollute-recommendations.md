@@ -1,7 +1,7 @@
 # #185 — Trim recently-viewed history so old products don't pollute recommendations
 
 **Sprint:** Sprint 9 — Seller & Shopper Experience  
-**Status:** Backlog  
+**Status:** Implemented  
 
 ## Problem Statement
 

@@ -1,7 +1,7 @@
 # #156 — Automatically replay dead-lettered audit rows so the backlog drains itself
 
 **Sprint:** Sprint 4 — Backup, Data Integrity & Audit Pipeline  
-**Status:** Backlog  
+**Status:** Implemented  
 
 ## Problem Statement
 

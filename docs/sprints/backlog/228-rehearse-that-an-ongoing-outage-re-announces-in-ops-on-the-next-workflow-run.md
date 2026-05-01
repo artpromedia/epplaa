@@ -1,7 +1,7 @@
 # #228 — Rehearse that an ongoing outage re-announces in #ops on the next workflow run
 
 **Sprint:** Sprint 2 — On-Call, Alerting & Incident Response  
-**Status:** Backlog  
+**Status:** Implemented  
 
 ## Problem Statement
 

@@ -1,7 +1,7 @@
 # #227 — Catch missing user-id foreign keys before they reach production
 
 **Sprint:** Sprint 3 — CI/CD, Testing & DevOps Gates  
-**Status:** Backlog  
+**Status:** Implemented  
 
 ## Problem Statement
 

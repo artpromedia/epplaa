@@ -1,7 +1,7 @@
 # #157 — Practice the audit-DLQ page in the weekly rehearsal
 
 **Sprint:** Sprint 2 — On-Call, Alerting & Incident Response  
-**Status:** Backlog  
+**Status:** Implemented  
 
 ## Problem Statement
 

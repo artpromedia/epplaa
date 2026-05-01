@@ -1,7 +1,7 @@
 # #187 — Stop overcounting viewers when the same shopper has two tabs open
 
 **Sprint:** Sprint 8 — Live Streaming & Recordings  
-**Status:** Backlog  
+**Status:** Implemented  
 
 ## Problem Statement
 

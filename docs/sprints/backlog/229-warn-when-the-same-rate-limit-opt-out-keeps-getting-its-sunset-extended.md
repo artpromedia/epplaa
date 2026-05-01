@@ -1,7 +1,7 @@
 # #229 — Warn when the same rate-limit opt-out keeps getting its sunset extended
 
 **Sprint:** Sprint 3 — CI/CD, Testing & DevOps Gates  
-**Status:** Backlog  
+**Status:** Implemented  
 
 ## Problem Statement
 

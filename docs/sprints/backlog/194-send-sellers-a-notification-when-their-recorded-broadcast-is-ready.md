@@ -1,7 +1,7 @@
 # #194 — Send sellers a notification when their recorded broadcast is ready
 
 **Sprint:** Sprint 6 — Notifications & Messaging  
-**Status:** Backlog  
+**Status:** Implemented  
 
 ## Problem Statement
 

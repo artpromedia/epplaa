@@ -1,7 +1,7 @@
 # #223 — Show the proposed Sentry filter change in PR comments when the inventory drifts
 
 **Sprint:** Sprint 13 — Ops Tooling & Monitoring Infrastructure  
-**Status:** Backlog  
+**Status:** Implemented  
 
 ## Problem Statement
 

@@ -1,7 +1,7 @@
 # #238 — Tell on-call about a stuck rate-limit Redis the same way as payment providers
 
 **Sprint:** Sprint 2 — On-Call, Alerting & Incident Response  
-**Status:** Backlog  
+**Status:** Implemented  
 
 ## Problem Statement
 

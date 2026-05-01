@@ -1,7 +1,7 @@
 # #217 — Show the backup row-count trend on the admin status panel
 
 **Sprint:** Sprint 4 — Backup, Data Integrity & Audit Pipeline  
-**Status:** Backlog  
+**Status:** Implemented  
 
 ## Problem Statement
 

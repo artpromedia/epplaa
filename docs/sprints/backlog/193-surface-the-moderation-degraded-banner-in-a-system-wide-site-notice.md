@@ -1,7 +1,7 @@
 # #193 — Surface the moderation degraded banner in a system-wide site notice
 
 **Sprint:** Sprint 10 — Admin Console & Moderation  
-**Status:** Backlog  
+**Status:** Implemented  
 
 ## Problem Statement
 

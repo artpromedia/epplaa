@@ -1,7 +1,7 @@
 # #212 — Push log-aggregator alerts automatically once a tool is chosen
 
 **Sprint:** Sprint 2 — On-Call, Alerting & Incident Response  
-**Status:** Backlog  
+**Status:** Implemented  
 
 ## Problem Statement
 

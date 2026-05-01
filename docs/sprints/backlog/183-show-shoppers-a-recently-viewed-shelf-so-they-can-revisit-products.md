@@ -1,7 +1,7 @@
 # #183 — Show shoppers a 'Recently viewed' shelf so they can revisit products
 
 **Sprint:** Sprint 9 — Seller & Shopper Experience  
-**Status:** Backlog  
+**Status:** Implemented  
 
 ## Problem Statement
 

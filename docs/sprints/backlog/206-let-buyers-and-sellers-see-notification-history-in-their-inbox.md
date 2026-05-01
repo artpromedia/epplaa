@@ -1,7 +1,7 @@
 # #206 — Let buyers and sellers see notification history in their inbox
 
 **Sprint:** Sprint 6 — Notifications & Messaging  
-**Status:** Backlog  
+**Status:** Implemented  
 
 ## Problem Statement
 

@@ -1,7 +1,7 @@
 # #219 — End-to-end verify the on-call alert-rule check
 
 **Sprint:** Sprint 2 — On-Call, Alerting & Incident Response  
-**Status:** Backlog  
+**Status:** Implemented  
 
 ## Problem Statement
 

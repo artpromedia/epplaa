@@ -1,7 +1,7 @@
 # #207 — Add automated tests for the takedown notification and appeal flow
 
 **Sprint:** Sprint 10 — Admin Console & Moderation  
-**Status:** Backlog  
+**Status:** Implemented  
 
 ## Problem Statement
 

@@ -1,7 +1,7 @@
 # #235 — Catch the same opt-out paperwork gap when ops set the env var by hand
 
 **Sprint:** Sprint 3 — CI/CD, Testing & DevOps Gates  
-**Status:** Backlog  
+**Status:** Implemented  
 
 ## Problem Statement
 

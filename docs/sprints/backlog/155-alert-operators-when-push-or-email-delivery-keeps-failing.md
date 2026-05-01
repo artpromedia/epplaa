@@ -1,7 +1,7 @@
 # #155 — Alert operators when push or email delivery keeps failing
 
 **Sprint:** Sprint 2 — On-Call, Alerting & Incident Response  
-**Status:** Backlog  
+**Status:** Implemented  
 
 ## Problem Statement
 

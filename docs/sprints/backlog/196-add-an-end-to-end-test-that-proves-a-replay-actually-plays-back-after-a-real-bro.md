@@ -1,7 +1,7 @@
 # #196 — Add an end-to-end test that proves a replay actually plays back after a real broadcast
 
 **Sprint:** Sprint 8 — Live Streaming & Recordings  
-**Status:** Backlog  
+**Status:** Implemented  
 
 ## Problem Statement
 

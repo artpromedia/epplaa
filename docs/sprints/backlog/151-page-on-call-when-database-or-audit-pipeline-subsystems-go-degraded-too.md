@@ -1,7 +1,7 @@
 # #151 — Page on-call when database or audit-pipeline subsystems go degraded too
 
 **Sprint:** Sprint 2 — On-Call, Alerting & Incident Response  
-**Status:** Backlog  
+**Status:** Implemented  
 
 ## Problem Statement
 

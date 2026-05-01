@@ -1,7 +1,7 @@
 # #181 — Notify viewers when they're promoted to moderator
 
 **Sprint:** Sprint 6 — Notifications & Messaging  
-**Status:** Backlog  
+**Status:** Implemented  
 
 ## Problem Statement
 

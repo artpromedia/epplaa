@@ -1,7 +1,7 @@
 # #231 — Catch a broken Sentry pager forwarder before the next outage
 
 **Sprint:** Sprint 2 — On-Call, Alerting & Incident Response  
-**Status:** Backlog  
+**Status:** Implemented  
 
 ## Problem Statement
 

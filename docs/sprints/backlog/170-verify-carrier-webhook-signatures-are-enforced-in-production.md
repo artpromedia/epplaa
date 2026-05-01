@@ -1,7 +1,7 @@
 # #170 — Verify carrier webhook signatures are enforced in production
 
 **Sprint:** Sprint 7 — Shipping, Carriers & PUDO Delivery  
-**Status:** Backlog  
+**Status:** Implemented  
 
 ## Problem Statement
 
