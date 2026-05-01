@@ -1,0 +1,121 @@
+name: Build images
+
+# Builds container images for every service that has a Dockerfile, pushes
+# them to GHCR, and runs Trivy vulnerability scanning. The push step only
+# runs on main / tag refs; PRs build locally and skip the push.
+#
+# Image tags applied (push refs only):
+#   - sha-<short-sha>    immutable per-commit reference (always)
+#   - <branch>           moving tag for the branch (main, develop)
+#   - latest             on main only
+#   - <vX.Y.Z>           on tag refs only (matches release.yml)
+#
+# This is the single source of truth for what gets deployed by Argo CD.
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  packages: write
+  security-events: write
+
+concurrency:
+  group: build-images-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build • ${{ matrix.service }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - service: api-monolith
+            dockerfile: services/api-monolith/Dockerfile
+            context: .
+          - service: agent-service
+            dockerfile: services/agent-service/Dockerfile
+            context: .
+    env:
+      REGISTRY: ghcr.io
+      IMAGE: ghcr.io/${{ github.repository_owner }}/${{ matrix.service }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        if: ${{ github.event_name == 'push' }}
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute tags
+        id: tags
+        run: |
+          set -euo pipefail
+          SHA="${GITHUB_SHA::12}"
+          TAGS="${IMAGE}:sha-${SHA}"
+          if [[ "${GITHUB_REF}" == refs/heads/* ]]; then
+            BRANCH="${GITHUB_REF#refs/heads/}"
+            TAGS="${TAGS},${IMAGE}:${BRANCH}"
+            if [[ "${BRANCH}" == "main" ]]; then
+              TAGS="${TAGS},${IMAGE}:latest"
+            fi
+          elif [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            TAGS="${TAGS},${IMAGE}:${GITHUB_REF#refs/tags/}"
+          fi
+          echo "tags=${TAGS}" >> "${GITHUB_OUTPUT}"
+
+      - name: Build (PR) / Build & Push (main+tags)
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          push: ${{ github.event_name == 'push' }}
+          load: ${{ github.event_name == 'pull_request' }}
+          tags: ${{ steps.tags.outputs.tags }}
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+          provenance: false
+          # SBOM only on push refs (slows PR feedback otherwise).
+          sbom: ${{ github.event_name == 'push' }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.title=${{ matrix.service }}
+
+      - name: Trivy scan (image)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          # On PRs, scan the locally-loaded image; on push, scan the registry tag.
+          image-ref: ${{ github.event_name == 'pull_request' && format('{0}:sha-{1}', env.IMAGE, github.sha) || format('{0}:sha-{1}', env.IMAGE, github.sha) }}
+          format: sarif
+          output: trivy-${{ matrix.service }}.sarif
+          # Phase A: report-only so we don't block first deploy on CVEs.
+          # Flip to `severity: CRITICAL,HIGH` + `exit-code: 1` in Phase D
+          # once the OS+deps baseline is clean.
+          ignore-unfixed: true
+          severity: "CRITICAL,HIGH,MEDIUM"
+          exit-code: "0"
+        env:
+          # When PR: image is loaded into local Docker; trivy needs that.
+          TRIVY_USERNAME: ${{ github.actor }}
+          TRIVY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload Trivy SARIF to GitHub code-scanning
+        if: ${{ always() && hashFiles(format('trivy-{0}.sarif', matrix.service)) != '' }}
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-${{ matrix.service }}.sarif
+          category: trivy-${{ matrix.service }}
