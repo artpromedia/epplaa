@@ -1,0 +1,36 @@
+# When Phase F service extraction begins, every new directory under
+# `services/` gets a Helm chart at `infra/helm/<service>/`. This
+# ApplicationSet auto-discovers them so we don't hand-write a new
+# Application manifest per service.
+#
+# Disabled until the second service ships — keeping it in code so the
+# enable-step is a one-line change at that time.
+
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: per-service
+  namespace: argocd
+spec:
+  generators:
+    - git:
+        repoURL: https://github.com/artpromedia/epplaa
+        revision: main
+        directories:
+          - path: infra/helm/services/*
+  template:
+    metadata:
+      name: "{{path.basename}}"
+    spec:
+      project: services
+      source:
+        repoURL: https://github.com/artpromedia/epplaa
+        targetRevision: main
+        path: "{{path}}"
+        helm: { valueFiles: [values.yaml] }
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: services
+      syncPolicy:
+        automated: { prune: true, selfHeal: true }
+        syncOptions: [CreateNamespace=true]

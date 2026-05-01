@@ -1,0 +1,82 @@
+image:
+  repository: ghcr.io/artpromedia/agent-service
+  tag: latest
+  pullPolicy: IfNotPresent
+
+replicaCount: 2
+
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: 3100
+
+resources:
+  requests: { cpu: 100m, memory: 256Mi }
+  limits:   { cpu: 500m, memory: 512Mi }
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 6
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 80
+
+podDisruptionBudget: { enabled: true, minAvailable: 1 }
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  runAsGroup: 10001
+  fsGroup: 10001
+  seccompProfile: { type: RuntimeDefault }
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities: { drop: [ALL] }
+
+ephemeralVolumes:
+  - { name: tmp, mountPath: /tmp }
+
+config:
+  NODE_ENV: production
+  PORT: "3100"
+  OTEL_SERVICE_NAME: epplaa-agent-service
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector.observability:4318
+  LITELLM_BASE_URL: http://litellm.ai-platform:4000
+  AGENT_REDIS_URL: redis://redis-master.data:6379
+
+vault:
+  enabled: true
+  storeRef: { name: vault-backend, kind: ClusterSecretStore }
+  refreshInterval: 1h
+  secrets:
+    - name: agent-service-core
+      keys:
+        - LITELLM_MASTER_KEY: { remoteKey: epplaa/agent-service, property: litellm_master_key }
+        - LANGFUSE_PUBLIC_KEY: { remoteKey: epplaa/agent-service, property: langfuse_public_key }
+        - LANGFUSE_SECRET_KEY: { remoteKey: epplaa/agent-service, property: langfuse_secret_key }
+        - DATABASE_URL: { remoteKey: epplaa/agent-service, property: database_url }
+
+probes:
+  liveness:
+    httpGet: { path: /healthz, port: http }
+    initialDelaySeconds: 10
+    periodSeconds: 10
+  readiness:
+    httpGet: { path: /healthz, port: http }
+    initialDelaySeconds: 5
+    periodSeconds: 5
+
+serviceMonitor: { enabled: true, interval: 30s, path: /metrics, port: http }
+
+ingress: { enabled: false }
+
+affinity:
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          topologyKey: kubernetes.io/hostname
+          labelSelector:
+            matchLabels: { app.kubernetes.io/name: agent-service }

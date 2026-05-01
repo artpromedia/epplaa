@@ -1,0 +1,26 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: api-monolith
+  namespace: argocd
+  finalizers: [resources-finalizer.argocd.argoproj.io]
+  annotations:
+    # Argo CD Image Updater watches GHCR and bumps `image.tag` on new sha-* tags.
+    argocd-image-updater.argoproj.io/image-list: api=ghcr.io/artpromedia/api-monolith
+    argocd-image-updater.argoproj.io/api.update-strategy: digest
+    argocd-image-updater.argoproj.io/api.allow-tags: "regexp:^sha-[a-f0-9]{12}$"
+    argocd-image-updater.argoproj.io/write-back-method: git
+spec:
+  project: services
+  source:
+    repoURL: https://github.com/artpromedia/epplaa
+    targetRevision: main
+    path: infra/helm/api-monolith
+    helm:
+      valueFiles: [values.yaml]
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: services
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions: [CreateNamespace=true]

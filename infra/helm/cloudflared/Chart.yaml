@@ -1,0 +1,6 @@
+apiVersion: v2
+name: cloudflared
+description: Cloudflare Tunnel daemon — only public ingress path into the cluster.
+type: application
+version: 0.1.0
+appVersion: "2025.1"

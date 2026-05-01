@@ -1,0 +1,10 @@
+apiVersion: v2
+name: external-dns-platform
+description: Wrapper around bitnami/external-dns for Cloudflare zone sync.
+type: application
+version: 0.1.0
+appVersion: "0.15"
+dependencies:
+  - name: external-dns
+    version: 8.7.6
+    repository: https://charts.bitnami.com/bitnami

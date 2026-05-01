@@ -1,0 +1,34 @@
+# Redis (bitnami) — used by api-monolith for rate-limit Lua sliding-window
+# and the Socket.IO Redis adapter. NOT a general application cache yet.
+#
+# Sentinel topology so the master is failed over automatically; rate-limit
+# can tolerate ~5s of read-only mode on failover, Socket.IO adapter
+# reconnects automatically.
+
+redis:
+  architecture: replication
+  auth:
+    enabled: true
+    existingSecret: redis-auth
+    existingSecretPasswordKey: REDIS_PASSWORD
+  master:
+    persistence:
+      enabled: true
+      size: 8Gi
+    resources:
+      requests: { cpu: 100m, memory: 256Mi }
+      limits: { cpu: 500m, memory: 512Mi }
+  replica:
+    replicaCount: 2
+    persistence:
+      enabled: true
+      size: 8Gi
+  sentinel:
+    enabled: true
+    quorum: 2
+  metrics:
+    enabled: true
+    serviceMonitor:
+      enabled: true
+      additionalLabels:
+        release: kube-prometheus-stack

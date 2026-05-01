@@ -1,0 +1,10 @@
+apiVersion: v2
+name: tempo-platform
+description: Wrapper around grafana/tempo (single-binary mode).
+type: application
+version: 0.1.0
+appVersion: "2.7"
+dependencies:
+  - name: tempo
+    version: 1.18.2
+    repository: https://grafana.github.io/helm-charts

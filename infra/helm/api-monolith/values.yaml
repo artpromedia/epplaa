@@ -1,0 +1,138 @@
+# Default values. Overridden per environment via Argo CD's
+# `valueFiles` from infra/argocd/applications/services/api-monolith/values-<env>.yaml.
+
+image:
+  repository: ghcr.io/artpromedia/api-monolith
+  # Tag is set by the Argo CD Image Updater (or by CI rendering values per
+  # environment). Default `latest` only for local helm-template rendering.
+  tag: latest
+  pullPolicy: IfNotPresent
+
+replicaCount: 3
+
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: 8080
+
+# Sticky sessions are NOT required because Socket.IO uses the Redis adapter.
+# Leave the Service stateless.
+
+resources:
+  requests:
+    cpu: 250m
+    memory: 512Mi
+  limits:
+    cpu: 1000m
+    memory: 1Gi
+
+autoscaling:
+  enabled: true
+  minReplicas: 3
+  maxReplicas: 12
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 80
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 2
+
+# Pod-level securityContext. Matches the non-root user baked into the
+# Dockerfile (uid 10001).
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  runAsGroup: 10001
+  fsGroup: 10001
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: [ALL]
+
+# Where the app needs writable scratch space (pino, /tmp, etc.).
+# readOnlyRootFilesystem=true means we have to mount tmpfs.
+ephemeralVolumes:
+  - name: tmp
+    mountPath: /tmp
+
+ingress:
+  enabled: true
+  className: traefik
+  hosts:
+    - host: api.epplaa.com
+      paths: ["/"]
+  tls: []
+
+# Non-secret config. Secrets come from ExternalSecret (see vault.* below).
+config:
+  NODE_ENV: production
+  PORT: "8080"
+  RATE_LIMIT_STORE: redis
+  OTEL_SERVICE_NAME: epplaa-api
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector.observability:4318
+
+# Vault paths to mirror into Kubernetes Secrets via ExternalSecrets Operator.
+# All paths are relative to the `kv-v2` mount at `secret/`.
+vault:
+  enabled: true
+  storeRef:
+    name: vault-backend
+    kind: ClusterSecretStore
+  refreshInterval: 1h
+  secrets:
+    - name: api-monolith-core
+      keys:
+        - DATABASE_URL: { remoteKey: epplaa/api-monolith, property: database_url }
+        - SESSION_SECRET: { remoteKey: epplaa/api-monolith, property: session_secret }
+        - MFA_ENCRYPTION_KEY: { remoteKey: epplaa/api-monolith, property: mfa_encryption_key }
+        - MFA_BACKUP_PEPPER: { remoteKey: epplaa/api-monolith, property: mfa_backup_pepper }
+        - REDIS_URL: { remoteKey: epplaa/api-monolith, property: redis_url }
+        - CLERK_SECRET_KEY: { remoteKey: epplaa/api-monolith, property: clerk_secret_key }
+        - CLERK_PUBLISHABLE_KEY: { remoteKey: epplaa/api-monolith, property: clerk_publishable_key }
+        - SENTRY_DSN: { remoteKey: epplaa/api-monolith, property: sentry_dsn }
+
+probes:
+  liveness:
+    httpGet:
+      path: /healthz
+      port: http
+    initialDelaySeconds: 20
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 6
+  readiness:
+    httpGet:
+      path: /readyz
+      port: http
+    initialDelaySeconds: 5
+    periodSeconds: 5
+    timeoutSeconds: 3
+    failureThreshold: 3
+  startup:
+    httpGet:
+      path: /healthz
+      port: http
+    failureThreshold: 30
+    periodSeconds: 5
+
+serviceMonitor:
+  enabled: true
+  interval: 30s
+  path: /metrics
+  port: http
+
+nodeSelector: {}
+tolerations: []
+affinity:
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          topologyKey: kubernetes.io/hostname
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: api-monolith

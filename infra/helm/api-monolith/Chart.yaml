@@ -1,0 +1,10 @@
+apiVersion: v2
+name: api-monolith
+description: The Express monolith — first cutover to prove the substrate.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+icon: https://avatars.githubusercontent.com/u/0
+maintainers:
+  - name: Platform Eng
+    email: platform@epplaa.com

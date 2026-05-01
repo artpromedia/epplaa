@@ -1,0 +1,35 @@
+# App-of-apps root.
+#
+# Apply this single manifest after Argo CD itself is bootstrapped on a
+# fresh cluster:
+#
+#   kubectl apply -n argocd -f infra/argocd/bootstrap/root.yaml
+#
+# It installs every Application under infra/argocd/applications/. From
+# that point on the cluster is fully GitOps-managed.
+
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: root
+  namespace: argocd
+  finalizers: [resources-finalizer.argocd.argoproj.io]
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/artpromedia/epplaa
+    targetRevision: main
+    path: infra/argocd/applications
+    directory:
+      recurse: true
+      include: "*.yaml"
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ApplyOutOfSyncOnly=true

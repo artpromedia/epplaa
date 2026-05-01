@@ -1,0 +1,33 @@
+image:
+  repository: cloudflare/cloudflared
+  tag: "2025.1.1"
+
+replicaCount: 3
+
+# Tunnel ID + token come from Vault. The tunnel is created by Terraform
+# (modules/cloudflare-zone). The token is written to Vault path
+# secret/epplaa/cluster/cloudflared.
+vault:
+  storeRef: { name: vault-backend, kind: ClusterSecretStore }
+  secretName: cloudflared-tunnel-credentials
+  remoteKey: epplaa/cluster/cloudflared
+  property: tunnel_token
+
+# Ingress rules tell the tunnel where to forward traffic in-cluster.
+ingressRules:
+  - hostname: api.epplaa.com
+    service: http://traefik.platform.svc.cluster.local:80
+  - hostname: spa.epplaa.com
+    service: http://traefik.platform.svc.cluster.local:80
+  - hostname: admin.epplaa.com
+    service: http://traefik.platform.svc.cluster.local:80
+  - hostname: partner.epplaa.com
+    service: http://traefik.platform.svc.cluster.local:80
+  - hostname: studio.epplaa.com
+    service: http://traefik.platform.svc.cluster.local:80
+  # Catch-all required by cloudflared.
+  - service: http_status:404
+
+resources:
+  requests: { cpu: 50m, memory: 128Mi }
+  limits: { cpu: 500m, memory: 256Mi }

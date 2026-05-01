@@ -1,0 +1,17 @@
+external-dns:
+  provider: cloudflare
+  cloudflare:
+    secretName: cloudflare-api-token
+    apiTokenKey: api-token
+    proxied: true
+  policy: sync
+  txtOwnerId: epplaa-cluster
+  sources:
+    - service
+    - ingress
+  metrics:
+    enabled: true
+    serviceMonitor:
+      enabled: true
+      additionalLabels:
+        release: kube-prometheus-stack

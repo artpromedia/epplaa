@@ -1,0 +1,10 @@
+apiVersion: v2
+name: kube-prometheus-stack-platform
+description: Wrapper around prometheus-community/kube-prometheus-stack (Prometheus + Grafana + Alertmanager).
+type: application
+version: 0.1.0
+appVersion: "67.5"
+dependencies:
+  - name: kube-prometheus-stack
+    version: 67.5.0
+    repository: https://prometheus-community.github.io/helm-charts

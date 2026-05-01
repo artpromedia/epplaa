@@ -1,0 +1,8 @@
+cloudnative-pg:
+  config:
+    create: true
+    secret: false
+  monitoring:
+    podMonitorEnabled: true
+    grafanaDashboard:
+      create: true

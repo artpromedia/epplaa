@@ -1,0 +1,19 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: postgres-operator
+  namespace: argocd
+  finalizers: [resources-finalizer.argocd.argoproj.io]
+spec:
+  project: data
+  source:
+    repoURL: https://github.com/artpromedia/epplaa
+    targetRevision: main
+    path: infra/helm/postgres-operator
+    helm: { valueFiles: [values.yaml] }
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: postgres-system
+  syncPolicy:
+    automated: { prune: false, selfHeal: true }
+    syncOptions: [CreateNamespace=true, ServerSideApply=true]

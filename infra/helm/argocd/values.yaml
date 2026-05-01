@@ -1,0 +1,33 @@
+argo-cd:
+  configs:
+    params:
+      server.insecure: true  # TLS terminates at Cloudflare/Traefik.
+    cm:
+      url: https://argocd.epplaa.com
+      timeout.reconciliation: 180s
+      resource.exclusions: |
+        - apiGroups:
+            - cilium.io
+          kinds:
+            - CiliumIdentity
+          clusters:
+            - "*"
+  server:
+    replicas: 2
+    metrics: { enabled: true, serviceMonitor: { enabled: true, additionalLabels: { release: kube-prometheus-stack } } }
+    ingress:
+      enabled: true
+      ingressClassName: traefik
+      hosts: [argocd.epplaa.com]
+  controller:
+    replicas: 1
+    metrics: { enabled: true, serviceMonitor: { enabled: true, additionalLabels: { release: kube-prometheus-stack } } }
+  repoServer:
+    replicas: 2
+    metrics: { enabled: true, serviceMonitor: { enabled: true, additionalLabels: { release: kube-prometheus-stack } } }
+  applicationSet:
+    enabled: true
+  notifications:
+    enabled: true
+  redis-ha:
+    enabled: true

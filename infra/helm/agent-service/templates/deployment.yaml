@@ -1,0 +1,49 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "agent-service.fullname" . }}
+  labels: {{- include "agent-service.labels" . | nindent 4 }}
+spec:
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicaCount }}
+  {{- end }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: { maxSurge: 25%, maxUnavailable: 0 }
+  selector:
+    matchLabels: {{- include "agent-service.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "agent-service.selectorLabels" . | nindent 8 }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+    spec:
+      serviceAccountName: {{ include "agent-service.fullname" . }}
+      automountServiceAccountToken: false
+      securityContext: {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: agent
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext: {{- toYaml .Values.securityContext | nindent 12 }}
+          ports:
+            - { name: http, containerPort: {{ .Values.service.targetPort }}, protocol: TCP }
+          envFrom:
+            - configMapRef: { name: {{ include "agent-service.fullname" . }} }
+            {{- range .Values.vault.secrets }}
+            - secretRef: { name: {{ $.Release.Name }}-{{ .name }} }
+            {{- end }}
+          livenessProbe: {{- toYaml .Values.probes.liveness | nindent 12 }}
+          readinessProbe: {{- toYaml .Values.probes.readiness | nindent 12 }}
+          resources: {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            {{- range .Values.ephemeralVolumes }}
+            - { name: {{ .name }}, mountPath: {{ .mountPath }} }
+            {{- end }}
+      volumes:
+        {{- range .Values.ephemeralVolumes }}
+        - name: {{ .name }}
+          emptyDir: { medium: Memory, sizeLimit: 32Mi }
+        {{- end }}
+      affinity: {{- toYaml .Values.affinity | nindent 8 }}

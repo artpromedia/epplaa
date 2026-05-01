@@ -1,0 +1,10 @@
+apiVersion: v2
+name: postgres-operator-platform
+description: Wrapper around CloudNativePG operator.
+type: application
+version: 0.1.0
+appVersion: "1.24"
+dependencies:
+  - name: cloudnative-pg
+    version: 0.23.0
+    repository: https://cloudnative-pg.github.io/charts

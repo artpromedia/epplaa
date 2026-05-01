@@ -1,0 +1,34 @@
+traefik:
+  ingressClass:
+    enabled: true
+    isDefaultClass: true
+    name: traefik
+  service:
+    type: ClusterIP
+  ports:
+    web:
+      redirectTo:
+        port: websecure
+        scheme: https
+    websecure:
+      tls:
+        enabled: true
+  providers:
+    kubernetesIngress:
+      allowEmptyServices: true
+    kubernetesCRD:
+      allowCrossNamespace: false
+  metrics:
+    prometheus:
+      service:
+        enabled: true
+      serviceMonitor:
+        enabled: true
+        additionalLabels:
+          release: kube-prometheus-stack
+  logs:
+    general:
+      format: json
+    access:
+      enabled: true
+      format: json

@@ -1,0 +1,10 @@
+apiVersion: v2
+name: redis-platform
+description: Wrapper around bitnami/redis used by api-monolith (rate-limit + Socket.IO adapter).
+type: application
+version: 0.1.0
+appVersion: "7.4"
+dependencies:
+  - name: redis
+    version: 20.6.2
+    repository: https://charts.bitnami.com/bitnami

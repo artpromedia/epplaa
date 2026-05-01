@@ -1,0 +1,39 @@
+# Postgres cluster owned by the api-monolith. CloudNativePG operator
+# reconciles this CR — when the cluster is split into per-service DBs
+# (Phase F), each service gets its own Cluster resource.
+
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: pg-api-monolith
+spec:
+  instances: 3
+  postgresql:
+    parameters:
+      max_connections: "200"
+      shared_buffers: 256MB
+      log_statement: ddl
+      log_min_duration_statement: "500"
+  bootstrap:
+    initdb:
+      database: epplaa
+      owner: epplaa
+      secret: { name: pg-api-monolith-app }
+  storage:
+    size: 50Gi
+    storageClass: hcloud-volumes
+  monitoring:
+    enablePodMonitor: true
+  backup:
+    barmanObjectStore:
+      destinationPath: "s3://epplaa-pg-backups/api-monolith"
+      endpointURL: https://fsn1.your-objectstorage.com
+      s3Credentials:
+        accessKeyId: { name: pg-backup-s3, key: ACCESS_KEY_ID }
+        secretAccessKey: { name: pg-backup-s3, key: SECRET_ACCESS_KEY }
+      wal:
+        compression: gzip
+    retentionPolicy: "30d"
+  resources:
+    requests: { cpu: 500m, memory: 1Gi }
+    limits: { cpu: 2, memory: 4Gi }

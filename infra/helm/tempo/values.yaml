@@ -1,0 +1,21 @@
+tempo:
+  tempo:
+    receivers:
+      otlp:
+        protocols:
+          grpc: { endpoint: 0.0.0.0:4317 }
+          http: { endpoint: 0.0.0.0:4318 }
+    storage:
+      trace:
+        backend: s3
+        s3:
+          bucket: epplaa-tempo
+          endpoint: fsn1.your-objectstorage.com:443
+          insecure: false
+  serviceMonitor:
+    enabled: true
+    additionalLabels:
+      release: kube-prometheus-stack
+  persistence:
+    enabled: true
+    size: 20Gi

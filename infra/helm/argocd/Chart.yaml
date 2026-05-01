@@ -1,0 +1,10 @@
+apiVersion: v2
+name: argocd-platform
+description: Wrapper around argo/argo-cd. Self-managed after bootstrap.
+type: application
+version: 0.1.0
+appVersion: "2.13"
+dependencies:
+  - name: argo-cd
+    version: 7.7.10
+    repository: https://argoproj.github.io/argo-helm

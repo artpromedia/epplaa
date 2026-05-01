@@ -1,0 +1,11 @@
+{{- if .Values.podDisruptionBudget.enabled -}}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "api-monolith.fullname" . }}
+  labels: {{- include "api-monolith.labels" . | nindent 4 }}
+spec:
+  minAvailable: {{ .Values.podDisruptionBudget.minAvailable }}
+  selector:
+    matchLabels: {{- include "api-monolith.selectorLabels" . | nindent 6 }}
+{{- end }}

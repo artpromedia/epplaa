@@ -1,0 +1,9 @@
+external-secrets:
+  installCRDs: true
+  webhook:
+    serviceMonitor: { enabled: true, additionalLabels: { release: kube-prometheus-stack } }
+  certController:
+    serviceMonitor: { enabled: true, additionalLabels: { release: kube-prometheus-stack } }
+  serviceMonitor:
+    enabled: true
+    additionalLabels: { release: kube-prometheus-stack }

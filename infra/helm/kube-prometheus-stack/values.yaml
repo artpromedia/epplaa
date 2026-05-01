@@ -1,0 +1,52 @@
+kube-prometheus-stack:
+  fullnameOverride: kube-prometheus-stack
+  prometheus:
+    prometheusSpec:
+      retention: 15d
+      retentionSize: "40GiB"
+      storageSpec:
+        volumeClaimTemplate:
+          spec:
+            accessModes: [ReadWriteOnce]
+            resources: { requests: { storage: 50Gi } }
+      # Allow ServiceMonitors / PodMonitors / Probes from any namespace.
+      serviceMonitorSelectorNilUsesHelmValues: false
+      podMonitorSelectorNilUsesHelmValues: false
+      probeSelectorNilUsesHelmValues: false
+      ruleSelectorNilUsesHelmValues: false
+      # Accept remote-write from the OTel collector.
+      enableRemoteWriteReceiver: true
+      additionalArgs:
+        - { name: web.enable-remote-write-receiver, value: "" }
+  grafana:
+    adminPassword: "" # set via existingSecret
+    admin:
+      existingSecret: grafana-admin
+      userKey: admin-user
+      passwordKey: admin-password
+    sidecar:
+      dashboards:
+        enabled: true
+        searchNamespace: ALL
+        label: grafana_dashboard
+      datasources:
+        enabled: true
+    additionalDataSources:
+      - name: Loki
+        type: loki
+        url: http://loki.observability:3100
+        access: proxy
+      - name: Tempo
+        type: tempo
+        url: http://tempo.observability:3200
+        access: proxy
+    persistence:
+      enabled: true
+      size: 10Gi
+  alertmanager:
+    alertmanagerSpec:
+      storage:
+        volumeClaimTemplate:
+          spec:
+            accessModes: [ReadWriteOnce]
+            resources: { requests: { storage: 5Gi } }

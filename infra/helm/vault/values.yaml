@@ -1,0 +1,43 @@
+vault:
+  server:
+    ha:
+      enabled: true
+      replicas: 3
+      raft:
+        enabled: true
+        setNodeId: true
+        # Auto-unseal via Hetzner KMS isn't natively supported; we use
+        # transit-seal against a dedicated single-node Vault running outside
+        # the cluster. Bootstrap runbook: docs/runbooks/vault-bootstrap.md
+        config: |
+          ui = true
+          listener "tcp" {
+            address = "[::]:8200"
+            cluster_address = "[::]:8201"
+            tls_disable = "true"
+          }
+          storage "raft" {
+            path = "/vault/data"
+          }
+          seal "transit" {
+            address            = "https://vault-seal.epplaa.com:8200"
+            disable_renewal    = "false"
+            key_name           = "autounseal-cluster"
+            mount_path         = "transit/"
+            tls_skip_verify    = "false"
+          }
+          service_registration "kubernetes" {}
+    dataStorage:
+      enabled: true
+      size: 20Gi
+    auditStorage:
+      enabled: true
+      size: 10Gi
+    serviceAccount:
+      create: true
+      name: vault
+  injector:
+    enabled: false  # we use ExternalSecrets instead.
+  ui:
+    enabled: true
+    serviceType: ClusterIP

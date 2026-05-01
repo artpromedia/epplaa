@@ -1,0 +1,87 @@
+name: Helm + manifest CI
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "infra/helm/**"
+      - "infra/argocd/**"
+      - ".github/workflows/helm-ci.yml"
+  push:
+    branches: [main]
+    paths:
+      - "infra/helm/**"
+      - "infra/argocd/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: helm-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint-and-render:
+    name: helm lint • kubeconform
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.16.3
+
+      - name: Install kubeconform
+        run: |
+          curl -sSLo kubeconform.tar.gz https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz
+          tar -xzf kubeconform.tar.gz kubeconform
+          sudo mv kubeconform /usr/local/bin/
+
+      - name: helm lint each chart
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          for chart in infra/helm/*/Chart.yaml; do
+            dir="$(dirname "$chart")"
+            echo "::group::helm lint $dir"
+            if grep -q '^dependencies:' "$chart"; then
+              helm dependency build "$dir"
+            fi
+            helm lint "$dir"
+            echo "::endgroup::"
+          done
+
+      - name: helm template + kubeconform
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          mkdir -p .rendered
+          for chart in infra/helm/*/Chart.yaml; do
+            dir="$(dirname "$chart")"
+            name="$(basename "$dir")"
+            echo "::group::render+validate $name"
+            helm template "$name" "$dir" --include-crds > ".rendered/${name}.yaml" || true
+            # Skip CRDs we don't have schemas for via -ignore-missing-schemas.
+            kubeconform \
+              -strict \
+              -summary \
+              -kubernetes-version 1.31.4 \
+              -schema-location default \
+              -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' \
+              -ignore-missing-schemas \
+              ".rendered/${name}.yaml"
+            echo "::endgroup::"
+          done
+
+      - name: kubeconform Argo CD manifests
+        run: |
+          set -euo pipefail
+          find infra/argocd -name '*.yaml' -print0 | xargs -0 \
+            kubeconform \
+              -strict \
+              -summary \
+              -kubernetes-version 1.31.4 \
+              -schema-location default \
+              -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' \
+              -ignore-missing-schemas

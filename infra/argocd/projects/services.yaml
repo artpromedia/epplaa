@@ -1,0 +1,15 @@
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: services
+  namespace: argocd
+spec:
+  description: Application workloads — api-monolith, agent-service, and (future) extracted services.
+  sourceRepos: ["https://github.com/artpromedia/epplaa"]
+  destinations:
+    - { namespace: services, server: https://kubernetes.default.svc }
+    - { namespace: ai-platform, server: https://kubernetes.default.svc }
+  namespaceResourceWhitelist:
+    - { group: "*", kind: "*" }
+  clusterResourceWhitelist:
+    - { group: "", kind: Namespace }

@@ -1,0 +1,18 @@
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: data
+  namespace: argocd
+spec:
+  description: Stateful data plane — Postgres, Redis, Redpanda (gated), OpenSearch (gated), ClickHouse (gated).
+  sourceRepos: ["https://github.com/artpromedia/epplaa"]
+  destinations:
+    - { namespace: data, server: https://kubernetes.default.svc }
+    - { namespace: postgres-system, server: https://kubernetes.default.svc }
+  clusterResourceWhitelist:
+    - { group: "*", kind: CustomResourceDefinition }
+    - { group: rbac.authorization.k8s.io, kind: "*" }
+    - { group: "", kind: Namespace }
+    - { group: postgresql.cnpg.io, kind: "*" }
+  namespaceResourceWhitelist:
+    - { group: "*", kind: "*" }

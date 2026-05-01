@@ -1,0 +1,24 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: agent-service
+  namespace: argocd
+  finalizers: [resources-finalizer.argocd.argoproj.io]
+  annotations:
+    argocd-image-updater.argoproj.io/image-list: agent=ghcr.io/artpromedia/agent-service
+    argocd-image-updater.argoproj.io/agent.update-strategy: digest
+    argocd-image-updater.argoproj.io/agent.allow-tags: "regexp:^sha-[a-f0-9]{12}$"
+    argocd-image-updater.argoproj.io/write-back-method: git
+spec:
+  project: services
+  source:
+    repoURL: https://github.com/artpromedia/epplaa
+    targetRevision: main
+    path: infra/helm/agent-service
+    helm: { valueFiles: [values.yaml] }
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: ai-platform
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions: [CreateNamespace=true]
