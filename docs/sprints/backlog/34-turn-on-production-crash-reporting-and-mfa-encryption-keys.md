@@ -15,5 +15,5 @@ Turn on production crash reporting and MFA encryption keys. This task tracks the
 
 ## Relevant Files
 
-- `artifacts/api-server/src/lib/mfa.ts` — MFA encryption keys
-- `artifacts/api-server/src/lib/auth.ts` — auth helpers
+- `services/api-monolith/src/lib/mfa.ts` — MFA encryption keys
+- `services/api-monolith/src/lib/auth.ts` — auth helpers

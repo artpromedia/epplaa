@@ -15,6 +15,6 @@ Record an audit-log entry every time an admin request is blocked for missing MFA
 
 ## Relevant Files
 
-- `artifacts/api-server/src/lib/audit.ts` — audit logging
-- `artifacts/api-server/src/lib/auth.ts` — auth helpers
-- `artifacts/api-server/src/routes/mfa.ts` — MFA route handlers
+- `services/api-monolith/src/lib/audit.ts` — audit logging
+- `services/api-monolith/src/lib/auth.ts` — auth helpers
+- `services/api-monolith/src/routes/mfa.ts` — MFA route handlers

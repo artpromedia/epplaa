@@ -15,4 +15,4 @@ Lock in payout rules for split orders end-to-end. This task tracks the work requ
 
 ## Relevant Files
 
-- `artifacts/api-server/src/lib/audit.ts` — audit logging
+- `services/api-monolith/src/lib/audit.ts` — audit logging

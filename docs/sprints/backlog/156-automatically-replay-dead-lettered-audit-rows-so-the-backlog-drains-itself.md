@@ -15,4 +15,4 @@ Automatically replay dead-lettered audit rows so the backlog drains itself. This
 
 ## Relevant Files
 
-- `artifacts/api-server/src/lib/audit.ts` — audit logging
+- `services/api-monolith/src/lib/audit.ts` — audit logging

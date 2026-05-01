@@ -15,4 +15,4 @@ Test that sanctions-flagged manufacturers can't be paid. This task tracks the wo
 
 ## Relevant Files
 
-- `artifacts/api-server/src/routes/manufacturer.ts` — manufacturer routes
+- `services/api-monolith/src/routes/manufacturer.ts` — manufacturer routes

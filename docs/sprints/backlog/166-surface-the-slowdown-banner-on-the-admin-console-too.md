@@ -15,4 +15,4 @@ Surface the slowdown banner on the admin console too. This task tracks the work 
 
 ## Relevant Files
 
-- `artifacts/admin-console/src/` — admin console React app
+- `apps/admin/src/` — admin console React app

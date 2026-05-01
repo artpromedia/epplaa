@@ -15,4 +15,4 @@ Stop overcounting viewers when the same shopper has two tabs open. This task tra
 
 ## Relevant Files
 
-- `artifacts/api-server/src/lib/audit.ts` — audit logging
+- `services/api-monolith/src/lib/audit.ts` — audit logging

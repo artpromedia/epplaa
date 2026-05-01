@@ -15,4 +15,4 @@ Show on-call which servers think a payment provider is down. This task tracks th
 
 ## Relevant Files
 
-- `artifacts/api-server/src/lib/audit.ts` — audit logging
+- `services/api-monolith/src/lib/audit.ts` — audit logging

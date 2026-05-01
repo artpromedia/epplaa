@@ -15,4 +15,4 @@ Alert operators when push or email delivery keeps failing. This task tracks the 
 
 ## Relevant Files
 
-- `artifacts/api-server/src/lib/audit.ts` — audit logging
+- `services/api-monolith/src/lib/audit.ts` — audit logging

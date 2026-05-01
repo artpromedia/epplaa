@@ -15,5 +15,5 @@ Use React Query hooks for the manufacturer portal pages. This task tracks the wo
 
 ## Relevant Files
 
-- `lib/api-client-react/` — generated React Query hooks
-- `artifacts/manufacturer-portal/src/` — manufacturer portal React app
+- `packages/api-client-react/` — generated React Query hooks
+- `apps/partner/src/` — manufacturer portal React app

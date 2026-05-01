@@ -15,4 +15,4 @@ Surface stream moderator audit history in the admin console. This task tracks th
 
 ## Relevant Files
 
-- `artifacts/admin-console/src/` — admin console React app
+- `apps/admin/src/` — admin console React app

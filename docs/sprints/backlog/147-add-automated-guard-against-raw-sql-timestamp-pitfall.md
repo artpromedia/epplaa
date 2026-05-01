@@ -16,4 +16,4 @@ Add automated guard against raw-SQL timestamp pitfall. This task tracks the work
 ## Relevant Files
 
 - `.github/workflows/ci.yml` — main CI workflow
-- `artifacts/api-server/src/lib/audit.ts` — audit logging
+- `services/api-monolith/src/lib/audit.ts` — audit logging

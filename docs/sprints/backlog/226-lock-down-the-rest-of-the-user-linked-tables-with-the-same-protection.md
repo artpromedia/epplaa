@@ -15,5 +15,5 @@ Lock down the rest of the user-linked tables with the same protection. This task
 
 ## Relevant Files
 
-- `artifacts/api-server/src/lib/audit.ts` — audit logging
-- `artifacts/api-server/src/lib/auth.ts` — auth helpers
+- `services/api-monolith/src/lib/audit.ts` — audit logging
+- `services/api-monolith/src/lib/auth.ts` — auth helpers

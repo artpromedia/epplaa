@@ -15,4 +15,4 @@ Stop creating new streams without an owner. This task tracks the work required t
 
 ## Relevant Files
 
-- `artifacts/api-server/src/lib/audit.ts` — audit logging
+- `services/api-monolith/src/lib/audit.ts` — audit logging

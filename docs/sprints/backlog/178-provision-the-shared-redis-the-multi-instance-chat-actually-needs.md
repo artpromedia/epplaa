@@ -15,4 +15,4 @@ Provision the shared Redis the multi-instance chat actually needs. This task tra
 
 ## Relevant Files
 
-- `artifacts/api-server/src/lib/audit.ts` — audit logging
+- `services/api-monolith/src/lib/audit.ts` — audit logging

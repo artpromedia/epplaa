@@ -15,4 +15,4 @@ Let sellers turn 'Free shipping' on or off for each listing. This task tracks th
 
 ## Relevant Files
 
-- `artifacts/api-server/src/lib/audit.ts` — audit logging
+- `services/api-monolith/src/lib/audit.ts` — audit logging

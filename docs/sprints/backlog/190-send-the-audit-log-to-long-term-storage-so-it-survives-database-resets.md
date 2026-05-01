@@ -15,4 +15,4 @@ Send the audit log to long-term storage so it survives database resets. This tas
 
 ## Relevant Files
 
-- `artifacts/api-server/src/lib/audit.ts` — audit logging
+- `services/api-monolith/src/lib/audit.ts` — audit logging

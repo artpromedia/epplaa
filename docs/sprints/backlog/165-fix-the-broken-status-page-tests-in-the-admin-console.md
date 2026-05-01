@@ -15,4 +15,4 @@ Fix the broken Status page tests in the admin console. This task tracks the work
 
 ## Relevant Files
 
-- `artifacts/admin-console/src/` — admin console React app
+- `apps/admin/src/` — admin console React app

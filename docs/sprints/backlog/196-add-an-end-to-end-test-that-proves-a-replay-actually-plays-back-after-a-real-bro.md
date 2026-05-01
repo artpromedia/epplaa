@@ -15,4 +15,4 @@ Add an end-to-end test that proves a replay actually plays back after a real bro
 
 ## Relevant Files
 
-- `artifacts/api-server/src/lib/audit.ts` — audit logging
+- `services/api-monolith/src/lib/audit.ts` — audit logging

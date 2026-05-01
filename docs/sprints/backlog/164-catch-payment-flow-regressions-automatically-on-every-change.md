@@ -15,4 +15,4 @@ Catch payment-flow regressions automatically on every change. This task tracks t
 
 ## Relevant Files
 
-- `artifacts/api-server/src/` — API server source
+- `services/api-monolith/src/` — API server source

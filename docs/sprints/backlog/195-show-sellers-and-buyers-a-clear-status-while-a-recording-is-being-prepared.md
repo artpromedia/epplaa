@@ -15,4 +15,4 @@ Show sellers and buyers a clear status while a recording is being prepared. This
 
 ## Relevant Files
 
-- `artifacts/api-server/src/lib/audit.ts` — audit logging
+- `services/api-monolith/src/lib/audit.ts` — audit logging

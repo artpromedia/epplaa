@@ -15,4 +15,4 @@ Show real-time viewer counts to shoppers in the live player. This task tracks th
 
 ## Relevant Files
 
-- `artifacts/api-server/src/lib/audit.ts` — audit logging
+- `services/api-monolith/src/lib/audit.ts` — audit logging

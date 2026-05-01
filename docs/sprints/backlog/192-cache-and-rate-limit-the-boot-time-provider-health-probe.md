@@ -15,4 +15,4 @@ Cache and rate-limit the boot-time provider health probe. This task tracks the w
 
 ## Relevant Files
 
-- `artifacts/api-server/src/lib/auth.ts` — auth helpers
+- `services/api-monolith/src/lib/auth.ts` — auth helpers

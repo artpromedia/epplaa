@@ -15,4 +15,4 @@ Let admins approve or reject NDPR data requests, not just cancel them. This task
 
 ## Relevant Files
 
-- `artifacts/admin-console/src/` — admin console React app
+- `apps/admin/src/` — admin console React app

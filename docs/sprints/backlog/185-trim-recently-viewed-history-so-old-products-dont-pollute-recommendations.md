@@ -15,4 +15,4 @@ Trim recently-viewed history so old products don't pollute recommendations. This
 
 ## Relevant Files
 
-- `artifacts/api-server/src/lib/audit.ts` — audit logging
+- `services/api-monolith/src/lib/audit.ts` — audit logging

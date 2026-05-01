@@ -15,4 +15,4 @@ Page on-call when database or audit-pipeline subsystems go degraded too. This ta
 
 ## Relevant Files
 
-- `artifacts/api-server/src/lib/audit.ts` — audit logging
+- `services/api-monolith/src/lib/audit.ts` — audit logging

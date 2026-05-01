@@ -15,4 +15,4 @@ Stop sending a duplicate 'on the way' message for locker pickups. This task trac
 
 ## Relevant Files
 
-- `artifacts/api-server/src/lib/audit.ts` — audit logging
+- `services/api-monolith/src/lib/audit.ts` — audit logging

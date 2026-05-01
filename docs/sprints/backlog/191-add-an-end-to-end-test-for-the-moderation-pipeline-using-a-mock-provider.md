@@ -15,4 +15,4 @@ Add an end-to-end test for the moderation pipeline using a mock provider. This t
 
 ## Relevant Files
 
-- `artifacts/admin-console/src/` — admin console React app
+- `apps/admin/src/` — admin console React app

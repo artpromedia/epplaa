@@ -15,4 +15,4 @@ Cover the partial bonded-warehouse release scenario in tests. This task tracks t
 
 ## Relevant Files
 
-- `artifacts/api-server/src/routes/manufacturer.ts` — manufacturer routes
+- `services/api-monolith/src/routes/manufacturer.ts` — manufacturer routes

@@ -15,4 +15,4 @@ Send sellers a notification when their recorded broadcast is ready. This task tr
 
 ## Relevant Files
 
-- `artifacts/api-server/src/lib/audit.ts` — audit logging
+- `services/api-monolith/src/lib/audit.ts` — audit logging

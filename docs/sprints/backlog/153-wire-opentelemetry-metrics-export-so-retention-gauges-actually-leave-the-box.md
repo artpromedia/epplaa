@@ -15,5 +15,5 @@ Wire OpenTelemetry metrics export so retention gauges actually leave the box. Th
 
 ## Relevant Files
 
-- `artifacts/api-server/src/lib/otel.ts` — OpenTelemetry setup
-- `artifacts/api-server/src/lib/retention.ts` — retention logic
+- `services/api-monolith/src/lib/otel.ts` — OpenTelemetry setup
+- `services/api-monolith/src/lib/retention.ts` — retention logic

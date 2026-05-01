@@ -15,5 +15,5 @@ Send the same security alert when MFA is disabled. This task tracks the work req
 
 ## Relevant Files
 
-- `artifacts/api-server/src/routes/mfa.ts` — MFA route handlers
-- `artifacts/api-server/src/lib/mfa.ts` — MFA business logic
+- `services/api-monolith/src/routes/mfa.ts` — MFA route handlers
+- `services/api-monolith/src/lib/mfa.ts` — MFA business logic

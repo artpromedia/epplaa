@@ -15,4 +15,4 @@ Alert on-call when a notification worker crashes mid-send. This task tracks the 
 
 ## Relevant Files
 
-- `artifacts/api-server/src/lib/audit.ts` — audit logging
+- `services/api-monolith/src/lib/audit.ts` — audit logging

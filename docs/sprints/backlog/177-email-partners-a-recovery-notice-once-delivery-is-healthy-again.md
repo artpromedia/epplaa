@@ -15,4 +15,4 @@ Email partners a recovery notice once delivery is healthy again. This task track
 
 ## Relevant Files
 
-- `artifacts/api-server/src/lib/audit.ts` — audit logging
+- `services/api-monolith/src/lib/audit.ts` — audit logging

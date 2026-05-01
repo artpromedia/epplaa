@@ -15,4 +15,4 @@ Notify viewers when they're promoted to moderator. This task tracks the work req
 
 ## Relevant Files
 
-- `artifacts/api-server/src/lib/audit.ts` — audit logging
+- `services/api-monolith/src/lib/audit.ts` — audit logging

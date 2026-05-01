@@ -15,4 +15,4 @@ Add automated tests for the new live-stream moderator flow. This task tracks the
 
 ## Relevant Files
 
-- `artifacts/api-server/src/lib/audit.ts` — audit logging
+- `services/api-monolith/src/lib/audit.ts` — audit logging

@@ -15,4 +15,4 @@ Re-screen sellers if their account country changes outside the application form.
 
 ## Relevant Files
 
-- `artifacts/api-server/src/lib/auth.ts` — auth helpers
+- `services/api-monolith/src/lib/auth.ts` — auth helpers

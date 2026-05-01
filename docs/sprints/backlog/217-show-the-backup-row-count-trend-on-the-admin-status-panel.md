@@ -16,4 +16,4 @@ Show the backup row-count trend on the admin status panel. This task tracks the 
 ## Relevant Files
 
 - `scripts/src/verifyBackup.ts` — backup verification
-- `artifacts/admin-console/src/` — admin console React app
+- `apps/admin/src/` — admin console React app

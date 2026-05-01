@@ -15,4 +15,4 @@ Let admins configure PUDO partner delivery from the admin console. This task tra
 
 ## Relevant Files
 
-- `artifacts/admin-console/src/` — admin console React app
+- `apps/admin/src/` — admin console React app

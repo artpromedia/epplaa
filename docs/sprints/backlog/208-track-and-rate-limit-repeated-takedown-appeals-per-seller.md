@@ -15,4 +15,4 @@ Track and rate-limit repeated takedown appeals per seller. This task tracks the 
 
 ## Relevant Files
 
-- `artifacts/admin-console/src/` — admin console React app
+- `apps/admin/src/` — admin console React app

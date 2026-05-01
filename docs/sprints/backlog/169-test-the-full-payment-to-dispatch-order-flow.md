@@ -15,4 +15,4 @@ Test the full payment-to-dispatch order flow. This task tracks the work required
 
 ## Relevant Files
 
-- `artifacts/api-server/src/lib/audit.ts` — audit logging
+- `services/api-monolith/src/lib/audit.ts` — audit logging

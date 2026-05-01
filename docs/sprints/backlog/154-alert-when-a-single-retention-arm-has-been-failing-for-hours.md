@@ -15,4 +15,4 @@ Alert when a single retention arm has been failing for hours. This task tracks t
 
 ## Relevant Files
 
-- `artifacts/api-server/src/lib/retention.ts` — retention logic
+- `services/api-monolith/src/lib/retention.ts` — retention logic

@@ -17,5 +17,5 @@ Fail CI if the OpenAPI spec drifts from the generated client/zod files. This tas
 
 - `lib/api-spec/openapi.yaml` — OpenAPI spec
 - `lib/api-zod/` — generated Zod schemas
-- `lib/api-client-react/` — generated React Query hooks
+- `packages/api-client-react/` — generated React Query hooks
 - `.github/workflows/ci.yml` — main CI workflow

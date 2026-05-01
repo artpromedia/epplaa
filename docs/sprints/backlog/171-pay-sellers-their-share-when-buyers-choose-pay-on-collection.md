@@ -15,4 +15,4 @@ Pay sellers their share when buyers choose pay-on-collection. This task tracks t
 
 ## Relevant Files
 
-- `artifacts/api-server/src/lib/audit.ts` — audit logging
+- `services/api-monolith/src/lib/audit.ts` — audit logging

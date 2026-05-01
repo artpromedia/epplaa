@@ -17,4 +17,4 @@ Catch contract drift across all API responses, not just MFA. This task tracks th
 
 - `lib/api-spec/openapi.yaml` — OpenAPI spec
 - `lib/api-zod/` — generated Zod schemas
-- `lib/api-client-react/` — generated React Query hooks
+- `packages/api-client-react/` — generated React Query hooks

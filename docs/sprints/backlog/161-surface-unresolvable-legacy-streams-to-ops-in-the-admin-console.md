@@ -15,4 +15,4 @@ Surface unresolvable legacy streams to ops in the admin console. This task track
 
 ## Relevant Files
 
-- `artifacts/admin-console/src/` — admin console React app
+- `apps/admin/src/` — admin console React app

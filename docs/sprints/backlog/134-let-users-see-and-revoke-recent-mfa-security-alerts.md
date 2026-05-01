@@ -15,6 +15,6 @@ Let users see and revoke recent MFA security alerts. This task tracks the work r
 
 ## Relevant Files
 
-- `artifacts/api-server/src/routes/mfa.ts` — MFA route handlers
-- `artifacts/api-server/src/lib/mfa.ts` — MFA business logic
-- `artifacts/api-server/src/lib/auth.ts` — auth helpers
+- `services/api-monolith/src/routes/mfa.ts` — MFA route handlers
+- `services/api-monolith/src/lib/mfa.ts` — MFA business logic
+- `services/api-monolith/src/lib/auth.ts` — auth helpers

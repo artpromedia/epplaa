@@ -15,4 +15,4 @@ Show full-size KYC document images instead of thumbnails. This task tracks the w
 
 ## Relevant Files
 
-- `artifacts/admin-console/src/` — admin console React app
+- `apps/admin/src/` — admin console React app

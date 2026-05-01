@@ -15,4 +15,4 @@ Add an integration test that runs the full PUDO push against a real database. Th
 
 ## Relevant Files
 
-- `artifacts/api-server/src/lib/audit.ts` — audit logging
+- `services/api-monolith/src/lib/audit.ts` — audit logging

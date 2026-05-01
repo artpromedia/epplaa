@@ -15,4 +15,4 @@ Add automated tests for the takedown notification and appeal flow. This task tra
 
 ## Relevant Files
 
-- `artifacts/admin-console/src/` — admin console React app
+- `apps/admin/src/` — admin console React app

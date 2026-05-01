@@ -16,5 +16,5 @@ Validate manufacturer and wholesale API requests with the generated schemas. Thi
 ## Relevant Files
 
 - `lib/api-zod/` — generated Zod schemas
-- `artifacts/api-server/src/routes/manufacturer.ts` — manufacturer routes
-- `artifacts/api-server/src/routes/wholesale.ts` — wholesale routes
+- `services/api-monolith/src/routes/manufacturer.ts` — manufacturer routes
+- `services/api-monolith/src/routes/wholesale.ts` — wholesale routes

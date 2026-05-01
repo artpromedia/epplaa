@@ -15,5 +15,5 @@ Let buyers and sellers see notification history in their inbox. This task tracks
 
 ## Relevant Files
 
-- `artifacts/api-server/src/lib/audit.ts` — audit logging
-- `artifacts/admin-console/src/` — admin console React app
+- `services/api-monolith/src/lib/audit.ts` — audit logging
+- `apps/admin/src/` — admin console React app

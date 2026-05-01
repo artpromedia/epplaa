@@ -15,4 +15,4 @@ Disabled carriers should also stop returning fake quotes at runtime. This task t
 
 ## Relevant Files
 
-- `artifacts/api-server/src/lib/audit.ts` — audit logging
+- `services/api-monolith/src/lib/audit.ts` — audit logging
