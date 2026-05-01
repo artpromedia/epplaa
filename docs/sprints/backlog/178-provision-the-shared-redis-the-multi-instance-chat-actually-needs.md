@@ -1,7 +1,7 @@
 # #178 — Provision the shared Redis the multi-instance chat actually needs
 
 **Sprint:** Sprint 12 — Chat & Real-time Infrastructure  
-**Status:** Backlog  
+**Status:** Implemented  
 
 ## Problem Statement
 

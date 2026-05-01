@@ -1,7 +1,7 @@
 # #205 — Prove the payment-provider boot warning stays in sync with the actual sandbox-fallback logic
 
 **Sprint:** Sprint 5 — Payments & Payouts  
-**Status:** Backlog  
+**Status:** Implemented  
 
 ## Problem Statement
 

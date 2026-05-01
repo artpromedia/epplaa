@@ -1,7 +1,7 @@
 # #179 — Keep chat working when Redis blips, instead of silently dropping messages
 
 **Sprint:** Sprint 12 — Chat & Real-time Infrastructure  
-**Status:** Backlog  
+**Status:** Implemented  
 
 ## Problem Statement
 

@@ -1,7 +1,7 @@
 # #163 — Lock in payout rules for split orders end-to-end
 
 **Sprint:** Sprint 5 — Payments & Payouts  
-**Status:** Backlog  
+**Status:** Implemented  
 
 ## Problem Statement
 

@@ -1,7 +1,7 @@
 # #164 — Catch payment-flow regressions automatically on every change
 
 **Sprint:** Sprint 5 — Payments & Payouts  
-**Status:** Backlog  
+**Status:** Implemented  
 
 ## Problem Statement
 

@@ -1,7 +1,7 @@
 # #202 — Prove rate limits and MFA actually hold up under two live API servers
 
 **Sprint:** Sprint 1 — Security, MFA & Auth  
-**Status:** Backlog  
+**Status:** Implemented  
 
 ## Problem Statement
 

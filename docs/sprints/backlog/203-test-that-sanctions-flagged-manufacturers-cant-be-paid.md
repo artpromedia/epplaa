@@ -1,7 +1,7 @@
 # #203 — Test that sanctions-flagged manufacturers can't be paid
 
 **Sprint:** Sprint 5 — Payments & Payouts  
-**Status:** Backlog  
+**Status:** Implemented  
 
 ## Problem Statement
 

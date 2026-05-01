@@ -1,0 +1,112 @@
+# #164 — Catch payment-flow regressions automatically on every change.
+#
+# Runs the integration test suites that exercise money-flow code paths
+# every time a PR touches payment, payout, sanctions, fulfillment, or
+# webhook source. Required check on PRs into main.
+#
+# This is intentionally separate from `ci.yml` (the workspace-wide
+# build) so:
+#   - the payment regression status appears as its own required check
+#     in branch protection, and a flake in unrelated tests cannot mask
+#     a payment-flow regression behind a green compound CI status;
+#   - the `paths` filter avoids burning Postgres-backed runners on PRs
+#     that don't touch money-flow code (docs, infra, frontend-only,
+#     etc.) while still gating every PR that does.
+#
+# Test selection: each integration test is gated on `DATABASE_URL` and
+# uses `describe.skip` when it is not set, so we point it at the same
+# Postgres service that `ci.yml` uses.
+
+name: Payment regression
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'services/api-monolith/src/lib/payments**'
+      - 'services/api-monolith/src/lib/manufacturerPayouts**'
+      - 'services/api-monolith/src/lib/sanctions**'
+      - 'services/api-monolith/src/lib/customs**'
+      - 'services/api-monolith/src/lib/landedCost**'
+      - 'services/api-monolith/src/lib/wallet**'
+      - 'services/api-monolith/src/routes/payments**'
+      - 'services/api-monolith/src/routes/orders**'
+      - 'services/api-monolith/src/routes/webhooks**'
+      - 'services/api-monolith/src/routes/wholesale**'
+      - 'services/api-monolith/src/routes/manufacturerAdmin**'
+      - 'services/api-monolith/src/routes/fulfillment**'
+      - 'packages/payments/**'
+      - 'packages/db/**'
+      - '.github/workflows/payment-regression.yml'
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: payment-regression-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  regression:
+    name: Payment-flow integration tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_USER: postgres
+          POSTGRES_DB: epplaa_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/epplaa_test
+      SESSION_SECRET: ci-test-session-secret
+      MFA_ENCRYPTION_KEY: 0000000000000000000000000000000000000000000000000000000000000000
+      MFA_BACKUP_PEPPER: ci-test-pepper
+      NODE_ENV: test
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Typecheck (api-monolith only)
+        run: pnpm --filter @workspace/api-server run typecheck
+
+      # Explicit list of test files. Keeping the list visible in the
+      # workflow (rather than a glob) makes it obvious in PR review
+      # exactly which tests gate the merge — and obvious when a new
+      # money-flow test should be added to the gate.
+      - name: Run payment-flow integration tests
+        working-directory: services/api-monolith
+        run: |
+          pnpm exec vitest run \
+            src/lib/payments.payoutSplit.int.test.ts \
+            src/lib/payments.gatewaySelection.test.ts \
+            src/lib/payments.health.test.ts \
+            src/lib/payments.assert.test.ts \
+            src/lib/manufacturerPayouts.test.ts \
+            src/lib/moneyFlowFk.int.test.ts \
+            src/routes/orders.cod.int.test.ts \
+            src/routes/wholesale.e2e.test.ts \
+            src/routes/wholesale.bondedPartialRelease.int.test.ts \
+            src/routes/webhooks.concurrency.int.test.ts \
+            src/routes/fulfillment.e2e.test.ts

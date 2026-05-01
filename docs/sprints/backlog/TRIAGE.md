@@ -17,6 +17,24 @@ The Wave-1 ordering matches the production-readiness plan: nothing ships without
 
 ## Wave 1 — Production Gate (9 tasks)
 
+**Status as of last triage pass: 8/9 implemented. #171 is the only genuine remaining gap.**
+
+| # | Status | Notes |
+|---|---|---|
+| #178 | ✅ Implemented | Helm chart `infra/helm/redis/`, Socket.IO Redis adapter wired in `lib/socket.ts`, rate-limit Redis store in `middlewares/apiRateLimit.ts`, runbook in `docs/runbooks/rate-limit-store.md`. Cluster behavior covered by `lib/socket.cluster.test.ts`. |
+| #179 | ✅ Implemented | `getRoomSize` falls back to local adapter when `fetchSockets` throws (`lib/socket.ts:117`). Covered by "falls back to the local adapter map when fetchSockets throws" in `socket.cluster.test.ts`. |
+| #163 | ✅ Implemented | Mixed-seller payout split with hold-window per tier and unattributed-line containment in `lib/payments.payoutSplit.int.test.ts` (321 lines). |
+| #171 | ⚠️ **Backlog** | The COD test (`routes/orders.cod.int.test.ts:85`) explicitly states *"COD orders skip the seller-payout codepath"*. Real implementation needed: when a COD order is marked delivered, generate a payout row per seller using the same split arithmetic as #163, gated on `delivered` confirmation, idempotent on the delivery webhook. Touches `routes/orders.ts`, `lib/manufacturerPayouts.ts` (or a new `sellerPayouts.ts`), and `routes/orders.cod.int.test.ts`. |
+| #203 | ✅ Implemented | Block enforced in `lib/payments.ts` (3 sites) and `lib/manufacturerPayouts.ts:67`. Dedicated regression test in `lib/manufacturerPayouts.test.ts` covers the blocked-status payout row and the no-auto-release-on-lift invariant. |
+| #204 | ✅ Implemented | Partial release supported in `routes/manufacturerAdmin.ts:313`. Covered end-to-end (partial → over-release reject → final release with payout enqueue → replay no-op) in `routes/wholesale.bondedPartialRelease.int.test.ts`. |
+| #205 | ✅ Implemented | Per-gateway watcher integration in `lib/payments.health.test.ts` covers boot-time vs runtime gateway selection consistency across 12 cases. |
+| #164 | ✅ Implemented | New required workflow `.github/workflows/payment-regression.yml` runs all money-flow integration tests on PRs touching payment, payout, sanctions, customs, fulfillment, or webhook source. |
+| #202 | ✅ Implemented | New `middlewares/apiRateLimit.cluster.test.ts` proves two `RedisStore` instances sharing one Redis enforce `max` as a global cap (not 2×max), including the MFA challenge case. |
+
+The original ticket list follows for reference; replace it with this table going forward.
+
+
+
 ### #178 — Provision shared Redis for multi-instance chat / rate limiting
 **Sprint 12.** Touches: `infra/helm/redis/`, `infra/terraform/modules/`, `services/api-monolith/src/lib/socket.ts`, `services/api-monolith/src/lib/chat.ts`, `services/api-monolith/src/middlewares/apiRateLimit.ts`, `docs/runbooks/rate-limit-store.md`.
 
