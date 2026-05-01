@@ -1,3 +1,4 @@
+import { useSignUp } from "@clerk/clerk-expo";
 import { Feather } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import React, { useRef, useState } from "react";
@@ -20,6 +21,7 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 export default function SignUpScreen() {
   const colors = useColors();
   const router = useRouter();
+  const { signUp, setActive, isLoaded } = useSignUp();
   const lastNameRef = useRef<TextInput>(null);
   const emailRef = useRef<TextInput>(null);
   const passwordRef = useRef<TextInput>(null);
@@ -53,13 +55,42 @@ export default function SignUpScreen() {
 
   async function onSubmit() {
     if (!validate()) return;
+    if (!isLoaded || !signUp) {
+      Alert.alert("Auth not ready", "Try again in a moment.");
+      return;
+    }
     setSubmitting(true);
     try {
-      // TODO(auth): wire to Clerk's mobile sign-up flow + email
-      // verification. UI-only stub for now — see the web flow at
-      // artifacts/epplaa-app/src/pages/auth/sign-up.tsx.
-      await new Promise((r) => setTimeout(r, 700));
-      router.replace("/(tabs)");
+      const attempt = await signUp.create({
+        firstName: firstName.trim(),
+        lastName: lastName.trim(),
+        emailAddress: email.trim(),
+        password,
+      });
+
+      // If Clerk requires email verification (the default), kick off the
+      // email-code strategy and redirect to a verification screen. The
+      // verify screen itself is shared with the phone flow — it accepts
+      // either an OTP+phone or a Clerk emailAddressId+code.
+      if (attempt.status === "missing_requirements") {
+        await signUp.prepareEmailAddressVerification({ strategy: "email_code" });
+        router.push({
+          pathname: "/(auth)/verify",
+          params: { mode: "email", email: email.trim() },
+        });
+        return;
+      }
+
+      if (attempt.status === "complete") {
+        await setActive({ session: attempt.createdSessionId });
+        router.replace("/(tabs)");
+        return;
+      }
+
+      Alert.alert(
+        "Additional step required",
+        `Sign-up needs further verification (status: ${attempt.status}).`,
+      );
     } catch (err) {
       Alert.alert("Sign up failed", (err as Error).message ?? "Try again.");
     } finally {

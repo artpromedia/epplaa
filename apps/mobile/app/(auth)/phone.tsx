@@ -1,5 +1,6 @@
 import { useRouter } from "expo-router";
 import React, { useState } from "react";
+import { startOtp } from "@workspace/api-client-react";
 import {
   Alert,
   Pressable,
@@ -49,14 +50,11 @@ export default function PhoneScreen() {
     setError(null);
     setSubmitting(true);
     try {
-      // TODO(auth): call startOtp({ phone, channel }) from
-      // @workspace/api-client-react and forward the dev code if the
-      // backend returns one. UI-only stub today; see the web flow at
-      // artifacts/epplaa-app/src/pages/auth/phone-sign-in.tsx.
-      await new Promise((r) => setTimeout(r, 600));
+      const fullPhone = `${country.dial}${digits}`;
+      await startOtp({ phone: fullPhone, channel });
       router.push({
         pathname: "/(auth)/verify",
-        params: { phone: `${country.dial}${digits}`, channel },
+        params: { phone: fullPhone, channel },
       });
     } catch (err) {
       Alert.alert("Couldn't send code", (err as Error).message ?? "Try again.");

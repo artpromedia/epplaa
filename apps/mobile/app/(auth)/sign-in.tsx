@@ -1,3 +1,4 @@
+import { useSignIn } from "@clerk/clerk-expo";
 import { Feather } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import React, { useRef, useState } from "react";
@@ -21,6 +22,7 @@ export default function SignInScreen() {
   const colors = useColors();
   const router = useRouter();
   const passwordRef = useRef<TextInput>(null);
+  const { signIn, setActive, isLoaded } = useSignIn();
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -38,14 +40,28 @@ export default function SignInScreen() {
 
   async function onSubmit() {
     if (!validate()) return;
+    if (!isLoaded || !signIn) {
+      Alert.alert("Auth not ready", "Try again in a moment.");
+      return;
+    }
     setSubmitting(true);
     try {
-      // TODO(auth): wire to Clerk's mobile SDK once the auth provider
-      // is set up for the Expo app. For now this is a UI-only stub
-      // so the screens can be reviewed end-to-end. Mirror the web
-      // flow at artifacts/epplaa-app/src/pages/auth/sign-in.tsx.
-      await new Promise((r) => setTimeout(r, 600));
-      router.replace("/(tabs)");
+      const attempt = await signIn.create({
+        identifier: email.trim(),
+        password,
+      });
+      if (attempt.status === "complete") {
+        await setActive({ session: attempt.createdSessionId });
+        router.replace("/(tabs)");
+      } else {
+        // Multi-factor or unverified email: Clerk surfaces these as
+        // intermediate statuses. Only the simple case is wired; MFA on
+        // mobile lands when the dedicated MFA screen is added.
+        Alert.alert(
+          "Additional step required",
+          `Sign-in needs further verification (status: ${attempt.status}).`,
+        );
+      }
     } catch (err) {
       Alert.alert("Sign in failed", (err as Error).message ?? "Try again.");
     } finally {

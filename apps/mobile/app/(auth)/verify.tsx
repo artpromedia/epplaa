@@ -1,5 +1,7 @@
+import { useSignIn, useSignUp } from "@clerk/clerk-expo";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import React, { useEffect, useRef, useState } from "react";
+import { startOtp, verifyOtp } from "@workspace/api-client-react";
 import {
   Alert,
   Pressable,
@@ -19,9 +21,18 @@ const RESEND_AFTER = 30;
 export default function VerifyScreen() {
   const colors = useColors();
   const router = useRouter();
-  const params = useLocalSearchParams<{ phone?: string; channel?: string }>();
+  const { signIn, setActive: setSignInActive, isLoaded: signInLoaded } = useSignIn();
+  const { signUp, setActive: setSignUpActive, isLoaded: signUpLoaded } = useSignUp();
+  const params = useLocalSearchParams<{
+    phone?: string;
+    channel?: string;
+    mode?: string; // "phone" (default) | "email"
+    email?: string;
+  }>();
   const phone = params.phone ?? "";
+  const email = params.email ?? "";
   const channel = params.channel === "sms" ? "SMS" : "WhatsApp";
+  const mode: "phone" | "email" = params.mode === "email" ? "email" : "phone";
 
   const inputs = useRef<Array<TextInput | null>>([]);
   const [digits, setDigits] = useState<string[]>(() => Array(CODE_LEN).fill(""));
@@ -61,12 +72,36 @@ export default function VerifyScreen() {
     setError(null);
     setSubmitting(true);
     try {
-      // TODO(auth): call verifyOtp({ phone, code }) and exchange the
-      // returned ticket via Clerk's signIn.create({ strategy: "ticket" }).
-      // Mirror the web flow at
-      // artifacts/epplaa-app/src/pages/auth/phone-sign-in.tsx.
-      await new Promise((r) => setTimeout(r, 700));
-      router.replace("/(tabs)");
+      if (mode === "email") {
+        if (!signUpLoaded || !signUp) throw new Error("Auth not ready.");
+        const result = await signUp.attemptEmailAddressVerification({ code });
+        if (result.status === "complete") {
+          await setSignUpActive({ session: result.createdSessionId });
+          router.replace("/(tabs)");
+          return;
+        }
+        throw new Error(`Unexpected sign-up status: ${result.status}`);
+      }
+
+      // Phone flow: backend issues a Clerk ticket; we exchange it.
+      const verify = await verifyOtp({ phone, code });
+      if (!verify.ok) throw new Error("Wrong or expired code.");
+      if (verify.noClerk || !verify.ticket) {
+        // Backend says the user isn't yet a Clerk user; the OTP still
+        // proves phone ownership. Nothing else to do client-side — caller
+        // is expected to land in (tabs) and the API issues a session
+        // cookie out-of-band. Mirrors the web SPA fallback path.
+        router.replace("/(tabs)");
+        return;
+      }
+      if (!signInLoaded || !signIn) throw new Error("Auth not ready.");
+      const attempt = await signIn.create({ strategy: "ticket", ticket: verify.ticket });
+      if (attempt.status === "complete") {
+        await setSignInActive({ session: attempt.createdSessionId });
+        router.replace("/(tabs)");
+      } else {
+        throw new Error(`Unexpected sign-in status: ${attempt.status}`);
+      }
     } catch (err) {
       setError("Wrong or expired code. Request a new one.");
       Alert.alert("Verification failed", (err as Error).message ?? "Try again.");
@@ -75,12 +110,24 @@ export default function VerifyScreen() {
     }
   }
 
-  function onResend() {
+  async function onResend() {
     if (secondsLeft > 0) return;
     setDigits(Array(CODE_LEN).fill(""));
     setSecondsLeft(RESEND_AFTER);
     inputs.current[0]?.focus();
-    // TODO(auth): re-trigger startOtp here against the same phone/channel.
+    try {
+      if (mode === "email") {
+        if (!signUp) return;
+        await signUp.prepareEmailAddressVerification({ strategy: "email_code" });
+      } else {
+        await startOtp({
+          phone,
+          channel: params.channel === "sms" ? "sms" : "whatsapp",
+        });
+      }
+    } catch (err) {
+      Alert.alert("Couldn't resend", (err as Error).message ?? "Try again.");
+    }
   }
 
   return (
