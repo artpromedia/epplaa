@@ -13,6 +13,17 @@
     "lint": "echo 'ESLint enforcement pending (see eslint.config.mjs)'"
   },
   "dependencies": {
+    "@opentelemetry/api": "^1.9.1",
+    "@opentelemetry/auto-instrumentations-node": "^0.55.0",
+    "@opentelemetry/exporter-metrics-otlp-http": "^0.57.0",
+    "@opentelemetry/exporter-trace-otlp-http": "^0.57.0",
+    "@opentelemetry/resources": "^1.30.0",
+    "@opentelemetry/sdk-metrics": "^1.30.0",
+    "@opentelemetry/sdk-node": "^0.57.0",
+    "@opentelemetry/semantic-conventions": "^1.28.0",
+    "ioredis": "^5.10.1",
+    "pino": "^9",
+    "prom-client": "^15.1.3",
     "zod": "catalog:"
   },
   "devDependencies": {

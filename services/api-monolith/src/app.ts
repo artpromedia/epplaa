@@ -45,8 +45,15 @@ import { securityHeaders } from "./middlewares/securityHeaders";
 import { csrfMiddleware } from "./middlewares/csrf";
 import { apiRateLimit } from "./middlewares/apiRateLimit";
 import { startMfaAbuseWatcherSweepTimer } from "./lib/rate-limit/mfaAbuseWatcher";
+import { httpMetricsMiddleware, metricsHandler } from "./lib/metrics";
 
 const app: Express = express();
+
+// Prometheus /metrics — mounted FIRST so it's reachable even if the rest
+// of the middleware chain blows up. Scraped by the kube-prometheus-stack
+// ServiceMonitor (see infra/helm/api-monolith/templates/servicemonitor.yaml).
+// NetworkPolicy at the cluster level keeps the route off the public ingress.
+app.get("/metrics", metricsHandler);
 
 // Clerk Frontend API proxy MUST be mounted BEFORE express.json().
 app.use(CLERK_PROXY_PATH, clerkProxyMiddleware());
@@ -101,6 +108,10 @@ app.use(
   }),
 );
 app.use(cors());
+// Record request-level RED metrics. Mounted after pino-http so the
+// request id is set for log/metric correlation, but before any business
+// middleware so 4xx/5xx generated upstream are still counted.
+app.use(httpMetricsMiddleware);
 // Body limit needs to comfortably exceed the 6 MB max KYC document size
 // (kyc.ts MAX_DOC_BYTES) once base64-encoded. base64 inflates by ~4/3, so a
 // 6 MB blob lands around 8 MB, plus envelope. Use 10 MB to leave headroom.
