@@ -27,6 +27,9 @@ import pg from "pg";
 import { logger } from "../lib/observability.js";
 import {
   type IPromptRegistry,
+  type IPromptAdminStore,
+  type PromptAdminRow,
+  type CreatePromptInput,
   type PromptVersion,
   getSeedPrompts,
 } from "./PromptRegistry.js";
@@ -45,7 +48,7 @@ export interface DbPromptRegistryOptions {
   db?: NodePgDatabase<typeof schema>;
 }
 
-export class DbPromptRegistry implements IPromptRegistry {
+export class DbPromptRegistry implements IPromptRegistry, IPromptAdminStore {
   private readonly db: NodePgDatabase<typeof schema>;
   private readonly pool: pg.Pool | null;
   private readonly cacheTtlMs: number;
@@ -151,6 +154,100 @@ export class DbPromptRegistry implements IPromptRegistry {
   invalidate(ref?: string): void {
     if (ref) this.cache.delete(ref);
     else this.cache.clear();
+  }
+
+  // ---------------------------------------------------------------------
+  // IPromptAdminStore — admin write API.
+  // ---------------------------------------------------------------------
+
+  async listAll(): Promise<PromptAdminRow[]> {
+    const rows = await this.db
+      .select()
+      .from(promptsTable)
+      .orderBy(sql`created_at DESC`);
+    return rows.map((r) => this.toAdminRow(r));
+  }
+
+  async getOne(ref: string): Promise<PromptAdminRow | null> {
+    const rows = await this.db
+      .select()
+      .from(promptsTable)
+      .where(eq(promptsTable.ref, ref))
+      .limit(1);
+    const row = rows[0];
+    return row ? this.toAdminRow(row) : null;
+  }
+
+  async create(input: CreatePromptInput): Promise<PromptAdminRow> {
+    const id = `prompt_${input.family}_${input.version}_${Date.now().toString(36)}`;
+    const inserted = await this.db
+      .insert(promptsTable)
+      .values({
+        id,
+        ref: input.ref,
+        family: input.family,
+        version: input.version,
+        systemPrompt: input.systemPrompt,
+        isActive: false,
+        activatedAt: null,
+        createdBy: input.createdBy ?? null,
+      })
+      .returning();
+    const row = inserted[0];
+    if (!row) {
+      throw new Error("PromptRegistry: insert returned no row");
+    }
+    logger.info(
+      { ref: input.ref, family: input.family, version: input.version },
+      "prompt_registry_draft_created",
+    );
+    return this.toAdminRow(row);
+  }
+
+  async activate(ref: string): Promise<PromptAdminRow> {
+    const existing = await this.getOne(ref);
+    if (!existing) {
+      throw new Error(`PromptRegistry: cannot activate unknown ref '${ref}'`);
+    }
+    // Atomic flip: within `family`, set is_active=(ref=$ref) and bump
+    // activated_at for the newly-active row only. Postgres applies SET
+    // expressions left-to-right with the OLD row visible, so this is
+    // safe in a single statement.
+    await this.db.execute(sql`
+      UPDATE prompts
+      SET
+        is_active = (ref = ${ref}),
+        activated_at = CASE WHEN ref = ${ref} THEN NOW() ELSE activated_at END
+      WHERE family = ${existing.family}
+    `);
+    // Drop cache for the family — both the newly-active row and any
+    // previously-active row could be cached.
+    this.cache.clear();
+    logger.info(
+      { ref, family: existing.family },
+      "prompt_registry_activated",
+    );
+    const next = await this.getOne(ref);
+    if (!next) {
+      throw new Error("PromptRegistry: activated row vanished");
+    }
+    return next;
+  }
+
+  private toAdminRow(r: typeof promptsTable.$inferSelect): PromptAdminRow {
+    return {
+      id: r.id,
+      ref: r.ref,
+      family: r.family,
+      version: r.version,
+      systemPrompt: r.systemPrompt,
+      isActive: r.isActive ?? false,
+      activatedAt:
+        r.activatedAt instanceof Date ? r.activatedAt.toISOString() : (r.activatedAt as unknown as string | null),
+      createdAt:
+        r.createdAt instanceof Date ? r.createdAt.toISOString() : (r.createdAt as unknown as string),
+      createdBy: r.createdBy ?? null,
+    };
   }
 
   async close(): Promise<void> {

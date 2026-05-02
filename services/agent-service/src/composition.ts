@@ -33,6 +33,7 @@ import { StaticAgentRegistry } from "./registry/AgentRegistry.js";
 import {
   InMemoryPromptRegistry,
   type IPromptRegistry,
+  type IPromptAdminStore,
 } from "./registry/PromptRegistry.js";
 import { DbPromptRegistry } from "./registry/DbPromptRegistry.js";
 import {
@@ -55,6 +56,8 @@ import { logger } from "./lib/observability.js";
 export interface AgentServiceDeps {
   agents: StaticAgentRegistry;
   prompts: IPromptRegistry;
+  /** Admin write API for prompts; null when running with the in-memory registry. */
+  promptAdmin: IPromptAdminStore | null;
   tools: IToolRegistry;
   gateway: IModelGateway;
   memory: IShortTermMemory;
@@ -311,6 +314,7 @@ export async function buildDeps(): Promise<AgentServiceDeps> {
   return {
     agents,
     prompts,
+    promptAdmin: dbPrompts,
     tools,
     gateway,
     memory,

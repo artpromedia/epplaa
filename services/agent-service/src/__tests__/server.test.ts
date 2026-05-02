@@ -26,6 +26,7 @@ function buildStubDeps(modelResponse: ModelResponse): AgentServiceDeps {
   return {
     agents,
     prompts,
+    promptAdmin: null,
     tools,
     gateway,
     memory,

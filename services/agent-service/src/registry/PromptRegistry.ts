@@ -34,6 +34,47 @@ export interface IPromptRegistry {
   list(): Promise<PromptVersion[]>;
 }
 
+/**
+ * Admin-only operations for managing prompt versions. Implemented by the
+ * DB-backed registry; the in-memory variant returns null from
+ * AgentServiceDeps.promptAdmin so admin routes are not mounted in dev.
+ */
+export interface PromptAdminRow {
+  id: string;
+  ref: string;
+  family: string;
+  version: string;
+  systemPrompt: string;
+  isActive: boolean;
+  activatedAt: string | null;
+  createdAt: string;
+  createdBy: string | null;
+}
+
+export interface CreatePromptInput {
+  ref: string;
+  family: string;
+  version: string;
+  systemPrompt: string;
+  createdBy?: string | null;
+}
+
+export interface IPromptAdminStore {
+  /** List every row, active or not, newest first. */
+  listAll(): Promise<PromptAdminRow[]>;
+  /** Fetch a single row by ref. Returns null if missing. */
+  getOne(ref: string): Promise<PromptAdminRow | null>;
+  /** Create a new draft row (isActive=false). Throws on duplicate ref. */
+  create(input: CreatePromptInput): Promise<PromptAdminRow>;
+  /**
+   * Activate the given ref atomically. Within its `family`, deactivates
+   * the previously-active row(s) and sets this row to is_active=true,
+   * activated_at=NOW(). Invalidates any cache for affected refs.
+   * Throws if `ref` does not exist.
+   */
+  activate(ref: string): Promise<PromptAdminRow>;
+}
+
 // ---------------------------------------------------------------------------
 // Production prompts
 //

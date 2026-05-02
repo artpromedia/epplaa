@@ -65,6 +65,7 @@ vault:
         - KAFKA_SASL_USERNAME: { remoteKey: epplaa/agent-service, property: kafka_sasl_username }
         - KAFKA_SASL_PASSWORD: { remoteKey: epplaa/agent-service, property: kafka_sasl_password }
         - AGENT_SERVICE_TOKEN: { remoteKey: epplaa/agent-service, property: service_token }
+        - AGENT_ADMIN_TOKEN: { remoteKey: epplaa/agent-service, property: admin_token }
 
 probes:
   liveness:

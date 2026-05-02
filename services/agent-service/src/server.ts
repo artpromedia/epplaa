@@ -18,11 +18,20 @@ import {
   logger,
   metricsRegistry,
 } from "./lib/observability.js";
+import { requireAdminToken } from "./lib/adminAuth.js";
 import type { AgentServiceDeps } from "./composition.js";
 
 const messageSchema = z.object({
   sessionId: z.string().min(1).max(200),
   message: z.string().min(1).max(8000),
+});
+
+const createPromptSchema = z.object({
+  ref: z.string().min(1).max(200),
+  family: z.string().min(1).max(128),
+  version: z.string().min(1).max(32),
+  systemPrompt: z.string().min(1).max(64_000),
+  createdBy: z.string().min(1).max(200).optional(),
 });
 
 export function buildServer(deps: AgentServiceDeps): Express {
@@ -104,6 +113,87 @@ export function buildServer(deps: AgentServiceDeps): Express {
       }
     },
   );
+
+  // ---- Admin: prompt registry write API -------------------------------
+  // Mounted only when a DB-backed promptAdmin store is available. All
+  // routes are guarded by requireAdminToken (Bearer + AGENT_ADMIN_TOKEN).
+  if (deps.promptAdmin) {
+    const promptAdmin = deps.promptAdmin;
+
+    app.get("/admin/prompts", requireAdminToken, async (_req, res, next) => {
+      try {
+        const rows = await promptAdmin.listAll();
+        res.json({ prompts: rows });
+      } catch (err) {
+        next(err);
+      }
+    });
+
+    app.get(
+      "/admin/prompts/:ref",
+      requireAdminToken,
+      async (req, res, next) => {
+        try {
+          const refParam = req.params.ref;
+          const ref = typeof refParam === "string" ? refParam : "";
+          const row = await promptAdmin.getOne(ref);
+          if (!row) {
+            res.status(404).json({ error: "not_found", ref });
+            return;
+          }
+          res.json(row);
+        } catch (err) {
+          next(err);
+        }
+      },
+    );
+
+    app.post("/admin/prompts", requireAdminToken, async (req, res, next) => {
+      try {
+        const parsed = createPromptSchema.safeParse(req.body);
+        if (!parsed.success) {
+          res.status(400).json({
+            error: "invalid_body",
+            details: parsed.error.flatten(),
+          });
+          return;
+        }
+        const row = await promptAdmin.create(parsed.data);
+        res.status(201).json(row);
+      } catch (err) {
+        const msg = (err as Error).message;
+        // Postgres unique-violation surfaces as a 23505; surface as 409.
+        if (
+          msg.includes("duplicate key") ||
+          msg.includes("unique constraint")
+        ) {
+          res.status(409).json({ error: "ref_exists", detail: msg });
+          return;
+        }
+        next(err);
+      }
+    });
+
+    app.post(
+      "/admin/prompts/:ref/activate",
+      requireAdminToken,
+      async (req, res, next) => {
+        const refParam = req.params.ref;
+        const ref = typeof refParam === "string" ? refParam : "";
+        try {
+          const row = await promptAdmin.activate(ref);
+          res.json(row);
+        } catch (err) {
+          const msg = (err as Error).message;
+          if (msg.includes("unknown ref")) {
+            res.status(404).json({ error: "not_found", ref });
+            return;
+          }
+          next(err);
+        }
+      },
+    );
+  }
 
   // Final error handler — last resort.
   app.use(
