@@ -15,28 +15,9 @@
  */
 
 import { readFileSync } from "node:fs";
-import { z } from "zod";
 import { evaluatePrompt, formatReport, type PromptEvalCase, type PromptEvalRunner } from "../lib/promptEvaluator.js";
 import { gatewayPromptRunner } from "../lib/gatewayPromptRunner.js";
-
-const goldenSchema = z.object({
-  agent: z.string(),
-  description: z.string().optional(),
-  cases: z.array(
-    z.object({
-      id: z.string(),
-      message: z.string(),
-      expectations: z.array(
-        z.discriminatedUnion("type", [
-          z.object({ type: z.literal("contains"), value: z.string(), caseInsensitive: z.boolean().optional() }),
-          z.object({ type: z.literal("not_contains"), value: z.string(), caseInsensitive: z.boolean().optional() }),
-          z.object({ type: z.literal("regex"), pattern: z.string(), flags: z.string().optional() }),
-          z.object({ type: z.literal("max_latency_ms"), value: z.number().positive() }),
-        ]),
-      ),
-    }),
-  ),
-});
+import { promptEvalGoldenSchema as goldenSchema } from "../lib/promptEvalSchema.js";
 
 function parseArgs(argv: string[]): Record<string, string | boolean> {
   const out: Record<string, string | boolean> = {};

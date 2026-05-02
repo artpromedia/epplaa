@@ -20,6 +20,9 @@ import {
 } from "./lib/observability.js";
 import { requireAdminToken } from "./lib/adminAuth.js";
 import type { AgentServiceDeps } from "./composition.js";
+import { promptEvalCaseSchema } from "./lib/promptEvalSchema.js";
+import { evaluatePrompt, formatReport } from "./lib/promptEvaluator.js";
+import { gatewayPromptRunner } from "./lib/gatewayPromptRunner.js";
 
 const messageSchema = z.object({
   sessionId: z.string().min(1).max(200),
@@ -33,6 +36,23 @@ const createPromptSchema = z.object({
   systemPrompt: z.string().min(1).max(64_000),
   createdBy: z.string().min(1).max(200).optional(),
 });
+
+const activatePromptSchema = z
+  .object({
+    evalCases: z.array(promptEvalCaseSchema).optional(),
+    skipEval: z.boolean().optional(),
+  })
+  .optional();
+
+/**
+ * When AGENT_REQUIRE_EVAL_FOR_ACTIVATION=true, the activate endpoint
+ * refuses with 412 unless the request body carries evalCases (or
+ * skipEval=true with an explicit override). Default off so existing
+ * dev/test flows continue to work; production should turn it on.
+ */
+const REQUIRE_EVAL =
+  (process.env["AGENT_REQUIRE_EVAL_FOR_ACTIVATION"] ?? "").toLowerCase() ===
+  "true";
 
 export function buildServer(deps: AgentServiceDeps): Express {
   const app = express();
@@ -181,6 +201,57 @@ export function buildServer(deps: AgentServiceDeps): Express {
         const refParam = req.params.ref;
         const ref = typeof refParam === "string" ? refParam : "";
         try {
+          const parsed = activatePromptSchema.safeParse(req.body ?? {});
+          if (!parsed.success) {
+            res.status(400).json({
+              error: "invalid_body",
+              details: parsed.error.flatten(),
+            });
+            return;
+          }
+          const body = parsed.data ?? {};
+          const cases = body.evalCases ?? [];
+          const skip = body.skipEval === true;
+
+          if (REQUIRE_EVAL && cases.length === 0 && !skip) {
+            res.status(412).json({
+              error: "eval_required",
+              message:
+                "activation requires evalCases (or skipEval=true with audit) when AGENT_REQUIRE_EVAL_FOR_ACTIVATION=true",
+            });
+            return;
+          }
+
+          if (cases.length > 0) {
+            const candidate = await promptAdmin.getOne(ref);
+            if (!candidate) {
+              res.status(404).json({ error: "not_found", ref });
+              return;
+            }
+            const runner = gatewayPromptRunner(deps.gateway, {
+              agentId: candidate.family,
+            });
+            const report = await evaluatePrompt({
+              prompt: candidate.systemPrompt,
+              cases,
+              runner,
+            });
+            if (!report.passed) {
+              logger.warn(
+                { ref, failures: report.failedCount },
+                "prompt_activation_eval_failed",
+              );
+              res.status(422).json({
+                error: "eval_failed",
+                report,
+                summary: formatReport(report),
+              });
+              return;
+            }
+          } else if (skip) {
+            logger.warn({ ref }, "prompt_activation_eval_skipped");
+          }
+
           const row = await promptAdmin.activate(ref);
           res.json(row);
         } catch (err) {

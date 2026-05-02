@@ -118,7 +118,7 @@ d("user-linked tables FK + RLS bootstrap", () => {
       WHERE table_schema = 'public' AND table_name = ANY(${tableNames});
     `);
     const existing = new Set(
-      ((existingRows as { rows?: Array<{ table_name: string }> }).rows ?? []).map(
+      ((existingRows as unknown as { rows?: Array<{ table_name: string }> }).rows ?? []).map(
         (r) => r.table_name,
       ),
     );
@@ -133,7 +133,7 @@ d("user-linked tables FK + RLS bootstrap", () => {
       WHERE n.nspname = 'public' AND c.relrowsecurity = true AND c.relname = ANY(${present});
     `);
     const rlsEnabled = new Set(
-      ((rlsRows as { rows?: Array<{ table_name: string }> }).rows ?? []).map(
+      ((rlsRows as unknown as { rows?: Array<{ table_name: string }> }).rows ?? []).map(
         (r) => r.table_name,
       ),
     );
@@ -147,7 +147,7 @@ d("user-linked tables FK + RLS bootstrap", () => {
       WHERE schemaname = 'public' AND tablename = ANY(${present});
     `);
     const policiesByTable = new Map<string, Set<string>>();
-    for (const row of (policyRows as { rows?: Array<{ tablename: string; policyname: string }> })
+    for (const row of (policyRows as unknown as { rows?: Array<{ tablename: string; policyname: string }> })
       .rows ?? []) {
       if (!policiesByTable.has(row.tablename)) policiesByTable.set(row.tablename, new Set());
       policiesByTable.get(row.tablename)!.add(row.policyname);

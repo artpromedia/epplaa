@@ -56,6 +56,27 @@ export const outboxPollErrorsTotal = new Counter({
   registers: [metricsRegistry],
 });
 
+export const outboxDeliveredTotal = new Counter({
+  name: "epplaa_notification_outbox_delivered_total",
+  help: "Outbox rows successfully dispatched by the drain worker.",
+  labelNames: ["channel"] as const,
+  registers: [metricsRegistry],
+});
+
+export const outboxFailedTotal = new Counter({
+  name: "epplaa_notification_outbox_failed_total",
+  help: "Outbox rows permanently failed (max attempts exhausted).",
+  labelNames: ["channel"] as const,
+  registers: [metricsRegistry],
+});
+
+export const outboxRetriedTotal = new Counter({
+  name: "epplaa_notification_outbox_retried_total",
+  help: "Outbox rows rescheduled for retry after a transient dispatch error.",
+  labelNames: ["channel"] as const,
+  registers: [metricsRegistry],
+});
+
 let sdk: NodeSDK | null = null;
 
 export async function initOtel(): Promise<void> {

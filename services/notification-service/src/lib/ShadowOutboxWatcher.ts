@@ -27,6 +27,8 @@ import {
   outboxQueueDepth,
   outboxPollErrorsTotal,
 } from "./observability.js";
+import { OutboxDrainer } from "./OutboxDrainer.js";
+import { LogChannelDispatcher, type ChannelDispatcher } from "./ChannelDispatcher.js";
 
 const { Pool } = pg;
 
@@ -34,6 +36,10 @@ export interface ShadowWatcherOptions {
   databaseUrl: string;
   pollIntervalMs?: number;
   drainEnabled?: boolean;
+  /** Batch size for drain; default 10. */
+  drainBatchSize?: number;
+  /** Override default LogChannelDispatcher with a real adapter. */
+  dispatcher?: ChannelDispatcher;
   /** Test seam: caller can inject a pre-built db handle. */
   db?: NodePgDatabase<typeof schema>;
   /** Test seam: lets tests call `tick()` directly without a real interval. */
@@ -56,6 +62,7 @@ export class ShadowOutboxWatcher {
   private readonly pool: pg.Pool | null;
   private readonly pollIntervalMs: number;
   private readonly drainEnabled: boolean;
+  private readonly drainer: OutboxDrainer | null;
   private timer: NodeJS.Timeout | null = null;
   private running = false;
 
@@ -69,6 +76,13 @@ export class ShadowOutboxWatcher {
       this.pool = new Pool({ connectionString: opts.databaseUrl });
       this.db = drizzle(this.pool, { schema });
     }
+    this.drainer = this.drainEnabled
+      ? new OutboxDrainer(
+          this.db,
+          opts.dispatcher ?? new LogChannelDispatcher(),
+          opts.drainBatchSize ?? 10,
+        )
+      : null;
   }
 
   start(): void {
@@ -173,13 +187,15 @@ export class ShadowOutboxWatcher {
   private async runLoop(): Promise<void> {
     while (this.running) {
       await this.tick();
-      // Also a guard against the outbox-watcher accidentally getting
-      // wired to drain rows before the cutover gate. The actual drain
-      // implementation will land behind this flag in the next slice.
-      if (this.drainEnabled) {
-        logger.warn(
-          "drain_enabled_but_unimplemented \u2014 ignoring NOTIFICATION_DRAIN_ENABLED until cutover slice",
-        );
+      if (this.drainer) {
+        try {
+          const result = await this.drainer.drainBatch();
+          if (result.claimed > 0) {
+            logger.info(result, "outbox_drain_batch_complete");
+          }
+        } catch (err) {
+          logger.warn({ err: (err as Error).message }, "outbox_drain_batch_error");
+        }
       }
       await new Promise<void>((resolve) => {
         this.timer = setTimeout(resolve, this.pollIntervalMs);

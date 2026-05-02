@@ -233,4 +233,87 @@ describe("admin prompt routes", () => {
       .set("authorization", `Bearer ${ADMIN_TOKEN}`);
     expect(res.status).toBe(404);
   });
+
+  it("activate runs prompt-eval gate when evalCases provided and refuses on failure", async () => {
+    const admin = buildStubAdmin();
+    const deps = buildDeps(admin);
+    // Stub gateway returns text that does NOT contain the required phrase.
+    (deps.gateway.complete as ReturnType<typeof vi.fn>).mockImplementation(
+      async () => ({
+        text: "i cannot help",
+        toolCalls: [],
+        model: "stub",
+        usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+        latencyMs: 1,
+      }),
+    );
+    const app = buildServer(deps);
+    const res = await request(app)
+      .post(`/admin/prompts/${encodeURIComponent(sampleRow.ref)}/activate`)
+      .set("authorization", `Bearer ${ADMIN_TOKEN}`)
+      .send({
+        evalCases: [
+          {
+            id: "must-greet",
+            message: "hi",
+            expectations: [{ type: "contains", value: "welcome" }],
+          },
+        ],
+      });
+    expect(res.status).toBe(422);
+    expect(res.body.error).toBe("eval_failed");
+    expect(admin.activate).not.toHaveBeenCalled();
+  });
+
+  it("activate proceeds when prompt-eval gate passes", async () => {
+    const admin = buildStubAdmin();
+    const deps = buildDeps(admin);
+    (deps.gateway.complete as ReturnType<typeof vi.fn>).mockImplementation(
+      async () => ({
+        text: "welcome to epplaa",
+        toolCalls: [],
+        model: "stub",
+        usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+        latencyMs: 1,
+      }),
+    );
+    const app = buildServer(deps);
+    const res = await request(app)
+      .post(`/admin/prompts/${encodeURIComponent(sampleRow.ref)}/activate`)
+      .set("authorization", `Bearer ${ADMIN_TOKEN}`)
+      .send({
+        evalCases: [
+          {
+            id: "must-greet",
+            message: "hi",
+            expectations: [{ type: "contains", value: "welcome" }],
+          },
+        ],
+      });
+    expect(res.status).toBe(200);
+    expect(res.body.isActive).toBe(true);
+    expect(admin.activate).toHaveBeenCalledWith(sampleRow.ref);
+  });
+
+  it("activate refuses with 412 when AGENT_REQUIRE_EVAL_FOR_ACTIVATION=true and no cases", async () => {
+    const prev = process.env["AGENT_REQUIRE_EVAL_FOR_ACTIVATION"];
+    process.env["AGENT_REQUIRE_EVAL_FOR_ACTIVATION"] = "true";
+    // Need to reload the module so the const captures the new env value.
+    vi.resetModules();
+    const { buildServer: buildServerFresh } = await import("../server.js");
+    try {
+      const admin = buildStubAdmin();
+      const app = buildServerFresh(buildDeps(admin));
+      const res = await request(app)
+        .post(`/admin/prompts/${encodeURIComponent(sampleRow.ref)}/activate`)
+        .set("authorization", `Bearer ${ADMIN_TOKEN}`)
+        .send({});
+      expect(res.status).toBe(412);
+      expect(res.body.error).toBe("eval_required");
+      expect(admin.activate).not.toHaveBeenCalled();
+    } finally {
+      if (prev === undefined) delete process.env["AGENT_REQUIRE_EVAL_FOR_ACTIVATION"];
+      else process.env["AGENT_REQUIRE_EVAL_FOR_ACTIVATION"] = prev;
+    }
+  });
 });
