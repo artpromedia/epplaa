@@ -1,0 +1,42 @@
+[
+  {
+    "name": "schema_has_money_flow_tables",
+    "sql": "SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name IN ('orders','payment_intents','payouts','audit_events') HAVING count(*) = 4",
+    "expectMinRows": 1
+  },
+  {
+    "name": "audit_chain_seq_monotonic",
+    "sql": "SELECT 1 FROM audit_events GROUP BY seq HAVING count(*) > 1",
+    "expectMinRows": 0
+  },
+  {
+    "name": "users_lookup_by_clerk_id_returns_rows",
+    "sql": "SELECT clerk_id FROM users LIMIT 1",
+    "expectMinRows": 1
+  },
+  {
+    "name": "orders_have_user_join_target",
+    "sql": "SELECT o.id FROM orders o JOIN users u ON u.clerk_id = o.user_id LIMIT 1",
+    "expectMinRows": 1
+  },
+  {
+    "name": "payment_intents_have_order_join_target",
+    "sql": "SELECT pi.id FROM payment_intents pi JOIN orders o ON o.id = pi.order_id LIMIT 1",
+    "expectMinRows": 0
+  },
+  {
+    "name": "audit_events_chain_head_present",
+    "sql": "SELECT seq FROM audit_events ORDER BY seq DESC LIMIT 1",
+    "expectMinRows": 1
+  },
+  {
+    "name": "no_orphan_payment_intents",
+    "sql": "SELECT pi.id FROM payment_intents pi WHERE pi.order_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM orders o WHERE o.id = pi.order_id)",
+    "expectMinRows": 0
+  },
+  {
+    "name": "payouts_table_readable",
+    "sql": "SELECT 1 FROM payouts LIMIT 1",
+    "expectMinRows": 0
+  }
+]

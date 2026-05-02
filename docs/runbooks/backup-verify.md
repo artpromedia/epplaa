@@ -5,23 +5,26 @@ malicious wipe is only useful if it can actually be restored. The nightly
 `pg_dump` itself is owned by the deployment platform / managed Postgres
 provider (we cannot reach the production network from GitHub Actions),
 but the **scheduled restore-from-dump tests** that prove the dumps are
-restorable live in this repo on two cadences:
+restorable live in this repo on three cadences:
 
-| Aspect | Nightly smoke | Weekly fuller |
-| --- | --- | --- |
-| Workflow | [`.github/workflows/backup-verify-nightly.yml`](../../.github/workflows/backup-verify-nightly.yml) | [`.github/workflows/backup-verify.yml`](../../.github/workflows/backup-verify.yml) |
-| Verifier script | [`scripts/src/verifyBackup.ts`](../../scripts/src/verifyBackup.ts) `--mode=smoke` | same script `--mode=full` |
-| Schedule | `0 3 * * 1-6` (Mon-Sat 03:00 UTC) — six per week | `0 3 * * 0` (Sunday 03:00 UTC) — once per week |
-| Probe surface | `pg_restore` of the latest `*.dump` into a throwaway sandbox DB, followed by freshness check, row-count smoke against `audit_events` / `payment_intents` / `orders`, optional live-vs-restored row-count comparison (when `LIVE_COUNTS_URL` or `LIVE_COUNTS_MANIFEST` is set), week-over-week row-count drift check vs the prior verify run's persisted history, and required-extension presence check | smoke + anti-join FK integrity across `orders ↔ payment_intents ↔ users` + `VACUUM (ANALYZE)` (full heap scan, catches block-level corruption) + per-table inventory + best-effort `amcheck` btree validation + end-to-end audit-chain replay against `audit_events` |
-| Sentry Cron slug | `backup-verify-nightly` | `backup-verify` |
-| Pager channel | Sentry Cron monitor (heartbeat) + GitHub "Failed workflow run" mail (backstop) | same |
+| Aspect | Nightly smoke | Weekly fuller | Monthly drill |
+| --- | --- | --- | --- |
+| Workflow | [`.github/workflows/backup-verify-nightly.yml`](../../.github/workflows/backup-verify-nightly.yml) | [`.github/workflows/backup-verify.yml`](../../.github/workflows/backup-verify.yml) | [`.github/workflows/backup-restore-drill.yml`](../../.github/workflows/backup-restore-drill.yml) |
+| Verifier script | [`scripts/src/verifyBackup.ts`](../../scripts/src/verifyBackup.ts) `--mode=smoke` | same script `--mode=full` | same script `--mode=drill` |
+| Schedule | `0 3 * * 1-6` (Mon-Sat 03:00 UTC) — six per week | `0 3 * * 0` (Sunday 03:00 UTC) — once per week | `0 4 1 * *` (1st of month, 04:00 UTC) — once per month |
+| Probe surface | `pg_restore` of the latest `*.dump` into a throwaway sandbox DB, followed by freshness check, row-count smoke against `audit_events` / `payment_intents` / `orders`, optional live-vs-restored row-count comparison (when `LIVE_COUNTS_URL` or `LIVE_COUNTS_MANIFEST` is set), week-over-week row-count drift check vs the prior verify run's persisted history, and required-extension presence check | smoke + anti-join FK integrity across `orders ↔ payment_intents ↔ users` + `VACUUM (ANALYZE)` (full heap scan, catches block-level corruption) + per-table inventory + best-effort `amcheck` btree validation + end-to-end audit-chain replay against `audit_events` | full + RTO assertion (total verifier wall-time vs `DRILL_RTO_SECONDS_MAX`, default 1800s) + RPO assertion (dump mtime vs `DRILL_RPO_HOURS_MAX`, default 24h) + operator-authored app-shape probe queries from [`scripts/src/drill-probe-queries.json`](../../scripts/src/drill-probe-queries.json) + JSON drill-report artifact uploaded to the workflow run for retro / compliance review |
+| Sentry Cron slug | `backup-verify-nightly` | `backup-verify` | `backup-restore-drill` |
+| Pager channel | Sentry Cron monitor (heartbeat) + GitHub "Failed workflow run" mail (backstop) | same | same |
 
-The two cadences run on different days so they never collide on the
-shared `RESTORE_DATABASE_URL` sandbox; each has its own Sentry Cron
+The three cadences run on different days/dates so they never collide on
+the shared `RESTORE_DATABASE_URL` sandbox; each has its own Sentry Cron
 monitor so missed-check-in pages route distinctly. The nightly is the
 primary safety net (catches a broken dump within ~24h instead of waiting
 up to 7 days); the weekly fuller pass adds the deeper checks that smoke
-mode skips for runtime reasons.
+mode skips for runtime reasons; the monthly drill is the **formal
+rehearsed-recovery exercise** that produces a durable JSON report of
+RTO/RPO + app-shape probe outcomes for compliance review and on-call
+retros — see the **Monthly drill** section below.
 
 The verify pass exits non-zero and pages on:
 
@@ -43,16 +46,20 @@ The verify pass exits non-zero and pages on:
 | 14   | Restored row counts are stale or incomplete vs the live source / manifest — the dump is restorable but its data lags production. **Distinct from exit 6** (which is "the dump *file* is older than `MAX_DUMP_AGE_HOURS`"): this code fires when the file mtime is fresh but its contents lag, which the file-mtime check cannot see. Names every offending table and the absolute / percentage delta in the failure line so on-call doesn't have to dig through logs. Skipped (with a `[verifyBackup]` notice and exit 0) when neither `LIVE_COUNTS_URL` nor `LIVE_COUNTS_MANIFEST` is set. | both | Platform team + DB owner |
 | 15   | Restored row counts dropped sharply vs the most recent prior verify run (the per-run history file under `WEEK_OVER_WEEK_HISTORY`, default `${BACKUP_DIR}/verify-row-counts-history.json`). One or more tables in `WEEK_OVER_WEEK_TABLES` (default `audit_events,payment_intents,orders`) shrunk by more than `WEEK_OVER_WEEK_MAX_DROP_RATIO` (default 20%) since last week. **Distinct from exit 14**: exit 14 compares restored vs *current* live, so it can't see the case where the producer regenerated the manifest off the same partial dump (manifest agrees with restored, but both regressed). Exit 15 compares restored vs *the prior verify's* restored, so it catches that case. Names every offending table + the prior count + the drop percentage. Recording a baseline (no prior history) does NOT page; only a real drop after a baseline exists does. | both | Platform team + DB owner |
 | 16   | Dump SHA-256 does not match the sidecar manifest, OR the manifest itself is malformed/unreadable, OR the sidecar is missing while `BACKUP_CHECKSUM_REQUIRED=1`. **Fires before `pg_restore` runs**, so on-call knows the file we downloaded does not match what the producer wrote — almost always a transport corruption (truncated transfer, silent S3 partial-read, on-disk bit flip on the runner) rather than a dump-internal problem. Distinct from exit 4 (`pg_restore` failed) by the time-to-failure (~seconds vs. several minutes) and by who to page first. Skipped with a `[verifyBackup]` notice when no sidecar is present and `BACKUP_CHECKSUM_REQUIRED` is unset (the rollout default). | both | Platform team (transport / backup share) |
+| 17   | Drill RTO breach — total verifier wall-time exceeded `DRILL_RTO_SECONDS_MAX` (default 1800s = 30 min). The recovery plan promises a 1h RTO; halving that for the drill leaves headroom for the app-side recovery work the verifier doesn't model. **Distinct from any GitHub Actions runner timeout**: exit 17 lets us record the degradation in the drill-report artifact even when the runner timeout did NOT trip. | drill only | SRE on-call (drill SLO) |
+| 18   | Drill RPO breach — newest dump in `BACKUP_DIR` is older than `DRILL_RPO_HOURS_MAX` (default 24h) at drill start. **Distinct from exit 6** (which defends nightly producer-stall detection at the wider `MAX_DUMP_AGE_HOURS=36h` band so nightly verify doesn't false-page on a slow producer): exit 18 enforces the tighter recovery-plan SLO during the formal monthly drill. | drill only | Platform team (RPO SLO) |
+| 19   | Drill app-shape probe failed — a query in `DRILL_PROBE_QUERIES_FILE` (default `scripts/src/drill-probe-queries.json`) either errored OR returned fewer rows than its `expectMinRows`. **Distinct from exit 5** (smoke psql) which only covers the three hardcoded smoke tables: exit 19 covers the operator-authored set of representative app queries that prove the restored DB is *usable* by the app, not just non-empty. The drill report artifact lists every probe and its outcome so the on-call retro sees the full picture even when only one probe failed. | drill only | Platform team + DB owner |
 
 > **On-call routing tip:** the grouping above is the page-routing contract.
-> Codes 2/3/6/9/13/16 are about the transport / freshness / sandbox config /
-> workflow misconfig and belong to the platform team (or the repo owner
-> for code 13). Codes 4/5/7/10/11/12/14/15 are about the dump's internal
-> consistency / completeness and need both platform + the DB owner. Code
-> 8 is the audit-integrity invariant and is the only one that should
-> land in the audit/compliance owners' on-call queue. If you change the
-> grouping here, also update the routing rules in your alert manager so
-> pages don't drop on the floor.
+> Codes 2/3/6/9/13/16/18 are about the transport / freshness / sandbox config /
+> workflow misconfig / RPO SLO and belong to the platform team (or the repo
+> owner for code 13). Codes 4/5/7/10/11/12/14/15/19 are about the dump's
+> internal consistency / completeness / app-shape probe outcomes and need
+> both platform + the DB owner. Code 8 is the audit-integrity invariant and
+> is the only one that should land in the audit/compliance owners' on-call
+> queue. Code 17 is a drill SLO regression and routes to SRE on-call. If
+> you change the grouping here, also update the routing rules in your
+> alert manager so pages don't drop on the floor.
 
 ## Heartbeat — paging when the scheduler itself stops running
 
@@ -844,3 +851,111 @@ To rehearse each new failure mode against a local sandbox:
   The verifier should exit 15 with a `fail()` line naming `orders`
   and the inflated drop percentage. `rm` the history file to clear
   the rehearsal; the next run will record a fresh baseline.
+
+
+## Monthly drill (`--mode=drill`)
+
+The monthly drill is the **formal rehearsed-recovery exercise** that the
+launch-readiness plan requires. Workflow:
+[`.github/workflows/backup-restore-drill.yml`](../../.github/workflows/backup-restore-drill.yml).
+Sentry Cron monitor: `backup-restore-drill`. Cadence: 1st of the month
+at 04:00 UTC (one hour after Sunday's full pass so the
+`RESTORE_DATABASE_URL` sandbox is never contended even when the 1st
+falls on a Sunday).
+
+`--mode=drill` is a **strict superset of `--mode=full`** — it runs
+every check `full` runs (smoke + extensions + live-vs-restored counts +
+week-over-week drift + FK integrity + VACUUM ANALYZE + table inventory
++ amcheck + audit-chain replay) and additionally:
+
+1. **Application-shape probe.** The verifier loads
+   [`scripts/src/drill-probe-queries.json`](../../scripts/src/drill-probe-queries.json)
+   (override via `DRILL_PROBE_QUERIES_FILE`) and runs each entry's
+   `sql` against the restored sandbox. Each probe declares an
+   optional `expectMinRows`; anything below trips exit 19. Probe
+   failures do *not* short-circuit the drill — every probe runs and
+   accumulates into the report so the operator's retro sees the full
+   picture rather than "probe N failed; did N+1..M also fail?". The
+   default queries cover schema presence (money-flow tables exist,
+   audit chain head present, no orphan payment intents, etc.) — edit
+   the JSON file to add representative app queries the recovery plan
+   should validate.
+2. **RTO assertion.** Total verifier wall-time (start of script ->
+   end of all checks) is asserted against `DRILL_RTO_SECONDS_MAX`
+   (default 1800s = 30 min, override via repo var). Crossing exits 17.
+   The bound exists to surface a degradation in restore *speed* (an
+   extra 30 min on every dump halves the usefulness of the drill)
+   before the actual production recovery exposes it.
+3. **RPO assertion.** Dump mtime relative to drill start is asserted
+   against `DRILL_RPO_HOURS_MAX` (default 24h, override via repo var).
+   Crossing exits 18. Distinct from exit 6 (`MAX_DUMP_AGE_HOURS=36h`
+   wider band for nightly producer-stall detection); drill mode
+   tightens to the recovery-plan SLO.
+4. **Drill report.** A JSON artifact is written to
+   `${BACKUP_DIR}/drill-report-<ISO>.json` (override via
+   `DRILL_REPORT_PATH`) capturing the dump's path/size/mtime, RTO/RPO
+   measurements, every probe's outcome, and the drill's pass/fail
+   decision. The workflow uploads the report as a build artifact
+   (`drill-report`, retained for 90 days) so compliance reviewers and
+   on-call retros have a durable record.
+
+### Authoring the probe-queries file
+
+The default file is fine for the launch-readiness rollout. To extend
+or override:
+
+```json
+[
+  {
+    "name": "schema_has_money_flow_tables",
+    "sql": "SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name IN ('orders','payment_intents','payouts','audit_events') HAVING count(*) = 4",
+    "expectMinRows": 1
+  }
+]
+```
+
+Constraints (enforced by `parseDrillProbeQueries`):
+
+- `name` must be a non-empty string and unique within the file (the
+  report attributes results by name).
+- `sql` must be a non-empty string holding a **single** statement; a
+  trailing `;` is allowed but `; DROP TABLE …` will be rejected as
+  multi-statement.
+- `expectMinRows` is optional; when set it must be a non-negative
+  integer. When unset the probe is "does the SQL parse and execute"
+  rather than "does it return data".
+- Each probe is wrapped as `SELECT count(*) FROM (<your sql>) AS t` so
+  the verifier sees a single integer regardless of what the operator's
+  query selects.
+
+### Outcome triage
+
+| Drill outcome | What to do |
+| --- | --- |
+| Workflow ran, exit 0, all probes ok | Drill is green. Download the `drill-report` artifact, file it in the on-call retro folder, move on. |
+| Exit 17 (RTO breach) | Restore is taking longer than budgeted. Compare this drill's `rtoSeconds` against the previous run's report — a smooth growth curve usually means dump size growth (acceptable up to a point); a sudden jump usually means a sandbox-config regression (a slower disk class, a colder cache, a Postgres version bump that needs `--jobs` tuning). The sandbox is throwaway, so re-run with `pg_restore --jobs=N` to re-baseline. |
+| Exit 18 (RPO breach) | Producer skipped a dump or the BACKUP_FETCH_CMD is pulling a cached/older dump. Compare the report's `dump.mtime` against the producer's pg_dump cron logs. Page the platform team. |
+| Exit 19 (probe failed) | One or more app-shape probes failed. The drill report's `probes` array names every failure with its error / row count. Common causes: a probe references a column / table that was renamed without updating the file (operator action: update the file), or the dump genuinely doesn't carry the data the app expects (page DB owner). |
+| Workflow didn't run | Sentry's `backup-restore-drill` monitor pages on missed check-ins. Treat as a high-priority workflow-config incident — the drill is monthly, so a single missed run pushes the next opportunity 30+ days out. |
+
+### Local rehearsal of `--mode=drill`
+
+Same sandbox as the smoke/full rehearsals (see "Local rehearsal of
+exit codes" above for `make local-sandbox` setup). Drop a real `*.dump`
+into `/tmp/backups/`, then:
+
+```sh
+BACKUP_DIR=/tmp/backups \
+RESTORE_DATABASE_URL='postgres://verify:verify@localhost:5432/sandbox' \
+DRILL_REPORT_PATH=/tmp/drill-report.json \
+  pnpm --filter @workspace/scripts exec tsx src/verifyBackup.ts \
+    --mode=drill
+```
+
+`/tmp/drill-report.json` will hold the report regardless of pass/fail
+outcome. To rehearse exit 17, lower the bound:
+`DRILL_RTO_SECONDS_MAX=1`. To rehearse exit 18, set
+`DRILL_RPO_HOURS_MAX=0.0001`. To rehearse exit 19, point
+`DRILL_PROBE_QUERIES_FILE` at a JSON array containing a probe with an
+unsatisfiable `expectMinRows` (e.g. `expectMinRows: 999999999` on the
+`users` table).

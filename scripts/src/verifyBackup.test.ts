@@ -1,7 +1,9 @@
 import { describe, it, expect } from "vitest";
 import {
+  evaluateDrillSlos,
   evaluateLiveCounts,
   evaluateWeekOverWeekDrops,
+  parseDrillProbeQueries,
   parseLiveCountsManifest,
   parseSha256Manifest,
   parseWeekOverWeekHistory,
@@ -405,5 +407,166 @@ describe("parseSha256Manifest", () => {
 
   it("tolerates CRLF line endings", () => {
     expect(parseSha256Manifest(`${sha}  d.dump\r\n`, "d.dump")).toBe(sha);
+  });
+});
+
+describe("parseDrillProbeQueries", () => {
+  it("parses a minimal one-probe array", () => {
+    const probes = parseDrillProbeQueries(
+      `[{"name": "p1", "sql": "SELECT 1"}]`,
+    );
+    expect(probes).toEqual([{ name: "p1", sql: "SELECT 1" }]);
+  });
+
+  it("preserves expectMinRows when present", () => {
+    const probes = parseDrillProbeQueries(
+      `[{"name": "p1", "sql": "SELECT 1", "expectMinRows": 5}]`,
+    );
+    expect(probes[0]).toMatchObject({ name: "p1", expectMinRows: 5 });
+  });
+
+  it("accepts a trailing semicolon on the SQL body", () => {
+    const probes = parseDrillProbeQueries(
+      `[{"name": "p1", "sql": "SELECT 1;"}]`,
+    );
+    expect(probes[0]?.sql).toBe("SELECT 1;");
+  });
+
+  it("rejects multi-statement SQL bodies (semicolon then more text)", () => {
+    expect(() =>
+      parseDrillProbeQueries(`[{"name": "p1", "sql": "SELECT 1; DROP TABLE users"}]`),
+    ).toThrow(/multi-statement/);
+  });
+
+  it("rejects an empty array silently — caller decides via the result list", () => {
+    expect(parseDrillProbeQueries(`[]`)).toEqual([]);
+  });
+
+  it("rejects malformed JSON", () => {
+    expect(() => parseDrillProbeQueries(`{not json}`)).toThrow(/not valid JSON/);
+  });
+
+  it("rejects a JSON object (must be an array)", () => {
+    expect(() => parseDrillProbeQueries(`{"name": "p1"}`)).toThrow(/JSON array/);
+  });
+
+  it("rejects an entry without a name", () => {
+    expect(() => parseDrillProbeQueries(`[{"sql": "SELECT 1"}]`)).toThrow(
+      /missing a 'name'/,
+    );
+  });
+
+  it("rejects an entry with an empty name", () => {
+    expect(() =>
+      parseDrillProbeQueries(`[{"name": "", "sql": "SELECT 1"}]`),
+    ).toThrow(/missing a 'name'/);
+  });
+
+  it("rejects duplicate probe names (would corrupt the report attribution)", () => {
+    expect(() =>
+      parseDrillProbeQueries(
+        `[{"name": "p", "sql": "SELECT 1"}, {"name": "p", "sql": "SELECT 2"}]`,
+      ),
+    ).toThrow(/duplicate name 'p'/);
+  });
+
+  it("rejects an entry without a sql field", () => {
+    expect(() => parseDrillProbeQueries(`[{"name": "p1"}]`)).toThrow(
+      /missing a non-empty 'sql'/,
+    );
+  });
+
+  it("rejects an entry with whitespace-only sql", () => {
+    expect(() =>
+      parseDrillProbeQueries(`[{"name": "p1", "sql": "   "}]`),
+    ).toThrow(/missing a non-empty 'sql'/);
+  });
+
+  it("rejects fractional expectMinRows", () => {
+    expect(() =>
+      parseDrillProbeQueries(
+        `[{"name": "p1", "sql": "SELECT 1", "expectMinRows": 1.5}]`,
+      ),
+    ).toThrow(/expectMinRows/);
+  });
+
+  it("rejects negative expectMinRows", () => {
+    expect(() =>
+      parseDrillProbeQueries(
+        `[{"name": "p1", "sql": "SELECT 1", "expectMinRows": -1}]`,
+      ),
+    ).toThrow(/expectMinRows/);
+  });
+
+  it("accepts expectMinRows of zero (probe is 'does the SQL run', not 'does it return')", () => {
+    const probes = parseDrillProbeQueries(
+      `[{"name": "p1", "sql": "SELECT 1", "expectMinRows": 0}]`,
+    );
+    expect(probes[0]?.expectMinRows).toBe(0);
+  });
+});
+
+describe("evaluateDrillSlos", () => {
+  // 1s = 1000ms, 1h = 3_600_000 ms — keep arithmetic visible in the
+  // tests so a future tweak to the math is obvious.
+  const sec = 1000;
+  const hour = 60 * 60 * 1000;
+
+  it("returns no breaches when wall-time and dump age are well under bounds", () => {
+    const start = 1_000_000_000_000;
+    const finish = start + 60 * sec; // 60s
+    const dumpMtime = start - 1 * hour; // 1h old
+    const v = evaluateDrillSlos(start, finish, dumpMtime, 1800, 24);
+    expect(v.rtoSeconds).toBe(60);
+    expect(v.rpoHours).toBe(1);
+    expect(v.rtoBreached).toBe(false);
+    expect(v.rpoBreached).toBe(false);
+  });
+
+  it("flags an RTO breach when wall-time crosses the bound", () => {
+    const start = 1_000_000_000_000;
+    const finish = start + 1801 * sec; // 1801s — 1s over a 1800s bound
+    const dumpMtime = start - 1 * hour;
+    const v = evaluateDrillSlos(start, finish, dumpMtime, 1800, 24);
+    expect(v.rtoBreached).toBe(true);
+    expect(v.rpoBreached).toBe(false);
+  });
+
+  it("does NOT flag RTO when wall-time exactly equals the bound", () => {
+    const start = 1_000_000_000_000;
+    const finish = start + 1800 * sec;
+    const dumpMtime = start - 1 * hour;
+    const v = evaluateDrillSlos(start, finish, dumpMtime, 1800, 24);
+    expect(v.rtoBreached).toBe(false);
+  });
+
+  it("flags an RPO breach when dump age crosses the bound", () => {
+    const start = 1_000_000_000_000;
+    const finish = start + 60 * sec;
+    const dumpMtime = start - 25 * hour; // 25h old vs 24h bound
+    const v = evaluateDrillSlos(start, finish, dumpMtime, 1800, 24);
+    expect(v.rtoBreached).toBe(false);
+    expect(v.rpoBreached).toBe(true);
+  });
+
+  it("flags both RTO and RPO breaches independently", () => {
+    const start = 1_000_000_000_000;
+    const finish = start + 2000 * sec;
+    const dumpMtime = start - 30 * hour;
+    const v = evaluateDrillSlos(start, finish, dumpMtime, 1800, 24);
+    expect(v.rtoBreached).toBe(true);
+    expect(v.rpoBreached).toBe(true);
+  });
+
+  it("treats a dump mtime in the future as zero/negative RPO (no breach)", () => {
+    // Edge case: clock skew between the producer host and the verify
+    // runner means the dump's mtime can be a few seconds AHEAD of
+    // start — that's not a stale-dump signal, so we shouldn't page.
+    const start = 1_000_000_000_000;
+    const finish = start + 60 * sec;
+    const dumpMtime = start + 5 * sec;
+    const v = evaluateDrillSlos(start, finish, dumpMtime, 1800, 24);
+    expect(v.rpoHours).toBeLessThan(0);
+    expect(v.rpoBreached).toBe(false);
   });
 });

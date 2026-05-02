@@ -7,10 +7,49 @@
  *   00 02 * * *    pg_dump $DATABASE_URL --format=custom --file=/backups/$(date +%F).dump
  *   00 03 * * 1-6  verifyBackup.ts --mode=smoke   (nightly, fast)
  *   00 03 * * 0    verifyBackup.ts --mode=full    (weekly, fuller)
+ *   00 04 1 * *    verifyBackup.ts --mode=drill   (monthly, formal DR drill)
  *
  * Two modes, layered: `full` is a strict superset of `smoke`. Every smoke
  * check also runs in full; full adds the deeper integrity checks that are
  * too expensive to run nightly.
+ *
+ *   drill (monthly, ~few minutes — strict superset of `full`, adds the
+ *   measurements + artifacts an operator-rehearsed disaster-recovery
+ *   drill is supposed to produce):
+ *    12. Application-shape probe: a configurable list of read queries
+ *        the *real* app issues at boot/health (loaded from
+ *        $DRILL_PROBE_QUERIES_FILE, default
+ *        scripts/drill-probe-queries.json) is run against the restored
+ *        sandbox. Catches the gap that `full` cannot see — pg_restore
+ *        + FK + audit-chain can all pass against a sandbox that's
+ *        nonetheless missing a column / index / role the app expects,
+ *        because those layers only validate Postgres-internal
+ *        invariants. Each probe declares an optional `expectMinRows`;
+ *        anything below trips exit 19. Skipped with a notice when no
+ *        queries file is configured (so existing operators that
+ *        haven't authored one don't suddenly start failing on first
+ *        run after rollout).
+ *    13. RTO assertion: the elapsed wall-time from the verifier's
+ *        start to end-of-checks is asserted against
+ *        $DRILL_RTO_SECONDS_MAX (default 1800s = 30 min). Crossing
+ *        the bound exits 17. The bound exists to surface a degradation
+ *        in restore *speed* (an extra 30 min on every dump halves the
+ *        usefulness of the drill) before the actual production
+ *        recovery exposes it.
+ *    14. RPO assertion: the dump's mtime relative to the verifier's
+ *        start is asserted against $DRILL_RPO_HOURS_MAX (default 24h).
+ *        Crossing exits 18. Distinct from exit 6 (STALE_DUMP) which
+ *        defends a wider band ($MAX_DUMP_AGE_HOURS=36h by default) so
+ *        nightly verify doesn't false-page on a slow producer; drill
+ *        mode tightens it to the SLO the recovery plan promises.
+ *    15. Drill report: a JSON artifact is written to
+ *        $DRILL_REPORT_PATH (default
+ *        ${BACKUP_DIR}/drill-report-<ISO>.json). Captures the dump's
+ *        path/size/mtime, RTO/RPO measurements, probe results, the
+ *        full row-count inventory, and the verifier's pass/fail
+ *        outcome. The workflow uploads this as a build artifact so
+ *        compliance reviewers and on-call retros have a durable
+ *        record of every drill.
  *
  *   smoke (nightly, ~30s on a fresh sandbox):
  *     1. Pick the most recent dump under $BACKUP_DIR (default /backups).
@@ -127,14 +166,32 @@
  *       so on-call knows the file we downloaded does not match what
  *       the producer wrote — almost always a transport corruption /
  *       silent S3 partial-read rather than a dump-internal problem.
+ *   17  drill-mode RTO bound exceeded: total verifier wall-time crossed
+ *       $DRILL_RTO_SECONDS_MAX. Distinct from any timeout the workflow
+ *       runner enforces externally — exit 17 lets us record a degraded
+ *       drill in the report artifact even when the runner timeout did
+ *       NOT trip.
+ *   18  drill-mode RPO bound exceeded: dump mtime older than
+ *       $DRILL_RPO_HOURS_MAX from drill start. Distinct from exit 6
+ *       (STALE_DUMP) — exit 6 defends nightly producer-stall detection
+ *       at $MAX_DUMP_AGE_HOURS (36h by default); exit 18 enforces the
+ *       tighter recovery-plan SLO during the formal drill.
+ *   19  drill-mode application-shape probe failed: a query in
+ *       $DRILL_PROBE_QUERIES_FILE either errored OR returned fewer
+ *       rows than the probe's `expectMinRows`. Distinct from exit 5
+ *       (smoke psql) — exit 5 covers the three hardcoded smoke tables;
+ *       exit 19 covers the operator-authored set of representative app
+ *       queries that prove the restored DB is *usable* by the app, not
+ *       just non-empty.
  *
  * Ownership grouping (matches the runbook's page-routing contract):
- *   transport / freshness / sandbox config -> platform team (2, 3, 6, 9, 16)
+ *   transport / freshness / sandbox config -> platform team (2, 3, 6, 9, 16, 18)
  *   dump-internal corruption                -> platform team + DB owner
  *                                              (4, 5, 7, 10, 11, 12, 14,
- *                                              15)
+ *                                              15, 19)
  *   audit-chain integrity                   -> audit / compliance owner
  *                                              (8)
+ *   drill SLO regressions                   -> SRE on-call (17)
  *   operator / workflow misconfig           -> repo owner (13)
  */
 import { createHash } from "node:crypto";
@@ -148,8 +205,14 @@ import {
   writeFileSync,
 } from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
-type Mode = "smoke" | "full";
+// ESM equivalent of __dirname (this package is `"type": "module"`).
+// Used to resolve the default DRILL_PROBE_QUERIES_FILE path relative
+// to this script regardless of the operator's cwd.
+const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
+
+type Mode = "smoke" | "full" | "drill";
 
 const BACKUP_DIR = process.env.BACKUP_DIR ?? "/backups";
 const RESTORE_DATABASE_URL = process.env.RESTORE_DATABASE_URL;
@@ -279,6 +342,39 @@ const WEEK_OVER_WEEK_MAX_HISTORY = Number(
 );
 
 /**
+ * Drill-mode knobs (only consulted when --mode=drill).
+ *
+ *  - DRILL_PROBE_QUERIES_FILE: path to a JSON array of
+ *    {name, sql, expectMinRows?} probes. The default points at the
+ *    repo-tracked default file scripts/drill-probe-queries.json so the
+ *    workflow doesn't have to special-case the path. Missing file is
+ *    a notice (not a failure) so the rollout lands before the
+ *    operator authors the file; an *unparseable* file is always a hard
+ *    failure (exit 19) for the same reason malformed live-counts
+ *    manifests are — silently treating "broken file" as "no file"
+ *    masks the very failure mode the file exists to defend against.
+ *  - DRILL_RTO_SECONDS_MAX: total verifier wall-time bound, in
+ *    seconds. Default 1800 (30 min). The recovery plan promises a
+ *    1-hour RTO; halving that for the drill leaves headroom for the
+ *    app-side recovery work the verifier doesn't model (DNS
+ *    cutover, cache rewarm, etc.).
+ *  - DRILL_RPO_HOURS_MAX: max acceptable age of the dump at drill
+ *    start, in hours. Default 24 — the recovery plan promises a 24h
+ *    RPO. Distinct from MAX_DUMP_AGE_HOURS (36h) which is the wider
+ *    nightly-staleness band; drill mode tightens to the SLO.
+ *  - DRILL_REPORT_PATH: where to write the JSON drill report. Default
+ *    `${BACKUP_DIR}/drill-report-<ISO>.json` (the `<ISO>` token is
+ *    replaced at runtime with the drill's start timestamp). Set to
+ *    an absolute path to redirect.
+ */
+const DRILL_PROBE_QUERIES_FILE =
+  process.env.DRILL_PROBE_QUERIES_FILE ??
+  path.join(SCRIPT_DIR, "drill-probe-queries.json");
+const DRILL_RTO_SECONDS_MAX = Number(process.env.DRILL_RTO_SECONDS_MAX ?? 1800);
+const DRILL_RPO_HOURS_MAX = Number(process.env.DRILL_RPO_HOURS_MAX ?? 24);
+const DRILL_REPORT_PATH = process.env.DRILL_REPORT_PATH;
+
+/**
  * Exit codes. Stable contract — the runbook (and any external monitor /
  * Sentry alert routing) keys on these values to decide who to page.
  */
@@ -299,6 +395,9 @@ const EXIT = {
   STALE_DATA: 14,
   WEEK_OVER_WEEK_DROP: 15,
   CHECKSUM_MISMATCH: 16,
+  DRILL_RTO_BREACH: 17,
+  DRILL_RPO_BREACH: 18,
+  DRILL_PROBE_FAILED: 19,
 } as const;
 
 function fail(msg: string, code: number = EXIT.GENERIC): never {
@@ -307,7 +406,8 @@ function fail(msg: string, code: number = EXIT.GENERIC): never {
 }
 
 function parseMode(argv: readonly string[]): Mode {
-  // Accept --mode=smoke / --mode=full / --mode smoke / --mode full.
+  // Accept --mode=smoke / --mode=full / --mode=drill (and the
+  // space-separated `--mode <value>` form).
   // Default to smoke so a bare invocation matches the original behavior.
   // Also accept VERIFY_MODE env var so the GH Actions workflow can wire
   // it through `env:` without rebuilding the args array.
@@ -322,8 +422,11 @@ function parseMode(argv: readonly string[]): Mode {
     }
   }
   if (raw == null || raw === "") return "smoke";
-  if (raw === "smoke" || raw === "full") return raw;
-  fail(`unknown --mode value '${raw}' (expected 'smoke' or 'full')`, EXIT.UNKNOWN_MODE);
+  if (raw === "smoke" || raw === "full" || raw === "drill") return raw;
+  fail(
+    `unknown --mode value '${raw}' (expected 'smoke', 'full', or 'drill')`,
+    EXIT.UNKNOWN_MODE,
+  );
 }
 
 interface DumpInfo {
@@ -1364,8 +1467,321 @@ function runAmcheck(): void {
   psqlInherit(sql, EXIT.AMCHECK_FAILED, "amcheck");
 }
 
+/**
+ * Pure helper: parse + validate a drill probe-queries file. Shape is
+ * a JSON array of objects, each with:
+ *  - name: short human label, surfaced in run logs and the report.
+ *  - sql: a single read-only SQL statement. `;` is allowed at the
+ *    end but not in the middle (rejecting multi-statement bodies cuts
+ *    the obvious foot-gun where an operator accidentally drops a
+ *    table from the probe file).
+ *  - expectMinRows: optional non-negative integer. When set, the probe
+ *    fails if the query returns fewer rows. When unset, any successful
+ *    execution is accepted (the probe is "does the SQL parse and run"
+ *    rather than "does it return data").
+ *
+ * Anything else is a hard error rather than a silent skip — a
+ * malformed probe file is exactly the failure mode the drill exists
+ * to surface before a real recovery hits it.
+ *
+ * The SQL string is intentionally NOT parsed for SELECT-vs-DML; the
+ * sandbox is throwaway and gets nuked on the next pg_restore --clean,
+ * so an accidentally-destructive probe is recoverable. We do reject
+ * obvious multi-statement bodies (a semicolon followed by anything
+ * non-whitespace) as a paper-cut defense.
+ *
+ * Exported for tests.
+ */
+export interface DrillProbeQuery {
+  name: string;
+  sql: string;
+  expectMinRows?: number;
+}
+export function parseDrillProbeQueries(json: string): DrillProbeQuery[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(json);
+  } catch (err) {
+    throw new Error(
+      `drill probe-queries file is not valid JSON: ${(err as Error).message}`,
+    );
+  }
+  if (!Array.isArray(parsed)) {
+    throw new Error(
+      `drill probe-queries file must be a JSON array of {name, sql, expectMinRows?} objects`,
+    );
+  }
+  const out: DrillProbeQuery[] = [];
+  const seen = new Set<string>();
+  for (let i = 0; i < parsed.length; i++) {
+    const e = parsed[i];
+    if (e === null || typeof e !== "object" || Array.isArray(e)) {
+      throw new Error(`drill probe-queries entry [${i}] must be an object`);
+    }
+    const er = e as Record<string, unknown>;
+    if (typeof er.name !== "string" || er.name.length === 0) {
+      throw new Error(`drill probe-queries entry [${i}] is missing a 'name' string`);
+    }
+    if (seen.has(er.name)) {
+      throw new Error(
+        `drill probe-queries entry [${i}] has duplicate name '${er.name}' ` +
+          `(names must be unique so the report can attribute results)`,
+      );
+    }
+    seen.add(er.name);
+    if (typeof er.sql !== "string" || er.sql.trim().length === 0) {
+      throw new Error(
+        `drill probe-queries entry '${er.name}' is missing a non-empty 'sql' string`,
+      );
+    }
+    // Allow at most one trailing `;` — reject `;<anything-non-ws>` so an
+    // accidentally-pasted multi-statement body fails fast.
+    const semiIdx = er.sql.indexOf(";");
+    if (semiIdx !== -1 && er.sql.slice(semiIdx + 1).trim().length > 0) {
+      throw new Error(
+        `drill probe-queries entry '${er.name}' contains a multi-statement SQL body ` +
+          `(only a single statement is allowed; the trailing ';' is OK)`,
+      );
+    }
+    let expectMinRows: number | undefined;
+    if (er.expectMinRows !== undefined) {
+      if (
+        typeof er.expectMinRows !== "number" ||
+        !Number.isFinite(er.expectMinRows) ||
+        !Number.isInteger(er.expectMinRows) ||
+        er.expectMinRows < 0
+      ) {
+        throw new Error(
+          `drill probe-queries entry '${er.name}' has invalid expectMinRows ` +
+            `(must be a non-negative integer; got ${JSON.stringify(er.expectMinRows)})`,
+        );
+      }
+      expectMinRows = er.expectMinRows;
+    }
+    const probe: DrillProbeQuery = { name: er.name, sql: er.sql };
+    if (expectMinRows !== undefined) probe.expectMinRows = expectMinRows;
+    out.push(probe);
+  }
+  return out;
+}
+
+/**
+ * Pure helper: shape of the JSON drill-report artifact. Stable
+ * contract — compliance reviewers, on-call retro tooling, and the
+ * runbook key on these field names. Add fields, don't rename them.
+ * Exported for tests.
+ */
+export interface DrillProbeResult {
+  name: string;
+  rows: number;
+  ok: boolean;
+  error?: string;
+}
+export interface DrillReport {
+  version: 1;
+  startedAt: string;
+  finishedAt: string;
+  outcome: "ok" | "failed";
+  rtoSeconds: number;
+  rtoSecondsMax: number;
+  rpoHours: number;
+  rpoHoursMax: number;
+  dump: { path: string; mtime: string; sizeBytes: number };
+  probes: DrillProbeResult[];
+  failure?: { exitCode: number; message: string };
+}
+
+/**
+ * Pure helper: assert RTO + RPO bounds and produce the matching
+ * report fields. Returns the verdict and the elapsed numbers so the
+ * caller can fold them into the drill report regardless of pass/fail.
+ * Exported for tests so we don't have to set up a fake clock + psql.
+ */
+export interface DrillSloVerdict {
+  rtoSeconds: number;
+  rpoHours: number;
+  rtoBreached: boolean;
+  rpoBreached: boolean;
+}
+export function evaluateDrillSlos(
+  startedAtMs: number,
+  finishedAtMs: number,
+  dumpMtimeMs: number,
+  rtoSecondsMax: number,
+  rpoHoursMax: number,
+): DrillSloVerdict {
+  const rtoSeconds = (finishedAtMs - startedAtMs) / 1000;
+  const rpoHours = (startedAtMs - dumpMtimeMs) / (1000 * 60 * 60);
+  return {
+    rtoSeconds,
+    rpoHours,
+    rtoBreached: rtoSeconds > rtoSecondsMax,
+    rpoBreached: rpoHours > rpoHoursMax,
+  };
+}
+
+function resolveDrillReportPath(startedAt: string): string {
+  if (DRILL_REPORT_PATH !== undefined && DRILL_REPORT_PATH.length > 0) {
+    return DRILL_REPORT_PATH;
+  }
+  // ISO timestamps contain ':' which is awkward in shell paths. Replace
+  // with '-' so glob/cp/upload-artifact don't have to quote.
+  const safe = startedAt.replace(/[:.]/g, "-");
+  return path.join(BACKUP_DIR, `drill-report-${safe}.json`);
+}
+
+function writeDrillReport(report: DrillReport): string {
+  const out = resolveDrillReportPath(report.startedAt);
+  const tmp = `${out}.tmp`;
+  try {
+    writeFileSync(tmp, JSON.stringify(report, null, 2) + "\n", "utf8");
+    renameSync(tmp, out);
+  } catch (err) {
+    // Don't override a more-specific exit code with a report-write
+    // failure — callers always invoke writeDrillReport in a finally,
+    // so by the time we get here the verifier has either already
+    // succeeded (in which case losing the report should be a hard
+    // failure) or already chosen its exit code (in which case we
+    // should NOT silently overwrite that with the report-write
+    // error). Surface a clear stderr line and return the path the
+    // caller asked for; pass/fail decisions stay with main().
+    console.error(
+      `[verifyBackup] WARNING: failed to write drill report to ${out}: ` +
+        `${(err as Error).message}`,
+    );
+  }
+  return out;
+}
+
+/**
+ * Application-shape probe. Loads $DRILL_PROBE_QUERIES_FILE, runs each
+ * SQL against the restored sandbox, and returns the per-probe
+ * outcomes. Failures (psql non-zero OR row count below
+ * `expectMinRows`) accumulate into the result list rather than
+ * exiting immediately, so the drill report records every probe's
+ * outcome for the operator's retro — the *aggregate* pass/fail is
+ * decided by the caller via `runDrillProbes`.
+ *
+ * Skipped (returns []) with a notice when:
+ *   - the queries file is missing AND the operator did not override
+ *     $DRILL_PROBE_QUERIES_FILE (rollout default — do not block the
+ *     drill on a file that doesn't exist yet),
+ *   - the queries file resolves to an empty array (nothing to probe).
+ * Both cases also set `failure` on the report so an empty probe list
+ * is visible, not silently absent.
+ */
+function runDrillProbes(): DrillProbeResult[] {
+  let raw: string;
+  try {
+    raw = readFileSync(DRILL_PROBE_QUERIES_FILE, "utf8");
+  } catch (err) {
+    const e = err as NodeJS.ErrnoException;
+    if (e.code === "ENOENT") {
+      console.log(
+        `[verifyBackup] drill probe-queries file not found at ${DRILL_PROBE_QUERIES_FILE} ` +
+          `— skipping app-shape probe (the drill still validates restore-correctness via ` +
+          `smoke/FK/audit-chain; author the file to opt in to the app-level checks).`,
+      );
+      return [];
+    }
+    fail(
+      `cannot read drill probe-queries file at ${DRILL_PROBE_QUERIES_FILE}: ${e.message}`,
+      EXIT.DRILL_PROBE_FAILED,
+    );
+  }
+  let probes: DrillProbeQuery[];
+  try {
+    probes = parseDrillProbeQueries(raw);
+  } catch (err) {
+    fail((err as Error).message, EXIT.DRILL_PROBE_FAILED);
+  }
+  if (probes.length === 0) {
+    console.log(
+      `[verifyBackup] drill probe-queries file ${DRILL_PROBE_QUERIES_FILE} is an empty array ` +
+        `— no probes to run`,
+    );
+    return [];
+  }
+  const results: DrillProbeResult[] = [];
+  for (const probe of probes) {
+    // Wrap the operator's SQL in a `count(*) FROM (…) AS t` so we get a
+    // single integer back regardless of what the probe selects. Strip
+    // any trailing `;` because nesting it inside a sub-select would
+    // be a syntax error.
+    const trimmed = probe.sql.replace(/;\s*$/, "");
+    const wrapped = `SELECT count(*) FROM (${trimmed}) AS __probe_t`;
+    const r = spawnSync(
+      "psql",
+      [
+        RESTORE_DATABASE_URL!,
+        "-X",
+        "-At",
+        "-v",
+        "ON_ERROR_STOP=1",
+        "-c",
+        wrapped,
+      ],
+      { stdio: ["ignore", "pipe", "pipe"], encoding: "utf8", maxBuffer: 1024 * 1024 },
+    );
+    if (r.status !== 0) {
+      const stderr = (r.stderr ?? "").trim().slice(0, 500);
+      console.error(
+        `[verifyBackup] drill probe '${probe.name}' FAILED: psql exit ${r.status}: ${stderr}`,
+      );
+      results.push({ name: probe.name, rows: 0, ok: false, error: stderr });
+      continue;
+    }
+    const rows = Number(r.stdout.trim());
+    if (!Number.isFinite(rows)) {
+      results.push({
+        name: probe.name,
+        rows: 0,
+        ok: false,
+        error: `non-numeric count from psql: '${r.stdout.trim()}'`,
+      });
+      continue;
+    }
+    if (probe.expectMinRows !== undefined && rows < probe.expectMinRows) {
+      console.error(
+        `[verifyBackup] drill probe '${probe.name}' FAILED: rows=${rows} < expectMinRows=${probe.expectMinRows}`,
+      );
+      results.push({
+        name: probe.name,
+        rows,
+        ok: false,
+        error: `rows=${rows} below expectMinRows=${probe.expectMinRows}`,
+      });
+      continue;
+    }
+    console.log(`[verifyBackup] drill probe '${probe.name}' OK: rows=${rows}`);
+    results.push({ name: probe.name, rows, ok: true });
+  }
+  return results;
+}
+
 async function main(): Promise<void> {
   const mode = parseMode(process.argv.slice(2));
+  // Capture start time as early as possible so RTO measurement
+  // includes any pre-restore wall-time (checksum + freshness +
+  // pg_restore + every check). Used only in drill mode but cheap to
+  // record unconditionally so the variable is available in the
+  // finally-block report path.
+  const startedAtMs = Date.now();
+  const startedAt = new Date(startedAtMs).toISOString();
+  if (mode === "drill") {
+    if (!Number.isFinite(DRILL_RTO_SECONDS_MAX) || DRILL_RTO_SECONDS_MAX <= 0) {
+      fail(
+        `DRILL_RTO_SECONDS_MAX must be a positive number (got ${process.env.DRILL_RTO_SECONDS_MAX})`,
+        EXIT.GENERIC,
+      );
+    }
+    if (!Number.isFinite(DRILL_RPO_HOURS_MAX) || DRILL_RPO_HOURS_MAX <= 0) {
+      fail(
+        `DRILL_RPO_HOURS_MAX must be a positive number (got ${process.env.DRILL_RPO_HOURS_MAX})`,
+        EXIT.GENERIC,
+      );
+    }
+  }
   if (!RESTORE_DATABASE_URL) {
     fail(
       "RESTORE_DATABASE_URL is required (and must NOT point at the live DB)",
@@ -1471,7 +1887,7 @@ async function main(): Promise<void> {
   // check itself is one fast catalog query.
   checkExtensions();
 
-  if (mode === "full") {
+  if (mode === "full" || mode === "drill") {
     // Full-mode integrity layers, ordered cheap → expensive so a failure
     // earlier in the chain short-circuits before we spend minutes
     // streaming the audit log. FK integrity is a few catalog joins;
@@ -1484,6 +1900,101 @@ async function main(): Promise<void> {
     runTableInventory();
     runAmcheck();
     checkAuditChain();
+  }
+
+  if (mode === "drill") {
+    // App-shape probe runs *after* the integrity layers — if pg_restore
+    // or audit-chain are broken we'd rather page on those (more
+    // actionable) than on a knock-on probe failure. The probes
+    // themselves must NOT fail-fast: every probe runs and accumulates
+    // into the report so the operator's retro sees the full picture
+    // instead of "probe N failed; did probes N+1..M also fail?".
+    const probes = runDrillProbes();
+
+    const finishedAtMs = Date.now();
+    const slo = evaluateDrillSlos(
+      startedAtMs,
+      finishedAtMs,
+      dump.mtimeMs,
+      DRILL_RTO_SECONDS_MAX,
+      DRILL_RPO_HOURS_MAX,
+    );
+    const probeFailures = probes.filter((p) => !p.ok);
+    const outcome: "ok" | "failed" =
+      slo.rtoBreached || slo.rpoBreached || probeFailures.length > 0 ? "failed" : "ok";
+
+    // Pick the highest-priority failure to surface as the exit code.
+    // RPO first (a stale dump is the worst kind of "successful" drill —
+    // we just proved we can recover to N hours ago, not now). Then RTO
+    // (a slow drill is a degraded SLO). Then probe failures (the dump
+    // is fresh and fast but the app can't read it). Order matches
+    // page-routing in the runbook.
+    let failure: { exitCode: number; message: string } | undefined;
+    if (slo.rpoBreached) {
+      failure = {
+        exitCode: EXIT.DRILL_RPO_BREACH,
+        message:
+          `drill RPO breach: dump is ${slo.rpoHours.toFixed(2)}h old at drill start ` +
+          `(max ${DRILL_RPO_HOURS_MAX}h). The recovery plan promises a ${DRILL_RPO_HOURS_MAX}h ` +
+          `RPO; this drill cannot prove that promise holds.`,
+      };
+    } else if (slo.rtoBreached) {
+      failure = {
+        exitCode: EXIT.DRILL_RTO_BREACH,
+        message:
+          `drill RTO breach: total verifier wall-time was ${slo.rtoSeconds.toFixed(1)}s ` +
+          `(max ${DRILL_RTO_SECONDS_MAX}s). Restore is taking longer than the recovery ` +
+          `plan budgets — investigate before the next real recovery hits the regression.`,
+      };
+    } else if (probeFailures.length > 0) {
+      const lines = probeFailures
+        .map((p) => `${p.name}: ${p.error ?? "rows=" + p.rows}`)
+        .join("; ");
+      failure = {
+        exitCode: EXIT.DRILL_PROBE_FAILED,
+        message:
+          `drill app-shape probe(s) failed: ${lines}. The dump restored cleanly but the ` +
+          `app-level queries the operator authored to validate "the app can run against ` +
+          `this restore" did not pass — investigate before declaring the drill green.`,
+      };
+    }
+
+    let dumpSize = 0;
+    try {
+      dumpSize = statSync(dump.path).size;
+    } catch {
+      // Don't fail the drill on a stat error — the dump was already
+      // pg_restore'd successfully, so it existed seconds ago. Recording
+      // sizeBytes=0 in the report is preferable to losing the report.
+    }
+    const report: DrillReport = {
+      version: 1,
+      startedAt,
+      finishedAt: new Date(finishedAtMs).toISOString(),
+      outcome,
+      rtoSeconds: Number(slo.rtoSeconds.toFixed(3)),
+      rtoSecondsMax: DRILL_RTO_SECONDS_MAX,
+      rpoHours: Number(slo.rpoHours.toFixed(3)),
+      rpoHoursMax: DRILL_RPO_HOURS_MAX,
+      dump: {
+        path: dump.path,
+        mtime: new Date(dump.mtimeMs).toISOString(),
+        sizeBytes: dumpSize,
+      },
+      probes,
+    };
+    if (failure) report.failure = failure;
+    const reportPath = writeDrillReport(report);
+    console.log(
+      `[verifyBackup] drill report written to ${reportPath} ` +
+        `(outcome=${outcome}, RTO=${slo.rtoSeconds.toFixed(1)}s/${DRILL_RTO_SECONDS_MAX}s, ` +
+        `RPO=${slo.rpoHours.toFixed(2)}h/${DRILL_RPO_HOURS_MAX}h, probes=${probes.length}, ` +
+        `failures=${probeFailures.length})`,
+    );
+
+    if (failure) {
+      fail(failure.message, failure.exitCode);
+    }
   }
 
   console.log(`[verifyBackup] OK (mode=${mode})`);

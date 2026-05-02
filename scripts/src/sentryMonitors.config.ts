@@ -159,6 +159,30 @@ export const SENTRY_MONITORS: readonly SentryMonitorConfig[] = [
       "docs/runbooks/backup-verify.md (Monitor: `backup-verify-nightly`)",
   },
   {
+    slug: "backup-restore-drill",
+    name: "Backup restore drill (monthly)",
+    workflowFile: ".github/workflows/backup-restore-drill.yml",
+    // 1st of the month at 04:00 UTC. One hour after the weekly full
+    // pass so they never share the RESTORE_DATABASE_URL sandbox.
+    schedule: "0 4 1 * *",
+    scheduleType: "crontab",
+    timezone: "UTC",
+    // The drill workflow's timeout-minutes is 90 (full restore + app-
+    // shape probes + report). 120 min gives Sentry slack for a slow
+    // monthly run without tripping a false `error` check-in. The
+    // monthly cadence means a missed run can sit unnoticed for weeks
+    // unless the heartbeat catches it, so the margin is intentionally
+    // generous; the `maxRuntimeMinutes` is the tighter signal that
+    // the workflow ran but ran *too long*.
+    checkinMarginMinutes: 240,
+    maxRuntimeMinutes: 120,
+    failureIssueThreshold: 1,
+    recoveryThreshold: 1,
+    environment: "production",
+    runbookSection:
+      "docs/runbooks/backup-verify.md (Monitor: `backup-restore-drill`)",
+  },
+  {
     slug: "backup-verify",
     name: "Backup verify (weekly)",
     workflowFile: ".github/workflows/backup-verify.yml",

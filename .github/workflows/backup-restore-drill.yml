@@ -1,0 +1,210 @@
+name: Backup restore drill (monthly)
+
+# Monthly disaster-recovery drill — runs `verifyBackup.ts --mode=drill`
+# against the latest production dump and produces a JSON drill report.
+# This is the formal rehearsed-recovery exercise the launch-readiness
+# plan requires: it goes beyond the weekly `--mode=full` integrity
+# verification and additionally:
+#
+#  * measures RTO (total verifier wall-time) against
+#    `vars.DRILL_RTO_SECONDS_MAX` (default 1800s = 30 min in the
+#    script). Crossing the bound exits 17 / pages on-call.
+#  * measures RPO (dump mtime relative to drill start) against
+#    `vars.DRILL_RPO_HOURS_MAX` (default 24h). Crossing exits 18.
+#  * runs the operator-authored app-shape probe queries from
+#    `scripts/src/drill-probe-queries.json` against the restored
+#    sandbox to prove "the app can read this restore", not just
+#    "Postgres restored without erroring".
+#  * uploads the drill-report JSON as a workflow artifact for the
+#    on-call retro and compliance reviewers.
+#
+# Schedule: 1st of the month 04:00 UTC (`0 4 1 * *`). One hour after
+# the weekly full-mode pass (Sunday 03:00 UTC) so the two never share
+# the RESTORE_DATABASE_URL sandbox at the same hour. Manual runs via
+# workflow_dispatch are encouraged whenever the recovery plan changes
+# (Postgres major-version bump, new extension required, etc.).
+#
+# Required repo variables / secrets — most are SHARED with
+# `backup-verify.yml` and `backup-verify-nightly.yml`; only the
+# Sentry Cron monitor slug + drill-specific knobs differ:
+#
+#   vars.BACKUP_VERIFY_ENABLED        — must equal "1" to opt-in. Same
+#                                        kill switch as the verify
+#                                        workflows.
+#   vars.SENTRY_ORG, vars.SENTRY_PROJECT
+#                                     — Sentry destination.
+#   vars.BACKUP_CHECKSUM_REQUIRED     — optional, "1" makes a missing
+#                                        sidecar SHA-256 manifest a
+#                                        hard exit-16. Same semantics
+#                                        as the verify workflows.
+#   vars.DRILL_RTO_SECONDS_MAX        — optional. Override the script's
+#                                        default 1800s RTO bound.
+#                                        Tighten when the recovery
+#                                        plan promises a tighter RTO.
+#   vars.DRILL_RPO_HOURS_MAX          — optional. Override the script's
+#                                        default 24h RPO bound.
+#                                        Tighten when the recovery
+#                                        plan promises a tighter RPO.
+#   secrets.RESTORE_DATABASE_URL      — sandbox DB URL (NEVER prod).
+#                                        verifyBackup.ts pg_restore's
+#                                        with --clean --if-exists.
+#   secrets.BACKUP_FETCH_CMD          — shell snippet that downloads
+#                                        the latest dump + sidecar
+#                                        sha256 manifest. Same
+#                                        contract as the verify
+#                                        workflows.
+#   secrets.LIVE_COUNTS_URL           — optional. Read-only Postgres
+#                                        connection string. Same as
+#                                        the verify workflows.
+#   secrets.LIVE_COUNTS_MANIFEST_URL  — optional. HTTPS URL to a
+#                                        live-counts manifest.
+#   secrets.BACKUP_VERIFY_SENTRY_DSN  — DSN used by sentry-cli monitors
+#                                        run for the cron-monitor
+#                                        check-ins. Reused from the
+#                                        verify workflows; only the
+#                                        slug differs
+#                                        (`backup-restore-drill`).
+#
+# Cron-monitor heartbeat:
+#   The drill step is wrapped with `sentry-cli monitors run
+#   backup-restore-drill` so a stopped/disabled workflow pages on
+#   missed check-ins independent of the GitHub workflow-failure
+#   notification. The matching monitor is declared in
+#   scripts/src/sentryMonitors.config.ts (slug `backup-restore-drill`)
+#   and synced to Sentry by the release workflow's monitor-sync job.
+
+on:
+  schedule:
+    # 1st of the month, 04:00 UTC. Sunday's weekly --mode=full pass
+    # (backup-verify.yml) runs at 03:00 UTC; this gives at least an
+    # hour of headroom even when the 1st falls on a Sunday and both
+    # workflows would otherwise compete for RESTORE_DATABASE_URL.
+    - cron: "0 4 1 * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+# Cap at one running + one pending so a manual workflow_dispatch can't
+# fan out into a backlog of overlapping drills (each drill wipes the
+# sandbox DB at the start of pg_restore, so two concurrent runs would
+# fight each other).
+concurrency:
+  group: backup-restore-drill
+  cancel-in-progress: false
+
+jobs:
+  drill:
+    name: pg_restore + full integrity + app-shape probe + drill report
+    if: ${{ vars.BACKUP_VERIFY_ENABLED == '1' }}
+    runs-on: ubuntu-latest
+    # 90 min: drill mode is `full` + the app-shape probe + report
+    # write. Most of the wall-time is pg_restore + VACUUM ANALYZE +
+    # amcheck + audit-chain replay, which the weekly full-mode
+    # workflow caps at 60 min. The extra 30 min absorbs the app-shape
+    # probe set and runner queue time on the 1st-of-the-month.
+    # The Sentry monitor's max-runtime is set to 120 min so this bound
+    # trips first; raise both in lockstep if a healthy drill starts
+    # bumping into it.
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+
+      - name: Install pg client tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client
+
+      - run: pnpm install --frozen-lockfile
+
+      # sentry-cli is a single static binary; fetching it inline keeps
+      # the workflow self-contained without adding a workspace dep. If
+      # Sentry isn't configured the install still succeeds — we just
+      # never invoke it in the wrapped step below.
+      - name: Install sentry-cli
+        run: curl -sL https://sentry.io/get-cli/ | INSTALL_DIR=/usr/local/bin sh
+
+      - name: Fetch + drill latest backup dump (with cron-monitor heartbeat)
+        env:
+          BACKUP_FETCH_CMD: ${{ secrets.BACKUP_FETCH_CMD }}
+          BACKUP_DIR: ${{ github.workspace }}/backups
+          RESTORE_DATABASE_URL: ${{ secrets.RESTORE_DATABASE_URL }}
+          BACKUP_CHECKSUM_REQUIRED: ${{ vars.BACKUP_CHECKSUM_REQUIRED }}
+          SENTRY_DSN: ${{ secrets.BACKUP_VERIFY_SENTRY_DSN }}
+          SENTRY_ORG: ${{ vars.SENTRY_ORG }}
+          SENTRY_PROJECT: ${{ vars.SENTRY_PROJECT }}
+          LIVE_COUNTS_URL: ${{ secrets.LIVE_COUNTS_URL }}
+          LIVE_COUNTS_MANIFEST_URL: ${{ secrets.LIVE_COUNTS_MANIFEST_URL }}
+          # Drill-specific bounds. Empty means the script uses its
+          # defaults (1800s RTO, 24h RPO). Override via repo vars when
+          # the recovery plan promises tighter SLOs.
+          DRILL_RTO_SECONDS_MAX: ${{ vars.DRILL_RTO_SECONDS_MAX }}
+          DRILL_RPO_HOURS_MAX: ${{ vars.DRILL_RPO_HOURS_MAX }}
+          # Pin the report path so the upload-artifact step below
+          # doesn't have to glob — keeps the artifact name predictable
+          # for compliance review tooling.
+          DRILL_REPORT_PATH: ${{ github.workspace }}/backups/drill-report.json
+        run: |
+          # Materialise the fetch + drill body as a temp script so it
+          # can be invoked either directly (no Sentry DSN -> no
+          # heartbeat coverage, mirrors the verify workflows' safe-
+          # degradation behavior) or wrapped by `sentry-cli monitors
+          # run` (DSN configured -> Sentry Cron monitor records
+          # `in_progress` at start + `ok`/`error` at finish, and pages
+          # on missed check-ins independent of the GitHub workflow-
+          # failure notification).
+          cat > "$RUNNER_TEMP/drill.sh" <<'DRILL'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          mkdir -p ./backups
+          if [ -z "${BACKUP_FETCH_CMD:-}" ]; then
+            echo "BACKUP_FETCH_CMD secret missing; cannot fetch dump." >&2
+            exit 2
+          fi
+          eval "$BACKUP_FETCH_CMD"
+          if [ -n "${LIVE_COUNTS_MANIFEST_URL:-}" ]; then
+            curl -fsSL "$LIVE_COUNTS_MANIFEST_URL" -o ./backups/live-counts.json
+            export LIVE_COUNTS_MANIFEST="${BACKUP_DIR}/live-counts.json"
+          fi
+          ls -la ./backups
+          # --mode=drill is a strict superset of --mode=full plus the
+          # app-shape probe, RTO/RPO assertions, and the JSON drill
+          # report. Keep the verify workflows on --mode=smoke / --mode=full;
+          # only THIS workflow runs --mode=drill so the report artifact
+          # stays unique to the formal monthly rehearsal.
+          pnpm --filter @workspace/scripts exec tsx src/verifyBackup.ts --mode=drill
+          DRILL
+          chmod +x "$RUNNER_TEMP/drill.sh"
+
+          if [ -n "${SENTRY_DSN:-}" ]; then
+            sentry-cli monitors run \
+              --environment production \
+              backup-restore-drill \
+              -- "$RUNNER_TEMP/drill.sh"
+          else
+            echo "::warning::BACKUP_VERIFY_SENTRY_DSN not configured; cron-monitor heartbeat is disabled — a stopped/disabled drill workflow will go unnoticed until the next on-call retro."
+            "$RUNNER_TEMP/drill.sh"
+          fi
+
+      # Upload the drill-report artifact regardless of pass/fail. A
+      # failed drill's report is *more* useful than a passed one's —
+      # it carries the failure code + which probe failed + the RTO/RPO
+      # numbers, which is exactly what the on-call retro needs.
+      - name: Upload drill report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: drill-report
+          path: ${{ github.workspace }}/backups/drill-report.json
+          if-no-files-found: warn
+          # 90 days lines up with the compliance-retention window for
+          # operational evidence; tighten only if storage costs become
+          # an issue.
+          retention-days: 90
