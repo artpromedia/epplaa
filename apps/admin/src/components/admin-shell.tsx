@@ -21,6 +21,7 @@ import {
   ExternalLink,
   Gauge,
   Truck,
+  BookText,
 } from "lucide-react";
 import { useAdminMyRoles, useGetMfaStatus } from "@workspace/api-client-react";
 import { RateLimitStoreAlerts } from "@/components/rate-limit-store-alerts";
@@ -54,6 +55,7 @@ const NAV: NavItem[] = [
   { href: "/rate-limit-events", label: "Rate-limit events", icon: Gauge, requireRoles: ADMIN_ONLY_NAV },
   { href: "/takedowns", label: "Takedowns", icon: Ban },
   { href: "/pudo", label: "PUDO partners", icon: Truck, requireRoles: ADMIN_ONLY_NAV },
+  { href: "/prompts", label: "Prompts", icon: BookText, section: "Agents", requireRoles: ADMIN_ONLY_NAV },
   { href: "/users", label: "Users & roles", icon: Users },
   { href: "/scan", label: "Scan bench", icon: TestTube2 },
   { href: "/security", label: "Security", icon: KeyRound },

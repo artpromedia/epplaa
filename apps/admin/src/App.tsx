@@ -28,6 +28,7 @@ import NdprPage from "@/pages/ndpr";
 import AuditPage from "@/pages/audit";
 import RateLimitEventsPage from "@/pages/rate-limit-events";
 import PudoPage from "@/pages/pudo";
+import PromptsPage from "@/pages/prompts";
 import { RequireRoles } from "@/components/require-roles";
 
 const ADMIN_ONLY = ["admin"] as const;
@@ -129,6 +130,11 @@ function Router() {
             <Route path="/pudo">
               <RequireRoles roles={ADMIN_ONLY}>
                 <PudoPage />
+              </RequireRoles>
+            </Route>
+            <Route path="/prompts">
+              <RequireRoles roles={ADMIN_ONLY}>
+                <PromptsPage />
               </RequireRoles>
             </Route>
             <Route path="/takedowns" component={TakedownsPage} />
