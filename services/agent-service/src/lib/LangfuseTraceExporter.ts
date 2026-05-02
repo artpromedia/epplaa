@@ -18,6 +18,7 @@
 import { randomUUID } from "node:crypto";
 import type { TraceEvent } from "../runtime/AgentRuntime.js";
 import { logger } from "./observability.js";
+import { redactJson, redactString } from "./redaction.js";
 
 export interface LangfuseExporterOptions {
   baseUrl: string;
@@ -87,7 +88,7 @@ export class LangfuseTraceExporter {
             total: event.modelResponse.usage.totalTokens,
             unit: "TOKENS",
           },
-          output: { text: event.modelResponse.text },
+          output: { text: redactString(event.modelResponse.text) },
         },
       },
     ];
@@ -104,9 +105,9 @@ export class LangfuseTraceExporter {
           startTime: startedAt,
           endTime: finishedAt,
           metadata: { callId: tr.callId },
-          output: tr.output,
+          output: redactJson(tr.output),
           level: tr.error ? "ERROR" : "DEFAULT",
-          statusMessage: tr.error,
+          statusMessage: tr.error ? redactString(tr.error) : undefined,
         },
       });
     }
