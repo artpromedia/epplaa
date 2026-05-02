@@ -4,6 +4,7 @@ import { db, schema } from "../lib/db";
 import { logger } from "../lib/logger";
 import { newShipmentEventId } from "../lib/ids";
 import { enqueueNotification } from "../lib/notifications";
+import { scheduleCodPayoutsOnDelivery } from "../lib/payments";
 
 const router: IRouter = Router();
 
@@ -161,6 +162,11 @@ router.post("/box/unlock", async (req, res) => {
     .update(schema.ordersTable)
     .set({ status: "delivered" })
     .where(eq(schema.ordersTable.id, order.id));
+
+  // COD orders are charged at the box: until the buyer unlocks here, the
+  // platform doesn't actually have the cash and so deferred scheduling
+  // the seller payout. No-op for prepaid orders; idempotent for COD.
+  await scheduleCodPayoutsOnDelivery(order.id);
 
   await enqueueNotification({
     userId: order.userId,

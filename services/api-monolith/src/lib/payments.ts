@@ -731,7 +731,25 @@ async function finalizeOrderAfterPayment(
     logger.error({ err: (err as Error).message, orderId }, "post_payment_dispatch_failed");
   });
 
-  // ---- Compute split per seller ----
+  await splitOrderPayouts(order, intentId, gateway, paidAt);
+}
+
+/**
+ * Extract the seller + manufacturer split logic so it can be reused by the
+ * COD-on-delivery path. Pre-paid orders run this immediately on payment
+ * confirmation; COD orders defer it until the buyer collects (since the
+ * platform doesn't actually have the money until then). Idempotent — the
+ * partial unique indexes on `payouts(order_id, seller_id)` for `seller_share`
+ * and `manufacturer_share` guarantee a replay (webhook retry, double delivery
+ * confirmation) cannot double-pay a recipient.
+ */
+async function splitOrderPayouts(
+  order: typeof schema.ordersTable.$inferSelect,
+  intentId: string,
+  gateway: string,
+  paidAt: Date,
+): Promise<void> {
+  const orderId = order.id;
   const items = (order.items as Array<{ productId: string; qty: number; priceMinor: number }>) ?? [];
   if (items.length === 0) {
     logger.warn({ orderId }, "order_has_no_items_no_payout");
@@ -899,6 +917,78 @@ async function finalizeOrderAfterPayment(
       .update(schema.ordersTable)
       .set({ holdUntil: new Date(Math.max(...holdMillis)) })
       .where(eq(schema.ordersTable.id, orderId));
+  }
+}
+
+/**
+ * COD orders skip `finalizeOrderAfterPayment` at placement time because the
+ * platform hasn't actually received money yet — the buyer pays cash on
+ * collection. This function is the COD analogue: when the order is marked
+ * delivered (Box unlock, PUDO partner confirmation, or carrier "delivered"
+ * event), schedule the seller + manufacturer payout rows so the seller
+ * eventually receives their share.
+ *
+ * Idempotency:
+ *   - Hard guard via the partial unique indexes on `payouts(order_id, seller_id)`
+ *     for both `seller_share` and `manufacturer_share`. A duplicate webhook
+ *     (or two delivery surfaces racing) cannot double-pay.
+ *   - Cheap pre-check via `select count` so the common "already scheduled"
+ *     re-entry returns without touching the products / sellers tables.
+ *
+ * Disbursement gateway:
+ *   - For COD the order's `gateway` column is "cod" (a placeholder, not a
+ *     real gateway), so the payout's gateway must be picked from the
+ *     configured live router. Manufacturer-share rows always pin Flutterwave
+ *     internally regardless of what's passed in.
+ *
+ * Errors are swallowed and logged — a payout-scheduling failure must NEVER
+ * roll back a successful delivery confirmation. The next delivery webhook
+ * (or a manual admin nudge) will retry, and the unique index keeps it safe.
+ */
+export async function scheduleCodPayoutsOnDelivery(orderId: string): Promise<void> {
+  try {
+    const [order] = await db
+      .select()
+      .from(schema.ordersTable)
+      .where(eq(schema.ordersTable.id, orderId))
+      .limit(1);
+    if (!order) return;
+    if (order.gateway !== "cod") return; // not a COD order — payouts already scheduled at payment time
+    if (!order.paymentIntentId) {
+      logger.warn({ orderId }, "cod_delivery_missing_intent_id_skipping_payouts");
+      return;
+    }
+    // Cheap idempotency pre-check: if seller_share rows already exist for
+    // this order we've already scheduled. The unique index would catch a
+    // race anyway, but skipping early avoids the products-table lookup and
+    // a second pass through the split math on retried webhooks.
+    const existing = await db
+      .select({ id: schema.payoutsTable.id })
+      .from(schema.payoutsTable)
+      .where(
+        and(
+          eq(schema.payoutsTable.orderId, orderId),
+          eq(schema.payoutsTable.kind, "seller_share"),
+        ),
+      )
+      .limit(1);
+    if (existing.length > 0) return;
+    // Pick a real disbursement gateway. The order's `gateway = "cod"` is a
+    // placeholder — for the actual transfer we need Paystack/Flutterwave.
+    // pickPrimaryName falls back to "devmock" when no live keys are set,
+    // which matches the prepaid path's behavior for the same env.
+    const disbursementGateway = await gatewayRouter.pickPrimaryName();
+    const paidAt = order.paidAt ?? new Date();
+    await splitOrderPayouts(order, order.paymentIntentId, disbursementGateway, paidAt);
+    logger.info(
+      { orderId, gateway: disbursementGateway, intentId: order.paymentIntentId },
+      "cod_payouts_scheduled_on_delivery",
+    );
+  } catch (err) {
+    logger.error(
+      { err: (err as Error).message, orderId },
+      "cod_payout_scheduling_failed",
+    );
   }
 }
 

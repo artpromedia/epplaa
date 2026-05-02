@@ -312,6 +312,14 @@ export async function ingestTrackingEvents(
           orderId: shipment.orderId,
         },
       }).catch(() => undefined);
+      // COD orders skip the payment-gateway path that schedules seller
+      // payouts at charge-confirmation time. Delivery is the trigger:
+      // the platform only "has" the buyer's cash once the courier or
+      // pickup partner confirms collection. scheduleCodPayoutsOnDelivery
+      // is a no-op for prepaid orders (gateway != "cod") and idempotent
+      // for COD via the partial unique index on payouts(order_id, seller_id).
+      const { scheduleCodPayoutsOnDelivery } = await import("../payments");
+      await scheduleCodPayoutsOnDelivery(shipment.orderId);
     }
   }
   return { inserted, latestStatus: latest };
