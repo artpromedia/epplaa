@@ -11,6 +11,7 @@
     "check-sentry-monitors": "tsx ./src/checkSentryMonitorsInSync.ts",
     "check-sentry-sync-credentials": "tsx ./src/checkSentrySyncCredentials.ts",
     "check-sentry-issue-alert-credentials": "tsx ./src/checkSentryIssueAlertSyncCredentials.ts",
+    "check-vault-secret-coverage": "tsx ./src/checkVaultSecretCoverage.ts",
     "sync-sentry-monitors": "tsx ./src/syncSentryMonitors.ts",
     "sync-sentry-issue-alerts": "tsx ./src/syncSentryIssueAlerts.ts",
     "sync-sentry-opt-out-audit-filter": "tsx ./src/syncSentryOptOutAuditFilter.ts",

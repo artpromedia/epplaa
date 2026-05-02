@@ -77,6 +77,29 @@ config:
 
 # Vault paths to mirror into Kubernetes Secrets via ExternalSecrets Operator.
 # All paths are relative to the `kv-v2` mount at `secret/`.
+#
+# Three groups, each its own ExternalSecret resource so they can be
+# rotated / audited independently:
+#  * `api-monolith-core` — the high-blast-radius secrets that gate the
+#    app itself (db / session / Clerk / observability). Rotation here
+#    forces a pod restart via the deployment template's checksum
+#    annotation; the rotation runbook covers the rolling-restart
+#    procedure.
+#  * `api-monolith-providers` — third-party API keys used by feature
+#    surfaces (payments, email, SMS/OTP, push, moderation, shipping).
+#    Each provider has independent rotation cadence; isolating them
+#    means rotating Postmark doesn't churn pods reading Paystack.
+#  * `api-monolith-internal` — operator-controlled tokens (rehearsal
+#    probes, internal-API auth). Rotated as part of the production-
+#    secrets review (docs/runbooks/production-secrets.md).
+#
+# CI guard: scripts/src/checkVaultSecretCoverage.ts walks every
+# `process.env.<NAME>` reference in services/api-monolith/src and
+# fails if a secret-shaped env var (KEY/SECRET/TOKEN/HASH/DSN/...) is
+# neither declared in this file nor on the explicit allowlist in
+# scripts/src/vaultSecretCoverage.config.ts. Adding a new secret-
+# shaped env var to the codebase therefore *requires* either wiring
+# it through Vault here OR documenting the exemption.
 vault:
   enabled: true
   storeRef:
@@ -94,6 +117,49 @@ vault:
         - CLERK_SECRET_KEY: { remoteKey: epplaa/api-monolith, property: clerk_secret_key }
         - CLERK_PUBLISHABLE_KEY: { remoteKey: epplaa/api-monolith, property: clerk_publishable_key }
         - SENTRY_DSN: { remoteKey: epplaa/api-monolith, property: sentry_dsn }
+    # Third-party provider credentials. Grouped per integration so the
+    # rotation runbook can target one provider at a time. Adding a new
+    # provider follows the same pattern: drop a new {ENV_VAR_NAME:
+    # {remoteKey, property}} line and seed the value with
+    # scripts/seed-vault-secrets.sh.
+    - name: api-monolith-providers
+      keys:
+        # Payments — Paystack (primary) + Flutterwave (failover).
+        # Webhook hashes live alongside the secret keys so a rotation
+        # of either touches both.
+        - PAYSTACK_SECRET_KEY: { remoteKey: epplaa/api-monolith-providers, property: paystack_secret_key }
+        - FLUTTERWAVE_SECRET_KEY: { remoteKey: epplaa/api-monolith-providers, property: flutterwave_secret_key }
+        - FLUTTERWAVE_WEBHOOK_HASH: { remoteKey: epplaa/api-monolith-providers, property: flutterwave_webhook_hash }
+        # Email — Postmark (primary) + SendGrid (failover).
+        - POSTMARK_API_TOKEN: { remoteKey: epplaa/api-monolith-providers, property: postmark_api_token }
+        - SENDGRID_API_KEY: { remoteKey: epplaa/api-monolith-providers, property: sendgrid_api_key }
+        # SMS / OTP — Africa's Talking (primary) + Termii (failover).
+        - AFRICASTALKING_API_KEY: { remoteKey: epplaa/api-monolith-providers, property: africastalking_api_key }
+        - TERMII_API_KEY: { remoteKey: epplaa/api-monolith-providers, property: termii_api_key }
+        # Push — FCM service account JSON (mobile) + VAPID keypair (web push).
+        - FCM_SERVICE_ACCOUNT_JSON: { remoteKey: epplaa/api-monolith-providers, property: fcm_service_account_json }
+        - VAPID_PUBLIC_KEY: { remoteKey: epplaa/api-monolith-providers, property: vapid_public_key }
+        - VAPID_PRIVATE_KEY: { remoteKey: epplaa/api-monolith-providers, property: vapid_private_key }
+        # Moderation — Hive (primary) + PhotoDNA + Sightengine (fallbacks).
+        - HIVE_API_KEY: { remoteKey: epplaa/api-monolith-providers, property: hive_api_key }
+        - PHOTODNA_API_KEY: { remoteKey: epplaa/api-monolith-providers, property: photodna_api_key }
+        - SIGHTENGINE_API_SECRET: { remoteKey: epplaa/api-monolith-providers, property: sightengine_api_secret }
+        # Shipping — GIG (last-mile NG) + ShipBubble (multi-carrier) + OKHI (3-word addresses).
+        - GIG_API_KEY: { remoteKey: epplaa/api-monolith-providers, property: gig_api_key }
+        - GIG_WEBHOOK_SECRET: { remoteKey: epplaa/api-monolith-providers, property: gig_webhook_secret }
+        - SHIPBUBBLE_API_KEY: { remoteKey: epplaa/api-monolith-providers, property: shipbubble_api_key }
+        - SHIPBUBBLE_WEBHOOK_SECRET: { remoteKey: epplaa/api-monolith-providers, property: shipbubble_webhook_secret }
+        - OKHI_API_KEY: { remoteKey: epplaa/api-monolith-providers, property: okhi_api_key }
+        # Live streaming — Cloudflare Stream (origin + signed-URL HMAC).
+        - CF_STREAM_API_TOKEN: { remoteKey: epplaa/api-monolith-providers, property: cf_stream_api_token }
+        - CF_STREAM_WEBHOOK_SECRET: { remoteKey: epplaa/api-monolith-providers, property: cf_stream_webhook_secret }
+    # Operator-controlled tokens. Smaller blast radius than provider
+    # credentials but still secret-shaped — mainly used to gate
+    # rehearsal probes and internal-network calls between services.
+    - name: api-monolith-internal
+      keys:
+        - INTERNAL_API_KEY: { remoteKey: epplaa/api-monolith-internal, property: internal_api_key }
+        - HEALTHZ_REHEARSAL_TOKEN: { remoteKey: epplaa/api-monolith-internal, property: healthz_rehearsal_token }
 
 probes:
   liveness:
