@@ -25,6 +25,7 @@
     "drizzle-orm": "catalog:",
     "express": "^5",
     "ioredis": "^5.10.1",
+    "pg": "^8.20.0",
     "pino": "^9",
     "prom-client": "^15.1.3",
     "zod": "catalog:"
@@ -32,6 +33,7 @@
   "devDependencies": {
     "@types/express": "^5.0.6",
     "@types/node": "catalog:",
+    "@types/pg": "^8.18.0",
     "@types/supertest": "^7.2.0",
     "supertest": "^7.2.2",
     "tsx": "catalog:",

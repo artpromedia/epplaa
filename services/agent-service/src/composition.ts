@@ -13,6 +13,11 @@
  *   KAFKA_SSL           — "true" enables TLS
  *   KAFKA_SASL_*        — SASL/PLAIN credentials
  *   AGENT_DRY_RUN       — "true" returns mock model responses (dev only)
+ *   MONOLITH_BASE_URL   — base URL of api-monolith for tool dispatch
+ *   AGENT_SERVICE_TOKEN — service-to-service bearer token for monolith calls
+ *   LANGFUSE_BASE_URL   — enables trace export when set with PUBLIC/SECRET keys
+ *   LANGFUSE_PUBLIC_KEY
+ *   LANGFUSE_SECRET_KEY
  */
 
 import Redis from "ioredis";
@@ -37,8 +42,10 @@ import {
   AgentRuntime,
   type AgentRuntimeOptions,
 } from "./runtime/AgentRuntime.js";
+import { HttpToolDispatcher } from "./runtime/ToolDispatcher.js";
 import { KafkaApprovalBus } from "./approval/KafkaApprovalBus.js";
 import type { IApprovalBus, ProposedActionEvent } from "./approval/ApprovalBus.js";
+import { LangfuseTraceExporter } from "./lib/LangfuseTraceExporter.js";
 import { logger } from "./lib/observability.js";
 
 export interface AgentServiceDeps {
@@ -211,6 +218,32 @@ export async function buildDeps(): Promise<AgentServiceDeps> {
   const agents = new StaticAgentRegistry();
   const prompts = new InMemoryPromptRegistry();
 
+  // ---- Tool dispatcher ------------------------------------------------
+  const dispatcher = new HttpToolDispatcher({
+    monolithBaseUrl: env.MONOLITH_BASE_URL ?? "http://api-monolith.commerce",
+    serviceToken: env.AGENT_SERVICE_TOKEN,
+  });
+  logger.info(
+    {
+      monolithBaseUrl: env.MONOLITH_BASE_URL ?? "http://api-monolith.commerce",
+      registered: dispatcher.registeredTools(),
+    },
+    "tool_dispatcher_ready",
+  );
+
+  // ---- Trace exporter -------------------------------------------------
+  let langfuse: LangfuseTraceExporter | undefined;
+  if (env.LANGFUSE_BASE_URL && env.LANGFUSE_PUBLIC_KEY && env.LANGFUSE_SECRET_KEY) {
+    langfuse = new LangfuseTraceExporter({
+      baseUrl: env.LANGFUSE_BASE_URL,
+      publicKey: env.LANGFUSE_PUBLIC_KEY,
+      secretKey: env.LANGFUSE_SECRET_KEY,
+    });
+    logger.info({ baseUrl: env.LANGFUSE_BASE_URL }, "langfuse_exporter_enabled");
+  } else {
+    logger.info("langfuse_exporter_disabled — set LANGFUSE_BASE_URL/PUBLIC_KEY/SECRET_KEY to enable");
+  }
+
   // ---- Composition root: AgentRuntime factory -------------------------
   const buildRuntime = ({
     agentId,
@@ -219,15 +252,16 @@ export async function buildDeps(): Promise<AgentServiceDeps> {
     agentId: string;
     sessionId: string;
   }): AgentRuntime => {
+    const ctx = { agentId, sessionId, authToken: undefined };
     return new AgentRuntime({
       agentId,
       sessionId,
       registries: { agents, prompts, tools },
       gateway,
       memory,
-      toolDispatcher: defaultToolDispatcher,
+      toolDispatcher: (call, desc) => dispatcher.dispatch(call, desc, ctx),
       ...(kafkaBus ? { approvalBus: adaptApprovalBus(kafkaBus) } : {}),
-      // emitTrace: optional — Langfuse adapter lands in AI Sprint 4.
+      ...(langfuse ? { emitTrace: (event) => langfuse!.emit(event) } : {}),
     });
   };
 
@@ -256,27 +290,4 @@ export async function buildDeps(): Promise<AgentServiceDeps> {
   };
 }
 
-/**
- * Default tool dispatcher.
- *
- * For Wave 4 / AI Sprint 1, no-approval tools (`catalog.search`,
- * `order.read`, `runbook.search`, `escalation.handoff_to_human`) are
- * invoked against the api-monolith via HTTP. To keep this composition
- * root free of api-client coupling and HTTP concerns, the dispatcher is
- * here as a clearly-marked passthrough returning an `unimplemented`
- * marker. AI Sprint 1.1 wires the real per-tool fetches.
- *
- * The agent runtime treats `error` as a soft failure and surfaces it to
- * the LLM in the next turn; the LLM is expected to recover or escalate.
- */
-async function defaultToolDispatcher(
-  call: ToolCall,
-  desc: ToolDescriptor,
-): Promise<ToolResult> {
-  return {
-    callId: call.callId,
-    name: call.name,
-    output: null,
-    error: `tool-not-implemented: ${desc.name} dispatch is wired in AI Sprint 1.1`,
-  };
-}
+

@@ -48,6 +48,8 @@ config:
   KAFKA_BROKERS: redpanda.data:9092
   KAFKA_CLIENT_ID: agent-service
   KAFKA_SSL: "false"
+  MONOLITH_BASE_URL: http://api-monolith.commerce
+  LANGFUSE_BASE_URL: http://langfuse.observability:3000
 
 vault:
   enabled: true
@@ -62,6 +64,7 @@ vault:
         - DATABASE_URL: { remoteKey: epplaa/agent-service, property: database_url }
         - KAFKA_SASL_USERNAME: { remoteKey: epplaa/agent-service, property: kafka_sasl_username }
         - KAFKA_SASL_PASSWORD: { remoteKey: epplaa/agent-service, property: kafka_sasl_password }
+        - AGENT_SERVICE_TOKEN: { remoteKey: epplaa/agent-service, property: service_token }
 
 probes:
   liveness:

@@ -15,7 +15,7 @@ import {
   ATTR_DEPLOYMENT_ENVIRONMENT_NAME,
 } from "@opentelemetry/semantic-conventions/incubating";
 import { getNodeAutoInstrumentations } from "@opentelemetry/auto-instrumentations-node";
-import { collectDefaultMetrics, Counter, Registry } from "prom-client";
+import { collectDefaultMetrics, Counter, Gauge, Registry } from "prom-client";
 import pino from "pino";
 
 export const logger = pino({
@@ -34,6 +34,25 @@ export const notificationsEnqueuedTotal = new Counter({
   name: "epplaa_notification_enqueued_total",
   help: "Notifications accepted via /v1/notifications/enqueue.",
   labelNames: ["event_type", "outcome"] as const,
+  registers: [metricsRegistry],
+});
+
+export const outboxQueueDepth = new Gauge({
+  name: "epplaa_notification_outbox_queue_depth",
+  help: "Shadow observation of the notification_outbox row counts by status.",
+  labelNames: ["status"] as const,
+  registers: [metricsRegistry],
+});
+
+export const outboxOldestPendingAgeSeconds = new Gauge({
+  name: "epplaa_notification_outbox_oldest_pending_age_seconds",
+  help: "Age in seconds of the oldest pending row whose next_attempt_at has elapsed.",
+  registers: [metricsRegistry],
+});
+
+export const outboxPollErrorsTotal = new Counter({
+  name: "epplaa_notification_outbox_poll_errors_total",
+  help: "Errors observed while polling the notification_outbox table.",
   registers: [metricsRegistry],
 });
 
