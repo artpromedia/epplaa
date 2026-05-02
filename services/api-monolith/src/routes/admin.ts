@@ -309,4 +309,223 @@ router.post("/admin/kyc/:id/reject", requireRole(ADMIN_ONLY), async (req, res) =
   res.json({ ok: true });
 });
 
+// ---- PUDO partner configuration (admin) — task #175 ----
+//
+// Operator surface for the daily-push delivery configuration on the
+// `pudo_partners` table (see lib/pudo/schema.ts). Until this surface
+// existed, partners had to be inserted/updated by hand via psql, which
+// was a footgun in two ways:
+//   - SFTP env-var NAMES (sftpPasswordEnvVar / sftpKeyEnvVar) had to be
+//     remembered in lockstep with the deploy's actual env config; a
+//     typo silently fell back to the empty default and the cron would
+//     skip delivery without paging.
+//   - Soft-disabling a partner required a manual UPDATE; an operator
+//     who didn't know the column name would either edit the wrong
+//     column or `DELETE FROM pudo_partners WHERE code=...`, which
+//     would cascade-break the fulfillment_locations FK.
+//
+// All routes are gated by `requireRole(['admin'])` (the canonical
+// admin gate used by KYC/sanctions); secrets are NEVER stored on the
+// row — only the *names* of env vars holding them, so the row itself
+// is safe to render in the UI in plain text.
+
+interface PudoPartnerRowDto {
+  code: string;
+  name: string;
+  countryCode: string;
+  contactEmail: string;
+  active: boolean;
+  manifestTimezone: string;
+  deliveryMethod: "none" | "email" | "sftp";
+  manifestEmail: string;
+  sftpHost: string;
+  sftpPort: number;
+  sftpUsername: string;
+  sftpPasswordEnvVar: string;
+  sftpKeyEnvVar: string;
+  sftpRemoteDir: string;
+  hasApiKey: boolean;
+  createdAtIso: string;
+}
+
+function rowToPartnerDto(r: typeof schema.pudoPartnersTable.$inferSelect): PudoPartnerRowDto {
+  return {
+    code: r.code,
+    name: r.name,
+    countryCode: r.countryCode,
+    contactEmail: r.contactEmail,
+    active: r.active === 1,
+    manifestTimezone: r.manifestTimezone,
+    deliveryMethod: (r.deliveryMethod as "none" | "email" | "sftp") ?? "none",
+    manifestEmail: r.manifestEmail,
+    sftpHost: r.sftpHost,
+    sftpPort: r.sftpPort,
+    sftpUsername: r.sftpUsername,
+    sftpPasswordEnvVar: r.sftpPasswordEnvVar,
+    sftpKeyEnvVar: r.sftpKeyEnvVar,
+    sftpRemoteDir: r.sftpRemoteDir,
+    // Surface presence of the API key without leaking it. The UI shows
+    // a "Rotate" button rather than the value; an operator who needs
+    // to read the secret pulls it from secret storage, not this UI.
+    hasApiKey: !!r.apiKey && r.apiKey.length > 0,
+    createdAtIso: r.createdAt.toISOString(),
+  };
+}
+
+router.get("/admin/pudo-partners", requireRole(ADMIN_ONLY), async (_req, res) => {
+  const rows = await db
+    .select()
+    .from(schema.pudoPartnersTable)
+    .orderBy(schema.pudoPartnersTable.code);
+  res.json({ items: rows.map(rowToPartnerDto) });
+});
+
+/**
+ * Validate a partner mutation payload. Centralised so create+update can
+ * share the same rules, and so the UI can surface a precise error per
+ * field rather than a generic 400. Returns the cleaned partial row on
+ * success or an error string on failure.
+ */
+function validatePartnerInput(
+  body: Record<string, unknown>,
+  requireCode: boolean,
+): { ok: true; values: Partial<typeof schema.pudoPartnersTable.$inferInsert> } | { ok: false; error: string } {
+  const trim = (v: unknown): string => (typeof v === "string" ? v.trim() : "");
+  const code = trim(body.code);
+  const name = trim(body.name);
+  const countryCode = trim(body.countryCode).toUpperCase();
+  const deliveryMethod = trim(body.deliveryMethod) || "none";
+  if (requireCode && !code) {
+    return { ok: false, error: "code is required" };
+  }
+  if (requireCode && !/^[a-z0-9][a-z0-9_-]{1,31}$/.test(code)) {
+    return { ok: false, error: "code must be lowercase kebab/snake (≤32 chars)" };
+  }
+  if (requireCode && !name) {
+    return { ok: false, error: "name is required" };
+  }
+  if (requireCode && !/^[A-Z]{2}$/.test(countryCode)) {
+    return { ok: false, error: "countryCode must be ISO 3166-1 alpha-2" };
+  }
+  if (!["none", "email", "sftp"].includes(deliveryMethod)) {
+    return { ok: false, error: "deliveryMethod must be one of none|email|sftp" };
+  }
+  const manifestEmail = trim(body.manifestEmail);
+  if (deliveryMethod === "email" && manifestEmail === "") {
+    return { ok: false, error: "manifestEmail required when deliveryMethod=email" };
+  }
+  const sftpHost = trim(body.sftpHost);
+  if (deliveryMethod === "sftp" && sftpHost === "") {
+    return { ok: false, error: "sftpHost required when deliveryMethod=sftp" };
+  }
+  const sftpPortRaw = body.sftpPort;
+  const sftpPort = typeof sftpPortRaw === "number" && Number.isInteger(sftpPortRaw) && sftpPortRaw > 0 && sftpPortRaw < 65536
+    ? sftpPortRaw
+    : 22;
+  const values: Partial<typeof schema.pudoPartnersTable.$inferInsert> = {
+    name,
+    countryCode,
+    contactEmail: trim(body.contactEmail),
+    manifestTimezone: trim(body.manifestTimezone) || "Africa/Lagos",
+    deliveryMethod,
+    manifestEmail,
+    sftpHost,
+    sftpPort,
+    sftpUsername: trim(body.sftpUsername),
+    sftpPasswordEnvVar: trim(body.sftpPasswordEnvVar),
+    sftpKeyEnvVar: trim(body.sftpKeyEnvVar),
+    sftpRemoteDir: trim(body.sftpRemoteDir) || "/",
+  };
+  if (typeof body.active === "boolean") {
+    values.active = body.active ? 1 : 0;
+  }
+  if (requireCode) {
+    values.code = code;
+  }
+  return { ok: true, values };
+}
+
+router.post("/admin/pudo-partners", requireRole(ADMIN_ONLY), async (req, res) => {
+  const v = validatePartnerInput(req.body as Record<string, unknown>, true);
+  if (!v.ok) {
+    res.status(400).json({ error: "bad_request", detail: v.error });
+    return;
+  }
+  const code = v.values.code as string;
+  const existing = await db
+    .select({ code: schema.pudoPartnersTable.code })
+    .from(schema.pudoPartnersTable)
+    .where(eq(schema.pudoPartnersTable.code, code))
+    .limit(1);
+  if (existing.length > 0) {
+    res.status(409).json({ error: "already_exists", detail: `partner ${code} already exists` });
+    return;
+  }
+  const [inserted] = await db
+    .insert(schema.pudoPartnersTable)
+    .values({
+      code,
+      name: v.values.name ?? "",
+      countryCode: v.values.countryCode ?? "",
+      contactEmail: v.values.contactEmail ?? "",
+      active: v.values.active ?? 1,
+      manifestTimezone: v.values.manifestTimezone ?? "Africa/Lagos",
+      deliveryMethod: v.values.deliveryMethod ?? "none",
+      manifestEmail: v.values.manifestEmail ?? "",
+      sftpHost: v.values.sftpHost ?? "",
+      sftpPort: v.values.sftpPort ?? 22,
+      sftpUsername: v.values.sftpUsername ?? "",
+      sftpPasswordEnvVar: v.values.sftpPasswordEnvVar ?? "",
+      sftpKeyEnvVar: v.values.sftpKeyEnvVar ?? "",
+      sftpRemoteDir: v.values.sftpRemoteDir ?? "/",
+    })
+    .returning();
+  res.status(201).json(rowToPartnerDto(inserted));
+});
+
+router.patch("/admin/pudo-partners/:code", requireRole(ADMIN_ONLY), async (req, res) => {
+  const code = String(req.params.code).trim();
+  if (!code) {
+    res.status(400).json({ error: "bad_request", detail: "code is required" });
+    return;
+  }
+  const v = validatePartnerInput(req.body as Record<string, unknown>, false);
+  if (!v.ok) {
+    res.status(400).json({ error: "bad_request", detail: v.error });
+    return;
+  }
+  // Strip undefined keys so a partial PATCH only touches what was sent.
+  // The validator emits the full set, so we explicitly pull from the
+  // raw body to decide which fields to set.
+  const body = req.body as Record<string, unknown>;
+  const set: Partial<typeof schema.pudoPartnersTable.$inferInsert> = {};
+  if (typeof body.name === "string") set.name = v.values.name;
+  if (typeof body.countryCode === "string") set.countryCode = v.values.countryCode;
+  if (typeof body.contactEmail === "string") set.contactEmail = v.values.contactEmail;
+  if (typeof body.manifestTimezone === "string") set.manifestTimezone = v.values.manifestTimezone;
+  if (typeof body.deliveryMethod === "string") set.deliveryMethod = v.values.deliveryMethod;
+  if (typeof body.manifestEmail === "string") set.manifestEmail = v.values.manifestEmail;
+  if (typeof body.sftpHost === "string") set.sftpHost = v.values.sftpHost;
+  if (typeof body.sftpPort === "number") set.sftpPort = v.values.sftpPort;
+  if (typeof body.sftpUsername === "string") set.sftpUsername = v.values.sftpUsername;
+  if (typeof body.sftpPasswordEnvVar === "string") set.sftpPasswordEnvVar = v.values.sftpPasswordEnvVar;
+  if (typeof body.sftpKeyEnvVar === "string") set.sftpKeyEnvVar = v.values.sftpKeyEnvVar;
+  if (typeof body.sftpRemoteDir === "string") set.sftpRemoteDir = v.values.sftpRemoteDir;
+  if (typeof body.active === "boolean") set.active = v.values.active;
+  if (Object.keys(set).length === 0) {
+    res.status(400).json({ error: "bad_request", detail: "no fields to update" });
+    return;
+  }
+  const updated = await db
+    .update(schema.pudoPartnersTable)
+    .set(set)
+    .where(eq(schema.pudoPartnersTable.code, code))
+    .returning();
+  if (updated.length === 0) {
+    res.status(404).json({ error: "not_found", detail: `partner ${code} not found` });
+    return;
+  }
+  res.json(rowToPartnerDto(updated[0]));
+});
+
 export default router;

@@ -27,6 +27,7 @@ import SanctionsPage from "@/pages/sanctions";
 import NdprPage from "@/pages/ndpr";
 import AuditPage from "@/pages/audit";
 import RateLimitEventsPage from "@/pages/rate-limit-events";
+import PudoPage from "@/pages/pudo";
 import { RequireRoles } from "@/components/require-roles";
 
 const ADMIN_ONLY = ["admin"] as const;
@@ -123,6 +124,11 @@ function Router() {
             <Route path="/rate-limit-events">
               <RequireRoles roles={ADMIN_ONLY}>
                 <RateLimitEventsPage />
+              </RequireRoles>
+            </Route>
+            <Route path="/pudo">
+              <RequireRoles roles={ADMIN_ONLY}>
+                <PudoPage />
               </RequireRoles>
             </Route>
             <Route path="/takedowns" component={TakedownsPage} />
