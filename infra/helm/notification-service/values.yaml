@@ -1,5 +1,5 @@
 image:
-  repository: ghcr.io/artpromedia/agent-service
+  repository: ghcr.io/artpromedia/notification-service
   tag: latest
   pullPolicy: IfNotPresent
 
@@ -8,11 +8,11 @@ replicaCount: 2
 service:
   type: ClusterIP
   port: 80
-  targetPort: 3100
+  targetPort: 3200
 
 resources:
-  requests: { cpu: 100m, memory: 256Mi }
-  limits:   { cpu: 500m, memory: 512Mi }
+  requests: { cpu: 50m, memory: 128Mi }
+  limits:   { cpu: 300m, memory: 384Mi }
 
 autoscaling:
   enabled: true
@@ -40,28 +40,23 @@ ephemeralVolumes:
 
 config:
   NODE_ENV: production
-  PORT: "3100"
-  OTEL_SERVICE_NAME: epplaa-agent-service
+  PORT: "3200"
+  OTEL_SERVICE_NAME: epplaa-notification-service
   OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector.observability:4318
-  LITELLM_BASE_URL: http://litellm.ai-platform:4000
   REDIS_URL: redis://redis-master.data:6379
-  KAFKA_BROKERS: redpanda.data:9092
-  KAFKA_CLIENT_ID: agent-service
-  KAFKA_SSL: "false"
+  # Phase 4 strangler-fig: this flag is read once draining is wired in.
+  NOTIFICATION_DRAIN_ENABLED: "false"
 
 vault:
   enabled: true
   storeRef: { name: vault-backend, kind: ClusterSecretStore }
   refreshInterval: 1h
   secrets:
-    - name: agent-service-core
+    - name: notification-service-core
       keys:
-        - LITELLM_API_KEY: { remoteKey: epplaa/agent-service, property: litellm_master_key }
-        - LANGFUSE_PUBLIC_KEY: { remoteKey: epplaa/agent-service, property: langfuse_public_key }
-        - LANGFUSE_SECRET_KEY: { remoteKey: epplaa/agent-service, property: langfuse_secret_key }
-        - DATABASE_URL: { remoteKey: epplaa/agent-service, property: database_url }
-        - KAFKA_SASL_USERNAME: { remoteKey: epplaa/agent-service, property: kafka_sasl_username }
-        - KAFKA_SASL_PASSWORD: { remoteKey: epplaa/agent-service, property: kafka_sasl_password }
+        - DATABASE_URL: { remoteKey: epplaa/notification-service, property: database_url }
+        - SMTP_URL:     { remoteKey: epplaa/notification-service, property: smtp_url }
+        - TWILIO_AUTH:  { remoteKey: epplaa/notification-service, property: twilio_auth }
 
 probes:
   liveness:
@@ -84,4 +79,4 @@ affinity:
         podAffinityTerm:
           topologyKey: kubernetes.io/hostname
           labelSelector:
-            matchLabels: { app.kubernetes.io/name: agent-service }
+            matchLabels: { app.kubernetes.io/name: notification-service }

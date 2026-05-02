@@ -1,5 +1,5 @@
 {
-  "name": "@workspace/agent-service",
+  "name": "@workspace/notification-service",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -10,7 +10,7 @@
     "dev": "tsx src/index.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --passWithNoTests",
-    "lint": "echo 'ESLint enforcement pending (see eslint.config.mjs)'"
+    "lint": "echo 'ESLint enforcement pending'"
   },
   "dependencies": {
     "@opentelemetry/api": "^1.9.1",
@@ -21,11 +21,11 @@
     "@opentelemetry/sdk-metrics": "^1.30.0",
     "@opentelemetry/sdk-node": "^0.57.0",
     "@opentelemetry/semantic-conventions": "^1.28.0",
+    "@workspace/db": "workspace:*",
+    "drizzle-orm": "catalog:",
     "express": "^5",
     "ioredis": "^5.10.1",
-    "kafkajs": "^2.2.4",
     "pino": "^9",
-    "pino-http": "^10",
     "prom-client": "^15.1.3",
     "zod": "catalog:"
   },
