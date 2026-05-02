@@ -29,6 +29,7 @@ import { initAdminSchema } from "./lib/roles";
 import { initManufacturerSchema } from "./lib/manufacturers";
 import { initSecuritySchema } from "./lib/security";
 import { initMoneyFlowFkConstraints } from "./lib/moneyFlowFk";
+import { initUserLinkedTablesFkAndRls } from "./lib/userLinkedTablesFk";
 import { initOtel } from "./lib/otel";
 import { refreshFxRates, seedFxRatesIfEmpty } from "./lib/fx";
 import { processDueNdprRequests, requireProcessingNotRestricted } from "./lib/ndpr";
@@ -430,6 +431,20 @@ if (process.env.NODE_ENV !== "test") {
   // defence in depth.
   void initMoneyFlowFkConstraints().catch((err) =>
     logger.error({ err: (err as Error).message }, "money_flow_fk_init_failed"),
+  );
+  // User-linked tables FK + RLS lockdown (Task #226). Sibling of
+  // initMoneyFlowFkConstraints — installs a `user_id → users.clerk_id`
+  // FK on every other user-linked table (cart, wishlist, notifications,
+  // KYC, sanctions, sellers, payouts, ...) and engages PostgreSQL row-
+  // level security with a permissive-by-default policy keyed off
+  // `current_setting('app.current_user_id', true)`. Today the policy is
+  // permissive (matches every row) because the app's single connection
+  // role IS the table owner; the runbook covers the FORCE-RLS
+  // transition once auth middleware sets the session variable per
+  // request. Runs after moneyFlowFk so the placeholder backfill it
+  // does for orders/payment_intents is reused.
+  void initUserLinkedTablesFkAndRls().catch((err) =>
+    logger.error({ err: (err as Error).message }, "user_linked_tables_fk_rls_init_failed"),
   );
   // Retention heartbeat table: per-arm `last_run_at` rows for the
   // daily sweep. Same additive `CREATE TABLE IF NOT EXISTS` pattern
