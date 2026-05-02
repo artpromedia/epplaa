@@ -69,51 +69,50 @@ export interface AgentServiceDeps {
 }
 
 /**
- * Bridge: AgentRuntime expects `{propose}`, KafkaApprovalBus exposes
- * `produce` + `awaitDecision`. This adapter implements propose-then-await
- * with a generated eventId.
+ * Bridge: AgentRuntime expects requestApproval(call, ctx) returning an
+ * ApprovalDecision; KafkaApprovalBus exposes produce + awaitDecision.
+ * This adapter generates an eventId, produces, awaits, and translates
+ * transport/decision errors into the typed ApprovalDecision shape.
  */
 function adaptApprovalBus(bus: KafkaApprovalBus): NonNullable<AgentRuntimeOptions["approvalBus"]> {
   return {
-    propose: async (call: ToolCall, agentId: string): Promise<ToolResult> => {
+    requestApproval: async (
+      call: ToolCall,
+      ctx: { agentId: string; sessionId: string },
+    ) => {
       const eventId = crypto.randomUUID();
       const now = new Date();
       const event: ProposedActionEvent = {
         eventId,
-        agentId,
-        sessionId: "unknown", // filled in by runtime context if available
+        agentId: ctx.agentId,
+        sessionId: ctx.sessionId,
         tool: call.name,
         args: call.args,
         requestedAt: now.toISOString(),
         expiresAt: new Date(now.getTime() + 15 * 60 * 1000).toISOString(),
       };
-      await bus.produce(event);
       try {
+        await bus.produce(event);
         const decision = await bus.awaitDecision(eventId);
         if (decision.decision === "approved") {
-          // The actual tool dispatch happens *after* approval — this is
-          // surfaced to the caller via the ToolResult.output. The
-          // operator-facing UI is responsible for performing the action
-          // once approved. Future iteration: pass a dispatcher here so
-          // the agent can dispatch automatically post-approval.
           return {
-            callId: call.callId,
-            name: call.name,
-            output: { approved: true, approvedBy: decision.approvedBy },
+            approved: true as const,
+            approvedBy: decision.approvedBy,
+            decidedAt: decision.decidedAt,
+            note: decision.note,
           };
         }
         return {
-          callId: call.callId,
-          name: call.name,
-          output: null,
-          error: `rejected by ${decision.approvedBy}: ${decision.note ?? "no reason given"}`,
+          approved: false as const,
+          kind: "rejected" as const,
+          reason: decision.note ?? "no reason given",
+          decidedBy: decision.approvedBy,
         };
       } catch (err) {
         return {
-          callId: call.callId,
-          name: call.name,
-          output: null,
-          error: `approval-bus-error: ${(err as Error).message}`,
+          approved: false as const,
+          kind: "error" as const,
+          reason: (err as Error).message,
         };
       }
     },
@@ -291,6 +290,13 @@ export async function buildDeps(): Promise<AgentServiceDeps> {
       memory,
       toolDispatcher: (call, desc) => dispatcher.dispatch(call, desc, ctx),
       ...(kafkaBus ? { approvalBus: adaptApprovalBus(kafkaBus) } : {}),
+      auditEmit: async (event) => {
+        // Stream audit events to the structured logger; downstream
+        // log shipping (Loki/Datadog) becomes the audit trail. A
+        // dedicated outbox sink can replace this without touching the
+        // runtime.
+        logger.info({ ...event, audit: true }, `audit.${event.kind}`);
+      },
       ...(langfuse ? { emitTrace: (event) => langfuse!.emit(event) } : {}),
     });
   };

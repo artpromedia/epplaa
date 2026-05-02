@@ -39,11 +39,47 @@ export interface AgentRuntimeOptions {
   memory: IShortTermMemory;
   /** Hook for dispatching tools that don't require approval. */
   toolDispatcher: (call: ToolCall, descriptor: ToolDescriptor) => Promise<ToolResult>;
-  /** Optional hook for AI Sprint 2 approval bus; not required in Sprint 1. */
-  approvalBus?: { propose: (call: ToolCall, agentId: string) => Promise<ToolResult> };
+  /**
+   * Approval-bus integration. Returns an ApprovalDecision; when
+   * `approved=true` the runtime auto-dispatches the tool via
+   * `toolDispatcher` and surfaces the dispatch result to the caller.
+   * The previous Sprint-1 contract (returning a synthetic ToolResult)
+   * was replaced because it forced the operator UI to perform the
+   * dispatch out-of-band.
+   */
+  approvalBus?: {
+    requestApproval: (
+      call: ToolCall,
+      ctx: { agentId: string; sessionId: string },
+    ) => Promise<ApprovalDecision>;
+  };
+  /**
+   * Optional audit emitter — called for every approval-bus interaction
+   * (proposed / approved / rejected / dispatched / dispatch_failed).
+   * Failures here are swallowed and logged; an audit-sink outage MUST
+   * NOT break agent traffic.
+   */
+  auditEmit?: (event: ApprovalAuditEvent) => Promise<void>;
   /** Optional hook for Langfuse / OTel trace emission. */
   emitTrace?: (event: TraceEvent) => Promise<string>;
 }
+
+export type ApprovalDecision =
+  | { approved: true; approvedBy: string; decidedAt: string; note?: string | undefined }
+  | {
+      approved: false;
+      /** "rejected" when an operator declined; "error" on transport failure. */
+      kind: "rejected" | "error";
+      reason: string;
+      decidedBy?: string | undefined;
+    };
+
+export type ApprovalAuditEvent =
+  | { kind: "tool_proposed"; agentId: string; sessionId: string; tool: string; callId: string; args: unknown; at: string }
+  | { kind: "tool_approved"; agentId: string; sessionId: string; tool: string; callId: string; approvedBy: string; at: string }
+  | { kind: "tool_rejected"; agentId: string; sessionId: string; tool: string; callId: string; reason: string; decidedBy?: string | undefined; at: string }
+  | { kind: "tool_dispatched"; agentId: string; sessionId: string; tool: string; callId: string; at: string }
+  | { kind: "tool_dispatch_failed"; agentId: string; sessionId: string; tool: string; callId: string; error: string; at: string };
 
 export interface HandleInput {
   message: string;
@@ -116,9 +152,10 @@ export class AgentRuntime {
       if (!desc) continue; // unreachable: validateToolCalls already filtered.
       if (desc.approvalThreshold === "single-human") {
         if (!this.opts.approvalBus) {
-          // Sprint 1 doesn't ship the bus yet; surface the request to the
-          // caller so the operator can wire it up by Sprint 2 without
-          // changing this code path.
+          // Composition-time misconfiguration — an approval-required
+          // tool was registered for an agent in an environment without
+          // a wired approval bus. Surface to caller so the operator can
+          // either remove the tool or wire the bus.
           toolResults.push({
             callId: call.callId,
             name: call.name,
@@ -128,8 +165,84 @@ export class AgentRuntime {
           awaitedApproval = true;
           continue;
         }
-        const result = await this.opts.approvalBus.propose(call, this.agentId);
-        toolResults.push(result);
+        const proposedAt = new Date().toISOString();
+        await this.audit({
+          kind: "tool_proposed",
+          agentId: this.agentId,
+          sessionId: this.sessionId,
+          tool: call.name,
+          callId: call.callId,
+          args: call.args,
+          at: proposedAt,
+        });
+        const decision = await this.opts.approvalBus.requestApproval(call, {
+          agentId: this.agentId,
+          sessionId: this.sessionId,
+        });
+        if (!decision.approved) {
+          await this.audit({
+            kind: "tool_rejected",
+            agentId: this.agentId,
+            sessionId: this.sessionId,
+            tool: call.name,
+            callId: call.callId,
+            reason: decision.reason,
+            decidedBy: decision.decidedBy,
+            at: new Date().toISOString(),
+          });
+          toolResults.push({
+            callId: call.callId,
+            name: call.name,
+            output: null,
+            error:
+              decision.kind === "rejected"
+                ? `rejected${decision.decidedBy ? ` by ${decision.decidedBy}` : ""}: ${decision.reason}`
+                : `approval-bus-error: ${decision.reason}`,
+          });
+          awaitedApproval = true;
+          continue;
+        }
+        await this.audit({
+          kind: "tool_approved",
+          agentId: this.agentId,
+          sessionId: this.sessionId,
+          tool: call.name,
+          callId: call.callId,
+          approvedBy: decision.approvedBy,
+          at: decision.decidedAt,
+        });
+        // Auto-dispatch the approved call. The runtime is now the single
+        // place where money/account tools execute, so the audit trail is
+        // complete (proposed -> approved -> dispatched|dispatch_failed).
+        try {
+          const dispatched = await this.opts.toolDispatcher(call, desc);
+          await this.audit({
+            kind: "tool_dispatched",
+            agentId: this.agentId,
+            sessionId: this.sessionId,
+            tool: call.name,
+            callId: call.callId,
+            at: new Date().toISOString(),
+          });
+          toolResults.push(dispatched);
+        } catch (err) {
+          const message = (err as Error).message;
+          await this.audit({
+            kind: "tool_dispatch_failed",
+            agentId: this.agentId,
+            sessionId: this.sessionId,
+            tool: call.name,
+            callId: call.callId,
+            error: message,
+            at: new Date().toISOString(),
+          });
+          toolResults.push({
+            callId: call.callId,
+            name: call.name,
+            output: null,
+            error: `post-approval-dispatch-failed: ${message}`,
+          });
+        }
         awaitedApproval = true;
       } else {
         toolResults.push(await this.opts.toolDispatcher(call, desc));
@@ -161,6 +274,17 @@ export class AgentRuntime {
       throw new Error(`AgentRegistry: unknown agent '${this.agentId}'`);
     }
     return cfg;
+  }
+
+  private async audit(event: ApprovalAuditEvent): Promise<void> {
+    if (!this.opts.auditEmit) return;
+    try {
+      await this.opts.auditEmit(event);
+    } catch {
+      // Audit-sink outage MUST NOT break agent traffic. We deliberately
+      // swallow without re-throwing; the audit emitter is responsible
+      // for its own internal logging.
+    }
   }
 
   private validateToolCalls(calls: ToolCall[], config: AgentConfig): ToolCall[] {
