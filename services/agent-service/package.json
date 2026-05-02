@@ -10,6 +10,7 @@
     "dev": "tsx src/index.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --passWithNoTests",
+    "eval": "tsx src/scripts/promptEval.ts",
     "lint": "echo 'ESLint enforcement pending (see eslint.config.mjs)'"
   },
   "dependencies": {
