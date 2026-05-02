@@ -25,6 +25,28 @@ jobs:
         with:
           environment: production
           version: ${{ github.sha }}
+      # Heartbeat the `release-heartbeat` Sentry Cron monitor (#148).
+      # The monitor itself is configured in the Sentry UI as an interval
+      # monitor ("page if no check-in in 30 days") because release
+      # tagging is event-driven (on tag push), not cron-scheduled. The
+      # slug is registered in scripts/src/sentryMonitors.config.ts under
+      # SENTRY_MONITORS_KNOWN_UI_MANAGED so the reverse-scan drift check
+      # recognises it. A run failure (network blip, expired token) is
+      # tolerated — the heartbeat is best-effort and the underlying
+      # release-tag step above is what actually matters.
+      - name: Heartbeat release-heartbeat Sentry Cron monitor
+        if: ${{ vars.SENTRY_ORG != '' && vars.SENTRY_PROJECT != '' }}
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          SENTRY_ORG: ${{ vars.SENTRY_ORG }}
+          SENTRY_PROJECT: ${{ vars.SENTRY_PROJECT }}
+        continue-on-error: true
+        run: |
+          curl -sSL https://sentry.io/get-cli/ | bash
+          sentry-cli monitors run \
+            --environment production \
+            release-heartbeat \
+            -- /bin/true
 
   sentry-monitors-sync:
     # Push the Sentry Cron monitor configuration declared in

@@ -297,7 +297,22 @@ export interface SentryMonitorUiManagedEntry {
  * verified against the runbook (so the next sync run doesn't
  * overwrite a hand-tuned value). The list should shrink, not grow.
  */
-export const SENTRY_MONITORS_KNOWN_UI_MANAGED: readonly SentryMonitorUiManagedEntry[] = [] as const;
+export const SENTRY_MONITORS_KNOWN_UI_MANAGED: readonly SentryMonitorUiManagedEntry[] = [
+  {
+    slug: "release-heartbeat",
+    workflowFile: ".github/workflows/release.yml",
+    note:
+      "Release tagging is event-driven (on: push: tags: \"v*\"), not cron-scheduled, " +
+      "so the matching Sentry monitor is configured as an *interval* monitor in the UI " +
+      "(\"page if no check-in in 30 days\") rather than a crontab monitor managed from " +
+      "this file. Adding it to SENTRY_MONITORS would force scheduleType=\"crontab\" + a " +
+      "fake cron expression and the drift check would then complain that release.yml has " +
+      "no cron block. Migrate to a fully-managed entry once SENTRY_MONITORS supports " +
+      "scheduleType=\"interval\". Pages on-call when no release has shipped in 30 days, " +
+      "which is the trailing-edge signal that the release pipeline itself has stalled " +
+      "(token rotation, runner outage, accidentally deleted workflow).",
+  },
+] as const;
 
 /**
  * Extract every `cron:` value from a workflow YAML's `on.schedule`
@@ -376,6 +391,37 @@ export function diffMonitorAgainstWorkflow(
     );
   }
   return null;
+}
+
+/**
+ * True iff the workflow YAML has an automatic trigger (something OTHER
+ * than `workflow_dispatch`) that fires the heartbeat without a human
+ * having to manually press a button. The two shapes we care about:
+ *
+ *   - `on: schedule:` — cron-driven workflows. Most heartbeats are this.
+ *   - `on: push:` — event-driven workflows that still fire reliably,
+ *     e.g. release.yml's `push: tags: - "v*"` runs every time a release
+ *     tag lands. Sentry's UI-side monitor for these is configured as
+ *     an interval monitor (e.g. "page if no check-in in 30 days") so it
+ *     doesn't confuse the cron-based drift check.
+ *
+ * Used by `runHeartbeatScheduleCheck` to distinguish "heartbeat in a
+ * truly-manual workflow" (broken — Sentry will permanently fire
+ * missed_check_in) from "heartbeat in a tag-pushed release workflow"
+ * (intentional). A `workflow_dispatch:`-only workflow returns false.
+ */
+export function hasAutomaticTrigger(yamlSource: string): boolean {
+  if (extractCronEntriesFromWorkflowYaml(yamlSource).length > 0) return true;
+  // Look for `on: push:` (with or without `tags:` / `branches:` filters).
+  // We don't try to parse the full `on:` block — a present `push:` key
+  // under the top-level `on:` is enough to confirm the workflow has an
+  // event-based automatic trigger. Match a key at any nested indent so
+  // the block-style `on:\n  push:\n    tags:` shape is recognised.
+  const onPushBlock = /^on:\s*\n(?:\s+\S.*\n)*?\s+push:/m;
+  if (onPushBlock.test(yamlSource)) return true;
+  // Inline `on: push:` shape (rare in this repo but harmless to allow).
+  if (/^on:\s*push\s*$/m.test(yamlSource)) return true;
+  return false;
 }
 
 /**

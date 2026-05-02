@@ -6,6 +6,7 @@ import {
   extractCronEntriesFromWorkflowYaml,
   extractMonitorSlugsFromWorkflowYaml,
   diffMonitorAgainstWorkflow,
+  hasAutomaticTrigger,
   SENTRY_MONITORS,
   SENTRY_MONITORS_KNOWN_UI_MANAGED,
   type SentryMonitorConfig,
@@ -482,6 +483,101 @@ describe("main", () => {
     expect(stderr).toEqual([]);
     expect(stdout.some((l) => l.includes("UI-managed slug"))).toBe(true);
     expect(stdout.some((l) => l.includes("managed-in-ui"))).toBe(true);
+  });
+});
+
+describe("hasAutomaticTrigger", () => {
+  it("returns true for a cron-scheduled workflow", () => {
+    const yaml = ["on:", "  schedule:", '    - cron: "*/5 * * * *"'].join("\n");
+    expect(hasAutomaticTrigger(yaml)).toBe(true);
+  });
+
+  it("returns true for a tag-pushed release workflow", () => {
+    const yaml = [
+      "on:",
+      "  push:",
+      "    tags:",
+      '      - "v*"',
+    ].join("\n");
+    expect(hasAutomaticTrigger(yaml)).toBe(true);
+  });
+
+  it("returns true for a branch-pushed workflow", () => {
+    const yaml = ["on:", "  push:", "    branches:", "      - main"].join("\n");
+    expect(hasAutomaticTrigger(yaml)).toBe(true);
+  });
+
+  it("returns false for a workflow_dispatch-only workflow", () => {
+    const yaml = ["on:", "  workflow_dispatch: {}"].join("\n");
+    expect(hasAutomaticTrigger(yaml)).toBe(false);
+  });
+});
+
+describe("main — heartbeat schedule check accepts tag-pushed release workflows (#148)", () => {
+  it("does not flag a tag-pushed workflow with a known heartbeat slug", () => {
+    const stdout: string[] = [];
+    const stderr: string[] = [];
+    const code = main({
+      monitors: [],
+      uiManaged: [
+        {
+          slug: "release-heartbeat",
+          workflowFile: ".github/workflows/release.yml",
+          note: "interval monitor in UI",
+        },
+      ],
+      readWorkflow: () => ({
+        exists: true,
+        source: [
+          "on:",
+          "  push:",
+          "    tags:",
+          '      - "v*"',
+          "",
+          "jobs:",
+          "  release:",
+          "    steps:",
+          "      - run: sentry-cli monitors run --environment production release-heartbeat -- /bin/true",
+        ].join("\n"),
+      }),
+      discoverWorkflows: () => [".github/workflows/release.yml"],
+      stdout: (line) => stdout.push(line),
+      stderr: (line) => stderr.push(line),
+    });
+    expect(stderr).toEqual([]);
+    expect(code).toBe(0);
+  });
+
+  it("still flags a workflow_dispatch-only workflow with a heartbeat", () => {
+    const stdout: string[] = [];
+    const stderr: string[] = [];
+    const code = main({
+      monitors: [],
+      uiManaged: [
+        {
+          slug: "manual-only",
+          workflowFile: ".github/workflows/manual.yml",
+          note: "should be flagged",
+        },
+      ],
+      readWorkflow: () => ({
+        exists: true,
+        source: [
+          "on:",
+          "  workflow_dispatch: {}",
+          "",
+          "jobs:",
+          "  probe:",
+          "    steps:",
+          "      - run: sentry-cli monitors run --environment production manual-only -- /bin/true",
+        ].join("\n"),
+      }),
+      discoverWorkflows: () => [".github/workflows/manual.yml"],
+      stdout: (line) => stdout.push(line),
+      stderr: (line) => stderr.push(line),
+    });
+    expect(code).toBe(1);
+    expect(stderr.some((l) => l.includes("MISSING SCHEDULE BLOCKS"))).toBe(true);
   });
 });
 
