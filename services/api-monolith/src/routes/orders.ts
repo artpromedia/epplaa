@@ -4,6 +4,7 @@ import { db, schema } from "../lib/db";
 import { addressFingerprint, verifyVerificationToken } from "../lib/fulfillment/verifyToken";
 import { cartFingerprint, verifyQuoteToken } from "../lib/fulfillment/quoteToken";
 import { requireUserId } from "../lib/auth";
+import { requireEffectiveUserId } from "../lib/serviceAuth";
 import { newOrderId, newOtp } from "../lib/ids";
 import { createPaymentIntent } from "../lib/payments";
 import { dispatchShipmentForOrder } from "../lib/fulfillment/dispatch";
@@ -225,7 +226,7 @@ router.post("/orders/quote", async (req, res) => {
 });
 
 router.get("/orders", async (req, res) => {
-  const userId = requireUserId(req, res);
+  const userId = requireEffectiveUserId(req, res);
   if (!userId) return;
   const rows = await db
     .select()
@@ -236,7 +237,7 @@ router.get("/orders", async (req, res) => {
 });
 
 router.get("/orders/:orderId", async (req, res) => {
-  const userId = requireUserId(req, res);
+  const userId = requireEffectiveUserId(req, res);
   if (!userId) return;
   const [row] = await db
     .select()

@@ -212,3 +212,9 @@ export class InMemoryPromptRegistry implements IPromptRegistry {
     return Object.values(PROMPTS);
   }
 }
+
+/** Snapshot of the production prompt set. Used to seed the DB-backed registry. */
+export function getSeedPrompts(): readonly PromptVersion[] {
+  return Object.freeze(Object.values(PROMPTS));
+}
+

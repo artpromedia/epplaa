@@ -14,7 +14,7 @@ function buildFetch(handler: (url: string, init: RequestInit) => Promise<Respons
 describe("HttpToolDispatcher", () => {
   const ctx = { agentId: "buyer-concierge", sessionId: "s1", authToken: undefined };
 
-  it("dispatches catalog.search by GETting /listings and shaping output", async () => {
+  it("dispatches catalog.search by GETting /api/products and shaping output", async () => {
     const calls: string[] = [];
     const fetchImpl = buildFetch(async (url) => {
       calls.push(url);
@@ -47,7 +47,7 @@ describe("HttpToolDispatcher", () => {
       ],
       total: 2,
     });
-    expect(calls[0]).toBe("http://m.test/listings?q=shoe");
+    expect(calls[0]).toBe("http://m.test/api/products?search=shoe");
   });
 
   it("dispatches order.read converting minor units", async () => {

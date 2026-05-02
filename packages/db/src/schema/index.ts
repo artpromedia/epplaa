@@ -34,3 +34,4 @@ export * from "./ndpr";
 export * from "./admin";
 export * from "./manufacturers";
 export * from "./eventOutbox";
+export * from "./prompts";

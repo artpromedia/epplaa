@@ -9,6 +9,7 @@ import cors from "cors";
 import cookieParser from "cookie-parser";
 import pinoHttp from "pino-http";
 import { clerkMiddleware } from "@clerk/express";
+import { optionalServiceAuth } from "./lib/serviceAuth";
 import router from "./routes";
 import webhooksRouter from "./routes/webhooks";
 import fulfillmentWebhooksRouter from "./routes/fulfillmentWebhooks";
@@ -122,6 +123,10 @@ app.use(express.urlencoded({ extended: true }));
 // double-submit check can read the `csrf_token` cookie.
 app.use(cookieParser());
 app.use(clerkMiddleware());
+// Service-to-service auth: when present, attaches req.serviceCaller and
+// lets user-scoped routes use requireEffectiveUserId() to honour the
+// `x-on-behalf-of-user-id` header. Always falls through; never rejects.
+app.use(optionalServiceAuth);
 
 // CSRF (double-submit cookie). Skipped on Bearer-auth requests (Clerk JWT
 // path), webhooks (HMAC-verified), and the /api/csrf-token issuer route

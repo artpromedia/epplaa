@@ -30,7 +30,11 @@ import {
   type IShortTermMemory,
 } from "./memory/ShortTermMemory.js";
 import { StaticAgentRegistry } from "./registry/AgentRegistry.js";
-import { InMemoryPromptRegistry } from "./registry/PromptRegistry.js";
+import {
+  InMemoryPromptRegistry,
+  type IPromptRegistry,
+} from "./registry/PromptRegistry.js";
+import { DbPromptRegistry } from "./registry/DbPromptRegistry.js";
 import {
   InMemoryToolRegistry,
   type IToolRegistry,
@@ -50,7 +54,7 @@ import { logger } from "./lib/observability.js";
 
 export interface AgentServiceDeps {
   agents: StaticAgentRegistry;
-  prompts: InMemoryPromptRegistry;
+  prompts: IPromptRegistry;
   tools: IToolRegistry;
   gateway: IModelGateway;
   memory: IShortTermMemory;
@@ -216,7 +220,30 @@ export async function buildDeps(): Promise<AgentServiceDeps> {
 
   // ---- Registries -----------------------------------------------------
   const agents = new StaticAgentRegistry();
-  const prompts = new InMemoryPromptRegistry();
+  let prompts: IPromptRegistry;
+  let dbPrompts: DbPromptRegistry | null = null;
+  if (env.DATABASE_URL) {
+    dbPrompts = new DbPromptRegistry({ databaseUrl: env.DATABASE_URL });
+    try {
+      const seeded = await dbPrompts.bootstrap();
+      logger.info(
+        { seeded, source: "DbPromptRegistry" },
+        "prompt_registry_ready",
+      );
+      prompts = dbPrompts;
+    } catch (err) {
+      logger.warn(
+        { err: (err as Error).message },
+        "prompt_registry_db_bootstrap_failed_falling_back_in_memory",
+      );
+      await dbPrompts.close().catch(() => undefined);
+      dbPrompts = null;
+      prompts = new InMemoryPromptRegistry();
+    }
+  } else {
+    prompts = new InMemoryPromptRegistry();
+    logger.info({ source: "InMemoryPromptRegistry" }, "prompt_registry_ready");
+  }
 
   // ---- Tool dispatcher ------------------------------------------------
   const dispatcher = new HttpToolDispatcher({
@@ -269,6 +296,9 @@ export async function buildDeps(): Promise<AgentServiceDeps> {
     const errors: unknown[] = [];
     if (kafkaBus) {
       await kafkaBus.stop().catch((e) => errors.push(e));
+    }
+    if (dbPrompts) {
+      await dbPrompts.close().catch((e) => errors.push(e));
     }
     if (redis) {
       await redis.quit().catch((e) => errors.push(e));

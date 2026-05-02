@@ -25,6 +25,8 @@ export interface ToolDispatchContext {
   sessionId: string;
   /** Optional service-to-service bearer token forwarded to backing APIs. */
   authToken: string | undefined;
+  /** Optional Clerk user id the agent is acting on behalf of. */
+  onBehalfOfUserId?: string | undefined;
 }
 
 export type ToolHandler = (
@@ -132,6 +134,9 @@ export class HttpToolDispatcher {
       "x-agent-service-id": ctx.agentId,
       "x-agent-session-id": ctx.sessionId,
     };
+    if (ctx.onBehalfOfUserId) {
+      headers["x-on-behalf-of-user-id"] = ctx.onBehalfOfUserId;
+    }
     const token = ctx.authToken ?? this.opts.serviceToken;
     if (token) headers.authorization = `Bearer ${token}`;
     try {
@@ -161,14 +166,22 @@ export class HttpToolDispatcher {
         async (args, ctx) => {
           const { query } = args as { query: string };
           const q = encodeURIComponent(query);
-          const data = (await this.monolithGet(`/listings?q=${q}`, ctx)) as {
-            listings?: Array<{ id: string; title: string }>;
-            total?: number;
-          };
-          const listings = Array.isArray(data.listings) ? data.listings : [];
+          const data = (await this.monolithGet(`/api/products?search=${q}`, ctx)) as
+            | Array<{ id: string; title: string }>
+            | { listings?: Array<{ id: string; title: string }>; total?: number };
+          const list = Array.isArray(data)
+            ? data
+            : Array.isArray(data.listings)
+              ? data.listings
+              : [];
+          const total = Array.isArray(data)
+            ? data.length
+            : typeof data.total === "number"
+              ? data.total
+              : list.length;
           return {
-            results: listings.map((l) => ({ listingId: l.id, title: l.title })),
-            total: typeof data.total === "number" ? data.total : listings.length,
+            results: list.map((l) => ({ listingId: l.id, title: l.title })),
+            total,
           };
         },
       ],
@@ -177,13 +190,25 @@ export class HttpToolDispatcher {
         async (args, ctx) => {
           const { orderId } = args as { orderId: string };
           const data = (await this.monolithGet(
-            `/orders/${encodeURIComponent(orderId)}`,
+            `/api/orders/${encodeURIComponent(orderId)}`,
             ctx,
-          )) as { id?: string; status?: string; totalMinor?: number; currencyCode?: string };
+          )) as {
+            id?: string;
+            status?: string;
+            currencyCode?: string;
+            totalsMinor?: { total?: number } | number;
+            totalMinor?: number;
+          };
+          const totalMinor =
+            typeof data.totalMinor === "number"
+              ? data.totalMinor
+              : typeof (data.totalsMinor as { total?: number } | undefined)?.total === "number"
+                ? (data.totalsMinor as { total: number }).total
+                : 0;
           return {
             orderId: data.id ?? orderId,
             status: data.status ?? "unknown",
-            total: typeof data.totalMinor === "number" ? data.totalMinor / 100 : 0,
+            total: totalMinor / 100,
             currency: data.currencyCode ?? "NGN",
           };
         },
